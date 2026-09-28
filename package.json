@@ -1,0 +1,40 @@
+{
+  "name": "syncaction",
+  "version": "0.9.9",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "packageManager": "pnpm@10.12.1",
+  "scripts": {
+    "icons:build": "node scripts/render-extension-icons.mjs",
+    "local:server": "node scripts/start-local-services.mjs",
+    "local:client:chrome": "node scripts/build-local-client.mjs chrome",
+    "local:client:edge": "node scripts/build-local-client.mjs edge",
+    "local:admin:bootstrap": "node scripts/bootstrap-local-admin.mjs",
+    "local:db:down": "docker compose -p syncaction-local -f infra/compose.local.yml down",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint .",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "test": "pnpm test:tooling && pnpm -r --if-present test",
+    "test:tooling": "node --test scripts/local-integration-runtime.test.mjs",
+    "test:integration": "node scripts/run-integration-tests.mjs",
+    "db:test:up": "docker compose -f infra/compose.test.yml up -d --wait",
+    "db:test:down": "docker compose -f infra/compose.test.yml down -v"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "22.20.1",
+    "eslint": "10.8.0",
+    "fast-check": "4.9.0",
+    "fflate": "0.8.2",
+    "prettier": "3.9.6",
+    "sharp": "0.35.3",
+    "tsx": "4.23.1",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.65.0",
+    "vitest": "4.1.10"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "name": "@syncaction/browser-sync",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@syncaction/protocol": "workspace:*",
+    "@syncaction/replica": "workspace:*",
+    "zod": "4.4.3"
+  }
+}

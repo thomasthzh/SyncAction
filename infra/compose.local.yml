@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: syncaction_local
+      POSTGRES_PASSWORD: syncaction_local
+      POSTGRES_USER: syncaction_local
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U syncaction_local -d syncaction_local"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    ports:
+      - "127.0.0.1:55433:5432"
+    volumes:
+      - syncaction-local-data:/var/lib/postgresql/data
+
+volumes:
+  syncaction-local-data:

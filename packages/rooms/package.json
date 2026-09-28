@@ -1,0 +1,19 @@
+{
+  "name": "@syncaction/rooms",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run --exclude \"**/*.integration.test.ts\"",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@syncaction/database": "workspace:*",
+    "@syncaction/protocol": "workspace:*",
+    "kysely": "0.29.4",
+    "zod": "4.4.3"
+  }
+}

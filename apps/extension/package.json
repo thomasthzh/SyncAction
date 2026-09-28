@@ -1,0 +1,40 @@
+{
+  "name": "@syncaction/extension",
+  "version": "0.9.9",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wxt",
+    "visual": "vite --config visual/vite.config.ts --host 127.0.0.1",
+    "build": "wxt build -b chrome",
+    "build:edge": "wxt build -b edge",
+    "zip": "wxt zip -b chrome",
+    "zip:edge": "wxt zip -b edge",
+    "test": "vitest run --exclude \"**/*.integration.test.ts\"",
+    "typecheck": "tsc --noEmit",
+    "postinstall": "wxt prepare"
+  },
+  "dependencies": {
+    "@preact/signals": "2.3.1",
+    "@syncaction/browser-sync": "workspace:*",
+    "@syncaction/media": "workspace:*",
+    "@syncaction/protocol": "workspace:*",
+    "@syncaction/replica": "workspace:*",
+    "danmaku": "2.0.9",
+    "perfect-freehand": "1.2.3",
+    "preact": "10.27.2",
+    "socket.io-client": "4.8.3",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@syncaction/database": "workspace:*",
+    "@syncaction/domain": "workspace:*",
+    "@syncaction/identity": "workspace:*",
+    "@syncaction/rooms": "workspace:*",
+    "@syncaction/server": "workspace:*",
+    "@syncaction/sync": "workspace:*",
+    "happy-dom": "18.0.1",
+    "vite": "8.1.5",
+    "wxt": "0.20.27"
+  }
+}

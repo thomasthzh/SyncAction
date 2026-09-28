@@ -1,0 +1,15 @@
+.worktrees/
+.superpowers/
+.env
+.env.*
+!.env.example
+.wxt/
+.output/
+/.release-artifacts/
+/.local/
+coverage/
+dist/
+node_modules/
+playwright-report/
+test-results/
+*.log

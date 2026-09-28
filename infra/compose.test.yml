@@ -1,0 +1,14 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: syncaction_test
+      POSTGRES_PASSWORD: syncaction_test
+      POSTGRES_USER: syncaction_test
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U syncaction_test -d syncaction_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    ports:
+      - "127.0.0.1:${SYNC_ACTION_TEST_DATABASE_PORT:-55432}:5432"

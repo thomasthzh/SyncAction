@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>SyncAction 页面协作隐私说明</title>
+    <style>
+      :root {
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei",
+          sans-serif;
+        color: #172033;
+        background: #f5f7fb;
+      }
+      body {
+        max-width: 760px;
+        margin: 0 auto;
+        padding: 40px 24px 72px;
+        line-height: 1.7;
+      }
+      main {
+        padding: 32px;
+        border: 1px solid rgba(90, 104, 132, 0.2);
+        border-radius: 24px;
+        background: rgba(255, 255, 255, 0.88);
+        box-shadow: 0 18px 60px rgba(45, 60, 90, 0.1);
+      }
+      h1,
+      h2 {
+        line-height: 1.25;
+      }
+      h1 {
+        margin-top: 0;
+      }
+      h2 {
+        margin-top: 32px;
+        font-size: 1.15rem;
+      }
+      .version {
+        color: #4f6fad;
+        font-weight: 700;
+      }
+      .notice {
+        padding: 16px 18px;
+        border-radius: 16px;
+        background: rgba(83, 126, 219, 0.1);
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          color: #eef3ff;
+          background: #101522;
+        }
+        main {
+          border-color: rgba(180, 196, 230, 0.2);
+          background: rgba(24, 32, 50, 0.94);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <p class="version">页面协作披露版本 1</p>
+      <h1>SyncAction 页面协作隐私说明</h1>
+      <p>
+        页面协作默认关闭。只有你勾选同意并点击浏览器授权按钮后，SyncAction
+        才会在当前精确网站启用相应能力。同意记录按服务器配置、精确网站、服务条款版本和本披露版本分别保存，不会跨服务器或跨网站继承。
+      </p>
+
+      <h2>启用后可能发送的数据</h2>
+      <ul>
+        <li>房间中的逻辑标签页标识和共享文档修订号；</li>
+        <li>光标、滚动和画笔使用的量化坐标；</li>
+        <li>用于判断双方布局是否一致的页面兼容性摘要；</li>
+        <li>已识别媒体状态，例如播放、暂停和进度；</li>
+        <li>你主动发送的弹幕；</li>
+        <li>你主动创建的画笔内容、颜色、粗细、锁定和删除操作。</li>
+      </ul>
+
+      <h2>明确不会发送的数据</h2>
+      <ul>
+        <li>Cookie、密码、表单输入或账号密钥；</li>
+        <li>页面文字、DOM、原始 HTML、截图或视频流；</li>
+        <li>完整浏览历史、未加入房间的页面或其他无关标签页。</li>
+      </ul>
+
+      <h2>随机页面与兼容性保护</h2>
+      <p>
+        页面内容与对方不同时，SyncAction
+        会保护性暂停光标、根页面画笔和位置相关操作。页面兼容性摘要只描述量化后的语义布局，不包含页面文字。已识别为同一媒体的播放同步和页面底部弹幕仍可按能力规则工作。
+      </p>
+
+      <h2>如何撤销</h2>
+      <p class="notice">
+        可在扩展的服务器设置中打开“已授权站点”，逐个撤销浏览器权限。撤销后，页面观察器、光标、弹幕、画笔和媒体控制会立即停止；房间、共享标签页和消息不会被删除。历史同意记录保留，用于说明你曾同意的条款版本，但没有浏览器权限时不能启用页面协作。
+      </p>
+
+      <h2>控制范围</h2>
+      <p>
+        房主可以管理房间和受保护的画笔内容，但不能读取你的
+        Cookie、密码、表单输入、页面正文或浏览历史。服务器仅处理协议中声明的协作字段，不提供屏幕串流或远程浏览器控制。
+      </p>
+    </main>
+  </body>
+</html>

@@ -1,0 +1,14 @@
+.git
+.github
+.worktrees
+**/.output
+**/.wxt
+**/coverage
+**/dist
+**/node_modules
+**/playwright-report
+**/test
+**/test-results
+.env
+.env.*
+*.log

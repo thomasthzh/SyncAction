@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "feature/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: syncaction_test
+          POSTGRES_PASSWORD: syncaction_test
+          POSTGRES_USER: syncaction_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U syncaction_test -d syncaction_test" --health-interval 2s
+          --health-timeout 3s --health-retries 20
+    env:
+      TEST_DATABASE_URL: postgresql://syncaction_test:syncaction_test@127.0.0.1:5432/syncaction_test
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: pnpm/action-setup@v6.0.9
+        with:
+          version: 10.12.1
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 22.20.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm format:check
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm test:integration
+      - name: vNext idle, profile isolation, and tab-storm acceptance
+        run: >-
+          pnpm --filter @syncaction/extension exec vitest run test/vnext-idle-performance.test.ts
+          test/vnext-ui-performance.test.tsx test/vnext-profile-isolation.integration.test.ts
+          test/vnext-tab-storm.integration.test.ts
+      - name: Two-client presence, pointer, media, content, and annotations
+        run: >-
+          pnpm --filter @syncaction/extension exec vitest run
+          test/two-client-presence.integration.test.ts test/two-client-pointer.integration.test.ts
+          test/two-client-media.integration.test.ts
+          test/two-client-content-compatibility.integration.test.ts
+          test/two-client-annotations.integration.test.ts
+      - name: Release tooling contracts
+        run: pnpm test:tooling
