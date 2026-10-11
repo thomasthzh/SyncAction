@@ -9,6 +9,9 @@ import { ActionableStatus, type StatusRecoveryAction } from "./actionable-status
 import { BottomActionDock } from "./bottom-action-dock.js";
 import { PlaybackGroupCard } from "./playback-group-card.js";
 import { SharedTabRow } from "./shared-tab-row.js";
+import { RoomSwitcher } from "./room-switcher.js";
+import { useCommandFeedback } from "../use-command-feedback.js";
+import type { UiCommandInput } from "../store.js";
 
 export interface ActiveRoomProps {
   readonly store: UiStore;
@@ -29,7 +32,8 @@ export function ActiveRoom({
   onOpenRoomLifecycle,
   onRequestPagePermission,
 }: ActiveRoomProps): JSX.Element {
-  const [switcherOpen, setSwitcherOpen] = useState(false);
+  const [pageQuery, setPageQuery] = useState("");
+  const feedback = useCommandFeedback();
   const shell = store.shell.value;
   const room = store.room.value;
   const collaboration = store.collaboration.value;
@@ -97,63 +101,73 @@ export function ActiveRoom({
     }
     return pageIds;
   }, [mediaView.groups]);
+  const normalizedQuery = pageQuery.trim().toLocaleLowerCase();
+  const visibleRows = useMemo(
+    () =>
+      normalizedQuery === ""
+        ? rows
+        : rows.filter((row) =>
+            `${row.title} ${row.domain}`.toLocaleLowerCase().includes(normalizedQuery),
+          ),
+    [rows, normalizedQuery],
+  );
   const statusCode = roomStatusCode(store);
   const connectionLabel =
     statusCode === null
       ? "已同步"
-      : statusCode === "RECONNECTING"
+      : statusCode === "RECONNECTING" || statusCode === "RECOVERING"
         ? "恢复中"
-        : statusCode === "LOADING"
+        : statusCode === "LOADING" ||
+            statusCode === "CONNECTING" ||
+            statusCode === "WAITING_SNAPSHOT"
           ? "载入中"
           : "需处理";
 
   function sendMediaIntent(intent: MediaViewIntent): void {
+    void feedback.run("media", () => store.command(mediaCommand(intent)));
+  }
+
+  function mediaCommand(intent: MediaViewIntent): UiCommandInput {
     switch (intent.type) {
       case "JUMP_TO_MEMBER":
-        void store.command({
+        return {
           name: "MEDIA_MEMBER_JUMP",
           payload: { userId: intent.userId },
-        });
-        return;
+        };
       case "ALIGN_ONCE":
-        void store.command({
+        return {
           name: "MEDIA_GROUP_ALIGN_ONCE",
           payload: { playbackGroupId: intent.playbackGroupId },
-        });
-        return;
+        };
       case "JOIN_GROUP":
-        void store.command({
+        return {
           name: "MEDIA_GROUP_JOIN",
           payload: { playbackGroupId: intent.playbackGroupId },
-        });
-        return;
+        };
       case "LEAVE_GROUP":
-        void store.command({
+        return {
           name: "MEDIA_GROUP_LEAVE",
           payload: { playbackGroupId: intent.playbackGroupId },
-        });
-        return;
+        };
       case "CLOSE_GROUP":
-        void store.command({
+        return {
           name: "MEDIA_GROUP_CLOSE",
           payload: { playbackGroupId: intent.playbackGroupId },
-        });
-        return;
+        };
       case "TAKEOVER_DEVICE":
-        void store.command({
+        return {
           name: "MEDIA_DEVICE_TAKEOVER",
           payload: { playbackGroupId: intent.playbackGroupId },
-        });
-        return;
+        };
       case "DECIDE_PROPOSAL":
-        void store.command({
+        return {
           name: "MEDIA_PROPOSAL_DECIDE",
           payload: {
             playbackGroupId: intent.playbackGroupId,
             proposalId: intent.proposalId,
             decision: intent.decision,
           },
-        });
+        };
     }
   }
 
@@ -177,53 +191,12 @@ export function ActiveRoom({
   return (
     <div class="active-room">
       <header class="room-header">
-        <div class="room-switcher">
-          <button
-            class="room-title-button"
-            type="button"
-            aria-label="切换房间"
-            aria-expanded={switcherOpen}
-            onClick={() => setSwitcherOpen((open) => !open)}
-          >
-            <span>{detail?.name ?? runtime?.roomName ?? "房间"}</span>
-            <Icon name="chevron" size={16} />
-          </button>
-          {switcherOpen ? (
-            <div class="room-switcher__menu" role="menu" aria-label="我的房间">
-              <strong>我的房间</strong>
-              {store.discovery.value.rooms.map((candidate) => (
-                <button
-                  type="button"
-                  role="menuitem"
-                  key={candidate.id}
-                  aria-label={candidate.name}
-                  aria-current={candidate.id === room.selectedRoomId ? "true" : undefined}
-                  onClick={() => {
-                    setSwitcherOpen(false);
-                    void store.command({
-                      name: "ROOM_SELECT",
-                      payload: { roomId: candidate.id },
-                    });
-                  }}
-                >
-                  {candidate.name}
-                </button>
-              ))}
-              {detail?.role === "OWNER" ? (
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setSwitcherOpen(false);
-                    onOpenRoomLifecycle();
-                  }}
-                >
-                  房间设置
-                </button>
-              ) : null}
-            </div>
-          ) : null}
-        </div>
+        <RoomSwitcher
+          store={store}
+          name={detail?.name ?? runtime?.roomName ?? "房间"}
+          isOwner={detail?.role === "OWNER"}
+          onOpenSettings={onOpenRoomLifecycle}
+        />
         <div class="room-header__meta" data-room-presence-summary>
           <strong>
             {onlineCount} 在线 · {totalCount} 位成员
@@ -257,6 +230,12 @@ export function ActiveRoom({
       </div>
 
       <ActionableStatus statusCode={statusCode} onAction={recover} />
+      <ActionableStatus errorCode={feedback.errorCode} />
+      {feedback.pending === "media" ? (
+        <p class="command-feedback" role="status">
+          正在执行播放操作…
+        </p>
+      ) : null}
       {mediaView.notice === null ? null : (
         <p class={`media-notice media-notice--${mediaView.notice.tone}`}>{mediaView.notice.text}</p>
       )}
@@ -269,8 +248,8 @@ export function ActiveRoom({
         >
           <header class="section-heading">
             <div>
-              <p class="eyebrow">同步播放</p>
               <h2 id="playback-heading">播放组</h2>
+              <p class="section-description">跟随领播者，自动对齐进度</p>
             </div>
             <span>{mediaView.groups.length}</span>
           </header>
@@ -280,6 +259,7 @@ export function ActiveRoom({
                 group={group}
                 currentUserId={currentUserId}
                 onIntent={sendMediaIntent}
+                busy={feedback.pending === "media"}
                 key={group.groupId}
               />
             ))}
@@ -294,19 +274,43 @@ export function ActiveRoom({
       >
         <header class="section-heading">
           <div>
-            <p class="eyebrow">实时位置</p>
             <h2 id="shared-page-heading">共享页面</h2>
+            <p class="section-description">点击跳转，与朋友浏览同一页</p>
           </div>
           <span>
             {collaboration.capacity.openTabCount}
             {collaboration.capacity.limit === null ? "" : `/${collaboration.capacity.limit}`}
           </span>
         </header>
+        {rows.length > 4 || pageQuery !== "" ? (
+          <label class="room-search shared-page-search">
+            <Icon name="search" size={18} />
+            <span class="sr-only">搜索共享页面</span>
+            <input
+              type="search"
+              aria-label="搜索共享页面"
+              placeholder="搜索页面或网站"
+              value={pageQuery}
+              onInput={(event) => setPageQuery(event.currentTarget.value)}
+            />
+          </label>
+        ) : null}
         {rows.length === 0 ? (
-          <p class="subtle-copy">还没有共享页面。底部操作可将当前标签页加入房间。</p>
+          <div class="empty-state">
+            <Icon name="share" size={28} />
+            <strong>把第一张页面分享给朋友</strong>
+            <span>打开想一起看的页面，再点击底部「分享当前页」。</span>
+          </div>
+        ) : visibleRows.length === 0 ? (
+          <div class="empty-state">
+            <strong>没有找到共享页面</strong>
+            <button class="text-button" type="button" onClick={() => setPageQuery("")}>
+              清空页面搜索
+            </button>
+          </div>
         ) : (
           <div class="shared-tab-stream__list divided-list">
-            {rows.map((row) => (
+            {visibleRows.map((row) => (
               <SharedTabRow
                 row={row}
                 memberById={memberById}
@@ -380,6 +384,19 @@ function roomStatusCode(store: UiStore): string | null {
   }
   if (runtime.browser?.state === "RECOVERY_REQUIRED") {
     return runtime.browser.reason === "CIRCUIT_BREAKER" ? "CIRCUIT_BREAKER" : "RECOVERY_REQUIRED";
+  }
+  switch (runtime.state) {
+    case "DISCONNECTED":
+      return "RECONNECTING";
+    case "AUTHENTICATING":
+      return "CONNECTING";
+    case "RECOVERING":
+      return "RECOVERING";
+    case "QUARANTINED":
+      return "RECOVERY_REQUIRED";
+    case "NOT_CONFIGURED":
+    case "CONFIGURATION_ERROR":
+      return "CONFIGURATION_ERROR";
   }
   return null;
 }

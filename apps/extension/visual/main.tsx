@@ -8,8 +8,9 @@ if (root === null) {
   throw new Error("MISSING_VISUAL_ROOT");
 }
 
+const requestedFixture = new URLSearchParams(globalThis.location.search).get("fixture");
 const fixture: VisualFixture =
-  new URLSearchParams(globalThis.location.search).get("fixture") === "room" ? "room" : "lobby";
+  requestedFixture === "room" ? "room" : requestedFixture === "guest" ? "guest" : "lobby";
 document.documentElement.dataset.fixture = fixture;
 document.documentElement.dataset.visualStage = "true";
 

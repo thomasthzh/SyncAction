@@ -5,6 +5,11 @@ const ERROR_LABELS: Readonly<Record<string, string>> = {
   AUTHENTICATION_REQUIRED: "请先登录",
   INVALID_CREDENTIALS: "用户名或密码不正确",
   NETWORK_ERROR: "网络连接失败，请稍后重试",
+  SHARE_PAGE_LOADING: "页面仍在加载，当前页面未分享，请加载完成后重试",
+  SHARE_NOT_SUBMITTED: "当前页面未分享，请确认当前标签页可用后重试",
+  SHARE_NOT_READY: "房间尚未准备好，当前页面未分享，请等待连接恢复后重试",
+  SHARE_RECOVERY_REQUIRED: "当前页面未分享，请先检查房间的恢复提示和页面状态",
+  SHARE_RESULT_UNKNOWN: "尚未确认分享结果，请检查共享页面列表后重试",
   ROOM_CAPACITY_REACHED: "本服务器普通用户同时最多创建 5 个房间",
   ROOM_NOT_FOUND: "房间不存在或已关闭",
   ROOM_OWNER_REQUIRED: "只有房主可以执行此操作",
@@ -51,6 +56,12 @@ interface StatusDefinition {
 }
 
 const STATUS_DEFINITIONS: Readonly<Record<string, StatusDefinition>> = {
+  RECOVERING: { text: "正在补齐房间更新，已保留本地页面", action: null, actionLabel: null },
+  CONFIGURATION_ERROR: {
+    text: "连接配置需要检查，请重新选择服务器",
+    action: "SWITCH_SERVER",
+    actionLabel: "切换服务器",
+  },
   LOADING: {
     text: "正在载入房间",
     action: null,
@@ -129,7 +140,9 @@ const STATUS_DEFINITIONS: Readonly<Record<string, StatusDefinition>> = {
 };
 
 export function errorLabel(errorCode: string): string {
-  return ERROR_LABELS[errorCode] ?? `操作未完成（${errorCode}）`;
+  return (
+    ERROR_LABELS[errorCode] ?? STATUS_DEFINITIONS[errorCode]?.text ?? `操作未完成（${errorCode}）`
+  );
 }
 
 export interface ActionableStatusProps {

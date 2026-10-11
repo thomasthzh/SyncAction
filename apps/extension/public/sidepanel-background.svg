@@ -1,30 +1,33 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 1200" fill="none">
   <defs>
-    <linearGradient id="navyRoute" x1="448" y1="36" x2="62" y2="1100" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#0A2240" stop-opacity="0.12"/>
-      <stop offset="0.48" stop-color="#0A2240" stop-opacity="0.035"/>
-      <stop offset="1" stop-color="#0A2240" stop-opacity="0.08"/>
+    <linearGradient id="sky" x1="40" y1="0" x2="440" y2="1200" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#EEF4FC"/>
+      <stop offset="0.32" stop-color="#E8F2F9"/>
+      <stop offset="0.72" stop-color="#EDF7F6"/>
+      <stop offset="1" stop-color="#EEF4FC"/>
     </linearGradient>
-    <linearGradient id="goldRoute" x1="24" y1="118" x2="452" y2="986" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#B68A45" stop-opacity="0.16"/>
-      <stop offset="0.5" stop-color="#B68A45" stop-opacity="0.04"/>
-      <stop offset="1" stop-color="#B68A45" stop-opacity="0.11"/>
+    <linearGradient id="blue" x1="100" y1="160" x2="490" y2="420" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#C4D8FF" stop-opacity="0"/>
+      <stop offset="0.48" stop-color="#A9C8F4" stop-opacity="0.65"/>
+      <stop offset="0.86" stop-color="#DBE7FF" stop-opacity="0.8"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0.85"/>
     </linearGradient>
-    <radialGradient id="blueWash" cx="0" cy="0" r="1" gradientTransform="translate(424 190) rotate(126) scale(310 230)" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#DFE6EC" stop-opacity="0.7"/>
-      <stop offset="1" stop-color="#DFE6EC" stop-opacity="0"/>
-    </radialGradient>
+    <linearGradient id="aqua" x1="-80" y1="460" x2="310" y2="850" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#E9F9FA" stop-opacity="0"/>
+      <stop offset="0.54" stop-color="#B9E6E8" stop-opacity="0.8"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0.5"/>
+    </linearGradient>
+    <linearGradient id="pearl" x1="420" y1="800" x2="30" y2="1050" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#D4D9F4" stop-opacity="0"/>
+      <stop offset="0.64" stop-color="#D2D8F2" stop-opacity="0.52"/>
+      <stop offset="1" stop-color="#F5ECF6" stop-opacity="0.8"/>
+    </linearGradient>
   </defs>
-  <ellipse cx="424" cy="190" rx="310" ry="230" fill="url(#blueWash)"/>
-  <path d="M462 18C360 98 391 188 286 262C194 327 265 416 176 494C89 571 129 670 47 753C-11 811 43 934 144 1005C204 1047 208 1129 150 1200" stroke="url(#navyRoute)" stroke-width="1.4"/>
-  <path d="M-20 112C75 171 46 279 150 343C254 407 210 510 322 573C420 628 380 741 490 805" stroke="url(#goldRoute)" stroke-width="1.25"/>
-  <path d="M-34 384C64 438 27 528 119 594C211 660 171 746 266 816C351 878 330 970 498 1044" stroke="#FFFFFF" stroke-opacity="0.42" stroke-width="1"/>
-  <g fill="#FFFDF9" stroke-width="1.5">
-    <circle cx="287" cy="261" r="4" stroke="#0A2240" stroke-opacity="0.18"/>
-    <circle cx="150" cy="343" r="4" stroke="#B68A45" stroke-opacity="0.22"/>
-    <circle cx="176" cy="494" r="3" stroke="#0A2240" stroke-opacity="0.16"/>
-    <circle cx="322" cy="573" r="4" stroke="#B68A45" stroke-opacity="0.2"/>
-    <circle cx="47" cy="753" r="4" stroke="#0A2240" stroke-opacity="0.18"/>
-    <circle cx="266" cy="816" r="3" stroke="#B68A45" stroke-opacity="0.18"/>
-  </g>
+  <path fill="url(#sky)" d="M0 0h480v1200H0z"/>
+  <path fill="url(#blue)" d="M-90-70C100 70 445-110 505 110S140 335 250 510C115 448 79 330 172 221S85 117-90 130Z"/>
+  <path stroke="white" stroke-opacity="0.55" d="M-20 37C151 116 447-95 504 111S143 335 251 510"/>
+  <path fill="url(#aqua)" d="M-170 345C-9 403 310 358 316 544S-112 699 96 935C-79 868-166 706-45 575S-95 459-170 480Z"/>
+  <path stroke="white" stroke-opacity="0.68" d="M-80 388C36 408 310 365 316 544S-112 699 96 935"/>
+  <path fill="url(#pearl)" d="M558 591C329 658 232 697 315 821S79 947-38 1108C125 1055 514 1055 449 897S458 761 558 743Z"/>
+  <path stroke="white" stroke-opacity="0.6" d="M558 591C329 658 232 697 315 821S79 947-38 1108"/>
 </svg>

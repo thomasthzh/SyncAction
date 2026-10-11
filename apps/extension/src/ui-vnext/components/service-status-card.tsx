@@ -3,6 +3,7 @@ import type { JSX } from "preact";
 import { DEFAULT_SERVER_PROFILE_ID, type ServerProfile } from "../../server-profile.js";
 import type { UiTransportState } from "../store.js";
 import { Icon } from "../icons.js";
+import { GlassMaterial } from "./glass-material.js";
 
 const PROBE_INTERVAL_MS = 30_000;
 
@@ -140,6 +141,7 @@ export function ServiceStatusCard({
       class={`service-status-card service-status-card--${tone}`}
       aria-labelledby="service-status-title"
     >
+      <GlassMaterial />
       <header class="service-status-card__header">
         <span class="service-status-card__icon" aria-hidden="true">
           <Icon name="server" size={18} />

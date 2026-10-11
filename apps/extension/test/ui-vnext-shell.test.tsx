@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { App } from "../src/ui-vnext/app.js";
 import { errorLabel } from "../src/ui-vnext/components/actionable-status.js";
 import { UiDiscoverySliceSchema } from "../src/ui/ui-protocol.js";
+import { createVisualStore } from "../visual/fixture-store.js";
 import {
   TestUiStore,
   baseSlices,
@@ -68,7 +69,7 @@ describe("vNext one-screen shell", () => {
     expect(byRole(root, "button", "消息")).toBeTruthy();
     expect(byRole(root, "button", "登录 | 注册")).toBeTruthy();
     expect(root.textContent).toContain("一起浏览");
-    expect(root.textContent).toContain("房间、页面和播放进度会自动同步");
+    expect(root.textContent).toContain("和朋友共享页面，一起看、一起聊。");
     for (const legacyLabel of ["活动", "成员", "标签页", "房间管理"]) {
       expect(
         [...root.querySelectorAll("nav a, nav button")].map((node) => node.textContent),
@@ -148,6 +149,43 @@ describe("vNext one-screen shell", () => {
     expect(root.querySelector('[role="dialog"]')).toBeNull();
     expect(root.textContent).toContain("账号申请已提交，管理员批准后即可登录");
   });
+
+  it.each(["SESSION_REQUIRED", "AUTHENTICATION_REQUIRED"])(
+    "resumes a public-room join once after logging in for %s",
+    async (errorCode) => {
+      const store = new TestUiStore();
+      const room = createVisualStore("lobby").discovery.value.publicRooms.find(
+        (candidate) => candidate.joinPolicy === "OPEN",
+      )!;
+      store.update({ discovery: { ...store.discovery.value, publicRooms: [room] } });
+      store.responder = async (command) => {
+        if (command.name === "ROOM_JOIN_OPEN" && store.shell.value.account === null) {
+          return failure(errorCode);
+        }
+        if (command.name === "AUTH_LOGIN") {
+          store.update({
+            shell: { ...store.shell.value, phase: "AUTHENTICATED_NO_ROOM", account },
+          });
+        }
+        return success();
+      };
+      const root = renderPanel(<App store={store} />);
+      await click(byRole(root, "button", "直接加入"));
+      expect(root.querySelector('[role="dialog"]')).not.toBeNull();
+      input(root.querySelector('input[name="username"]')!, "aming");
+      input(root.querySelector('input[name="password"]')!, "correct horse");
+      await click(root.querySelector('button[type="submit"]')!);
+      expect(root.querySelector('[role="dialog"]')).toBeNull();
+      expect(store.commandCalls.filter((command) => command.name === "ROOM_JOIN_OPEN")).toEqual([
+        { name: "ROOM_JOIN_OPEN", payload: { roomId: room.roomId } },
+        { name: "ROOM_JOIN_OPEN", payload: { roomId: room.roomId } },
+      ]);
+      expect(root.textContent).not.toContain("SESSION_REQUIRED");
+      expect(
+        root.querySelector('[data-editorial-surface="public-rooms"] .inline-status--error'),
+      ).toBeNull();
+    },
+  );
 
   it("offers administrator-key activation only on a capable server", async () => {
     const store = new TestUiStore();

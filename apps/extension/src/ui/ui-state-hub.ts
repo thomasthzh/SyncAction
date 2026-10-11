@@ -210,6 +210,7 @@ export class UiStateHub {
     if (this.#connections.has(port)) {
       throw new Error("UI_PORT_ALREADY_ATTACHED");
     }
+    this.#pendingDirtySlices.clear();
     await this.#refresh();
     if (this.#disposed) {
       throw new Error("UI_STATE_HUB_DISPOSED");
@@ -228,6 +229,9 @@ export class UiStateHub {
     port.onMessage.addListener(connection.onMessage);
     port.onDisconnect.addListener(connection.onDisconnect);
     this.#post(port, this.#snapshot());
+    if (this.#pendingDirtySlices.size > 0) {
+      this.#scheduleProjection([...this.#pendingDirtySlices]);
+    }
   }
 
   public dispose(): void {
@@ -248,15 +252,19 @@ export class UiStateHub {
     for (const slice of hint ?? UI_SLICE_NAMES) {
       this.#pendingDirtySlices.add(slice);
     }
-    if (this.#refreshScheduled) {
+    // Keep hints that arrive during attach(), but do no work for closed panels.
+    if (this.#connections.size === 0 || this.#refreshScheduled) {
       return;
     }
     this.#refreshScheduled = true;
     this.#scheduler.schedule(async () => {
       this.#refreshScheduled = false;
-      if (!this.#disposed) {
-        const dirtySlices = [...this.#pendingDirtySlices];
-        this.#pendingDirtySlices.clear();
+      if (this.#disposed || this.#connections.size === 0) {
+        return;
+      }
+      const dirtySlices = [...this.#pendingDirtySlices];
+      this.#pendingDirtySlices.clear();
+      if (dirtySlices.length > 0) {
         await this.#refresh(dirtySlices).catch(() => undefined);
       }
     });

@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef } from "preact/hooks";
 import type { ComponentChildren, JSX } from "preact";
 import { installFocusTrap } from "../accessibility.js";
+import { GlassMaterial } from "./glass-material.js";
 
 export interface ModalDialogProps {
   readonly titleId: string;
@@ -36,6 +37,7 @@ export function ModalDialog({
       dialog.setAttribute("open", "");
     }
     const removeFocusTrap = installFocusTrap(dialog, restoreTo);
+    dialog.querySelector<HTMLElement>("[data-dialog-autofocus]")?.focus();
     return () => {
       if (dialog.open && typeof dialog.close === "function") {
         try {
@@ -47,6 +49,12 @@ export function ModalDialog({
       removeFocusTrap();
     };
   }, []);
+
+  useLayoutEffect(() => {
+    if (pending) {
+      ref.current?.focus();
+    }
+  }, [pending]);
 
   function handleKeyDown(event: JSX.TargetedKeyboardEvent<HTMLDialogElement>): void {
     if (event.key === "Escape") {
@@ -64,7 +72,9 @@ export function ModalDialog({
       class={`modal-dialog ${className}`.trim()}
       aria-labelledby={titleId}
       aria-modal="true"
+      aria-busy={pending}
       role="dialog"
+      tabIndex={-1}
       onCancel={(event) => {
         event.preventDefault();
         if (!pending) {
@@ -73,7 +83,10 @@ export function ModalDialog({
       }}
       onKeyDown={handleKeyDown}
     >
-      <div class="modal-dialog__surface">{children}</div>
+      <div class="modal-dialog__surface">
+        <GlassMaterial />
+        <div class="modal-dialog__content">{children}</div>
+      </div>
     </dialog>
   );
 }
