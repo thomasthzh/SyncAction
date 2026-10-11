@@ -481,4 +481,154 @@ describe("UiStateHub", () => {
 
     hub.dispose();
   });
+
+  it("does no projection work before the first panel opens", async () => {
+    const { source, scheduler, hub } = createHub();
+    const schedule = vi.spyOn(scheduler, "schedule");
+
+    source.status.onboardingRequired = false;
+    source.emit();
+    await scheduler.flush();
+
+    expect(schedule).not.toHaveBeenCalled();
+    expect(source.statusReads).toBe(0);
+    expect(source.profileReads).toBe(0);
+    expect(source.pageAccessReads).toBe(0);
+
+    const port = new FakePort();
+    await hub.attach(port);
+    expect(port.messages[0]).toMatchObject({
+      type: "ui.state.snapshot",
+      slices: { shell: { onboardingRequired: false } },
+    });
+    hub.dispose();
+  });
+
+  it("skips background changes with no panels and refreshes every slice when reopened", async () => {
+    const { source, scheduler, hub } = createHub();
+    const first = new FakePort();
+    await hub.attach(first);
+    first.disconnect();
+    const readsAfterClose = [source.statusReads, source.profileReads, source.pageAccessReads];
+    const schedule = vi.spyOn(scheduler, "schedule");
+
+    for (let cursor = 1; cursor <= 100; cursor += 1) {
+      source.status.notificationCursor = cursor;
+      source.emit(["notifications"]);
+      await scheduler.flush();
+    }
+    const selected = { ...profile(), profileId: "server-b", baseUrl: "https://server-b.example" };
+    source.profiles = [selected];
+    source.status.selectedProfileId = selected.profileId;
+    source.status.onboardingRequired = false;
+    source.pageAccess = { ...source.pageAccess, reason: "BROWSER_PERMISSION_REQUIRED" };
+    source.emit();
+    await scheduler.flush();
+
+    expect(schedule).not.toHaveBeenCalled();
+    expect([source.statusReads, source.profileReads, source.pageAccessReads]).toEqual(
+      readsAfterClose,
+    );
+
+    const reopened = new FakePort();
+    await hub.attach(reopened);
+    expect(reopened.messages).toHaveLength(1);
+    expect(reopened.messages[0]).toMatchObject({
+      type: "ui.state.snapshot",
+      versions: { shell: 1, notifications: 1, pageAccess: 1 },
+      slices: {
+        shell: { selectedProfileId: "server-b", profiles: [selected], onboardingRequired: false },
+        notifications: { cursor: 100 },
+        pageAccess: { reason: "BROWSER_PERMISSION_REQUIRED" },
+      },
+    });
+    expect([source.statusReads, source.profileReads, source.pageAccessReads]).toEqual(
+      readsAfterClose.map((count) => count + 1),
+    );
+    hub.dispose();
+  });
+
+  it("drops a queued projection when the last panel closes before it runs", async () => {
+    const { source, scheduler, hub } = createHub();
+    const port = new FakePort();
+    await hub.attach(port);
+    const readsAfterAttach = [source.statusReads, source.profileReads, source.pageAccessReads];
+    source.status.onboardingRequired = false;
+    source.emit();
+    port.disconnect();
+    await scheduler.flush();
+
+    expect([source.statusReads, source.profileReads, source.pageAccessReads]).toEqual(
+      readsAfterAttach,
+    );
+    const reopened = new FakePort();
+    await hub.attach(reopened);
+    expect(reopened.messages[0]).toMatchObject({
+      type: "ui.state.snapshot",
+      versions: { shell: 1 },
+      slices: { shell: { onboardingRequired: false } },
+    });
+    hub.dispose();
+  });
+
+  it("keeps pushing changes while another panel remains connected", async () => {
+    const { source, scheduler, hub } = createHub();
+    const first = new FakePort();
+    const second = new FakePort();
+    await hub.attach(first);
+    await hub.attach(second);
+    first.disconnect();
+    source.status.onboardingRequired = false;
+    source.emit(["shell"]);
+    await scheduler.flush();
+
+    expect(first.messages).toHaveLength(1);
+    expect(second.messages.at(-1)).toMatchObject({
+      type: "ui.state.patch",
+      slice: "shell",
+      fromVersion: 0,
+      toVersion: 1,
+      value: { onboardingRequired: false },
+    });
+    hub.dispose();
+  });
+
+  it.each([false, true])(
+    "pushes changes during attach with an old queued task: %s",
+    async (queued) => {
+      const { source, scheduler, hub } = createHub();
+      if (queued) {
+        const previous = new FakePort();
+        await hub.attach(previous);
+        source.emit(["notifications"]);
+        previous.disconnect();
+      }
+      const readStatus = source.readStatus.bind(source);
+      let changed = false;
+      source.readStatus = async () => {
+        const snapshot = await readStatus();
+        if (!changed) {
+          changed = true;
+          source.status.notificationCursor = 1;
+          source.emit(["notifications"]);
+          await scheduler.flush();
+        }
+        return snapshot;
+      };
+      const port = new FakePort();
+      await hub.attach(port);
+      await scheduler.flush();
+
+      expect(port.messages).toHaveLength(2);
+      expect(port.messages[0]).toMatchObject({ type: "ui.state.snapshot" });
+      expect(port.messages[1]).toMatchObject({
+        type: "ui.state.patch",
+        slice: "notifications",
+        fromVersion: 0,
+        toVersion: 1,
+        value: { cursor: 1 },
+      });
+      hub.dispose();
+    },
+  );
 });

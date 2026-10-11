@@ -93,22 +93,21 @@ describe("vNext accessibility and visual-system contract", () => {
     );
   });
 
-  it("uses the editorial glass token system with no row-level blur", () => {
+  it("uses bounded optical chrome while keeping dense rows and layout transitions lightweight", () => {
     const styles = readIfPresent(stylesPath);
     for (const declaration of [
       "color-scheme: light",
-      "--sa-bg: #f7f4ee",
-      "--sa-paper: #fffdf9",
+      "--sa-bg: #eef4fa",
+      "--sa-paper: #ffffff",
       "--sa-navy: #0a2240",
-      "--sa-ink: #303842",
-      "--sa-muted: #68717c",
-      "--sa-champagne: #b68a45",
-      "--sa-blue-gray: #dfe6ec",
-      "--sa-glass: rgb(255 253 249 / 72%)",
-      "--sa-line: rgb(10 34 64 / 13%)",
+      "--sa-ink: #25394a",
+      "--sa-muted: #536779",
+      "--sa-accent: #087f8c",
+      "--sa-blue-gray: #e8eef3",
+      "--sa-line: rgb(56 85 117 / 13%)",
       "--sa-danger: #c93434",
-      "--sa-radius-card: 18px",
-      "--sa-radius-control: 12px",
+      "--sa-radius-card: 22px",
+      "--sa-radius-control: 14px",
       "--sa-ease: cubic-bezier(0.22, 1, 0.36, 1)",
     ]) {
       expect(styles).toContain(declaration);
@@ -116,6 +115,13 @@ describe("vNext accessibility and visual-system contract", () => {
     expect(styles).not.toMatch(
       /(?:shared-tab-row|message-card|member-row|directory-row)[^{]*\{[^}]*backdrop-filter/iu,
     );
+    expect(styles).toContain("backdrop-filter: var(--sa-refraction)");
+    expect(styles).toMatch(/\.glass-material\s*\{[^}]*pointer-events:\s*none/iu);
+    const glass = readIfPresent(resolve(vnextRoot, "components/glass-material.tsx"));
+    expect(glass).toContain('color-interpolation-filters="sRGB"');
+    expect(glass).toContain('aria-hidden="true"');
+    expect(glass).toContain("ResizeObserver");
+    expect(glass).not.toMatch(/setInterval|pointermove|mousemove|addEventListener\("scroll"/u);
     expect(styles).not.toMatch(
       /transition(?:-property)?:[^;]*(?:width|height|inset|margin|padding)/iu,
     );

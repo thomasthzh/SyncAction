@@ -16,6 +16,8 @@ export const iconNames = [
   "transfer",
   "trash",
   "close",
+  "search",
+  "check",
 ] as const;
 
 export type IconName = (typeof iconNames)[number];
@@ -150,5 +152,14 @@ function pathsFor(name: Exclude<IconName, "logo">): ComponentChildren {
       );
     case "close":
       return <path d="m6 6 12 12M18 6 6 18" />;
+    case "search":
+      return (
+        <>
+          <circle cx="10.5" cy="10.5" r="6.5" />
+          <path d="m16 16 4 4" />
+        </>
+      );
+    case "check":
+      return <path d="m5 12 4 4L19 6" />;
   }
 }

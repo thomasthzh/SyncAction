@@ -8,7 +8,7 @@ import type {
 } from "../src/ui-vnext/store.js";
 import type { UiCommandResult, UiStateSlices } from "../src/ui/ui-protocol.js";
 
-export type VisualFixture = "lobby" | "room";
+export type VisualFixture = "lobby" | "room" | "guest";
 
 export const FIXTURE_NOW_MS = Date.parse("2026-08-24T08:00:00.000Z");
 
@@ -29,7 +29,7 @@ const profiles = [
     metadata: {
       serverId: uuid(500),
       displayName: "SyncAction 演示节点",
-      softwareVersion: "0.9.5",
+      softwareVersion: "0.9.10",
       protocolVersion: "1",
       minimumClientVersion: "0.8.1",
       termsVersion: "2026-07-30",
@@ -39,6 +39,8 @@ const profiles = [
         "notifications",
         "volatile-pointer-v2",
         "content-compatibility-v1",
+        "account-activation-v1",
+        "account-key-login-v1",
       ],
       limits: { ordinaryActiveRooms: 5, ordinaryOpenTabs: 20 },
     },
@@ -284,7 +286,12 @@ function roomSlices(): UiStateSlices {
 }
 
 export function createVisualStore(fixture: VisualFixture): UiStore {
-  return new VisualUiStore(fixture === "room" ? roomSlices() : lobbySlices());
+  const slices = fixture === "room" ? roomSlices() : lobbySlices();
+  if (fixture === "guest") {
+    slices.shell = { ...slices.shell, phase: "SIGNED_OUT", account: null };
+    slices.discovery = { ...slices.discovery, rooms: [], invitations: [] };
+  }
+  return new VisualUiStore(slices);
 }
 
 class VisualUiStore implements UiStore {

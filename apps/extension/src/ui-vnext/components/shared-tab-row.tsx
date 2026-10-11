@@ -39,13 +39,19 @@ export function SharedTabRow({
         ? "页面一致性尚未验证"
         : null;
   return (
-    <article class="shared-tab-row" data-page-id={row.pageKey}>
+    <article
+      class="shared-tab-row"
+      data-page-id={row.pageKey}
+      data-current-page={
+        currentUserId !== null && row.viewerAccountIds.includes(currentUserId) ? "true" : "false"
+      }
+    >
       <div class="favicon-fallback" data-favicon-fallback aria-hidden="true">
         {(row.domain[0] ?? "·").toUpperCase()}
       </div>
       <div class="shared-tab-row__content">
         <div class="shared-tab-row__title">
-          <strong>{row.title}</strong>
+          <strong title={row.title}>{row.title}</strong>
           <span>{row.domain}</span>
         </div>
         {compatibilityCopy === null ? null : (

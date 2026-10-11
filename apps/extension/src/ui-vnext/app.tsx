@@ -94,7 +94,10 @@ function selectedServerContext(store: UiStore): {
   return {
     profileId: profile.profileId,
     host,
-    connected: profile.mode !== "UNVERIFIED",
+    connected:
+      profile.mode !== "UNVERIFIED" &&
+      store.transport.value === "CONNECTED" &&
+      (store.room.value.selectedRoomId === null || store.room.value.runtime?.state === "SYNCED"),
     accountActivationSupported,
     accountKeyLoginSupported,
     accountSettingsSupported: accountActivationSupported || accountKeyLoginSupported,
@@ -143,6 +146,10 @@ export function App({
   const effectiveAuthMode =
     overlay?.kind === "AUTH" ? supportedAuthMode(overlay.mode, server) : null;
   const publicRoomKey = store.discovery.value.publicRooms.map(({ roomId }) => roomId).join("|");
+
+  useEffect(() => {
+    setActionError(null);
+  }, [server.profileId, store.room.value.selectedRoomId]);
 
   function openOverlay(next: Exclude<Overlay, null>): void {
     if (overlay === null) {
@@ -213,13 +220,18 @@ export function App({
         ? { name: "ROOM_JOIN_OPEN", payload: { roomId: room.roomId } }
         : { name: "ROOM_JOIN_REQUEST", payload: { roomId: room.roomId } };
     const result = await store.command(command);
-    if (!result.ok && result.errorCode === "AUTHENTICATION_REQUIRED") {
+    if (selectedServerContext(store).profileId !== server.profileId) return result;
+    if (
+      !result.ok &&
+      (result.errorCode === "AUTHENTICATION_REQUIRED" || result.errorCode === "SESSION_REQUIRED")
+    ) {
       setDeferredCommand({
         profileId: server.profileId,
         roomId: room.roomId,
         command,
       });
       openOverlay({ kind: "AUTH", mode: "LOGIN" });
+      return { ...result, errorCode: "AUTHENTICATION_REQUIRED" };
     } else if (!result.ok) {
       setActionError(result.errorCode);
     }
@@ -270,7 +282,7 @@ export function App({
               name: "AUTH_KEY_LOGIN",
               payload: { activationKey: input.activationKey },
             }));
-    if (!result.ok) {
+    if (!result.ok || selectedServerContext(store).profileId !== server.profileId) {
       return result;
     }
 
@@ -282,6 +294,7 @@ export function App({
       store.discovery.value.publicRooms.some(({ roomId }) => roomId === queued.roomId)
     ) {
       const replayResult = await store.command(queued.command);
+      if (selectedServerContext(store).profileId !== server.profileId) return result;
       if (!replayResult.ok) {
         setActionError(replayResult.errorCode);
       }
@@ -299,6 +312,7 @@ export function App({
       name: "ROOM_CREATE",
       payload: input,
     });
+    if (selectedServerContext(store).profileId !== server.profileId) return result;
     if (result.ok) {
       closeOverlay();
     }
@@ -382,6 +396,7 @@ export function App({
       {store.shell.value.onboardingRequired ? <UpgradeNotice store={store} /> : null}
       {store.room.value.selectedRoomId !== null ? (
         <ActiveRoom
+          key={`${server.profileId}:${store.room.value.selectedRoomId}`}
           store={store}
           serverHost={server.host}
           now={now}
@@ -392,16 +407,19 @@ export function App({
         />
       ) : (
         <GuestLobby
+          key={server.profileId}
           store={store}
           actionError={actionError}
           onJoinPublicRoom={joinPublicRoom}
           onOpenCreateRoom={() => openOverlay({ kind: "CREATE_ROOM" })}
+          onOpenAuth={() => openOverlay({ kind: "AUTH", mode: "LOGIN" })}
           {...(serviceStatusProbe === undefined ? {} : { serviceStatusProbe })}
         />
       )}
 
       {overlay?.kind === "AUTH" && effectiveAuthMode !== null ? (
         <AuthDialog
+          key={server.profileId}
           mode={effectiveAuthMode}
           selectedProfileId={server.profileId}
           serverHost={server.host}
@@ -424,7 +442,11 @@ export function App({
         />
       ) : null}
       {overlay?.kind === "CREATE_ROOM" ? (
-        <CreateRoomDialog onSubmit={createRoom} onClose={() => closeOverlay()} />
+        <CreateRoomDialog
+          key={server.profileId}
+          onSubmit={createRoom}
+          onClose={() => closeOverlay()}
+        />
       ) : null}
       {overlay?.kind === "MESSAGES" ? (
         <MessageCenter store={store} onClose={() => closeOverlay()} />

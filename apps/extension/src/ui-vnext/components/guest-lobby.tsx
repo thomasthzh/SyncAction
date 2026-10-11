@@ -6,12 +6,14 @@ import type { UiCommandResult } from "../../ui/ui-protocol.js";
 import { ActionableStatus } from "./actionable-status.js";
 import { PublicRoomFeed } from "./public-room-feed.js";
 import { ServiceStatusCard, type ServiceStatusProbe } from "./service-status-card.js";
+import { useCommandFeedback } from "../use-command-feedback.js";
 
 export interface GuestLobbyProps {
   readonly store: UiStore;
   readonly actionError: string | null;
   readonly onJoinPublicRoom: (room: PublicRoomSummary) => Promise<UiCommandResult>;
   readonly onOpenCreateRoom: () => void;
+  readonly onOpenAuth: () => void;
   readonly serviceStatusProbe?: ServiceStatusProbe;
 }
 
@@ -20,10 +22,12 @@ export function GuestLobby({
   actionError,
   onJoinPublicRoom,
   onOpenCreateRoom,
+  onOpenAuth,
   serviceStatusProbe,
 }: GuestLobbyProps): JSX.Element {
   const shell = store.shell.value;
   const discovery = store.discovery.value;
+  const feedback = useCommandFeedback();
   const authenticated = shell.account !== null && shell.phase !== "SESSION_EXPIRED";
   const selectedProfile =
     shell.profiles.find(({ profileId }) => profileId === shell.selectedProfileId) ??
@@ -34,16 +38,19 @@ export function GuestLobby({
       <section class="welcome-strip">
         <div>
           <p class="eyebrow">
-            {authenticated ? `你好，${shell.account?.displayName}` : "轻量协作"}
+            {authenticated ? `你好，${shell.account?.displayName}` : "欢迎使用 SyncAction"}
           </p>
           <h1>一起浏览</h1>
-          <p class="welcome-strip__lede">房间、页面和播放进度会自动同步</p>
+          <p class="welcome-strip__lede">和朋友共享页面，一起看、一起聊。</p>
         </div>
-        {authenticated ? (
-          <button class="primary-button" type="button" onClick={onOpenCreateRoom}>
-            创建房间
-          </button>
-        ) : null}
+        <button
+          class="primary-button welcome-strip__action"
+          type="button"
+          onClick={authenticated ? onOpenCreateRoom : onOpenAuth}
+        >
+          <Icon name={authenticated ? "invite" : "chevron"} size={18} />
+          {authenticated ? "创建房间" : "登录开始协作"}
+        </button>
       </section>
 
       <ServiceStatusCard
@@ -51,6 +58,10 @@ export function GuestLobby({
         transport={store.transport.value}
         {...(serviceStatusProbe === undefined ? {} : { probe: serviceStatusProbe })}
       />
+
+      {!authenticated && shell.phase !== "ACCOUNT_PENDING" ? (
+        <p class="getting-started">先选择房间，登录后即可加入。已有账户密钥也可直接登录。</p>
+      ) : null}
 
       {shell.phase === "ACCOUNT_PENDING" ? (
         <p class="account-pending">账号申请已提交，管理员批准后即可登录</p>
@@ -71,7 +82,7 @@ export function GuestLobby({
               <p class="eyebrow">继续协作</p>
               <h2 id="my-room-heading">我的房间</h2>
             </div>
-            <span>{discovery.rooms.length}/5</span>
+            <span>{discovery.rooms.length} 个房间</span>
           </header>
           {discovery.rooms.length === 0 ? (
             <p class="subtle-copy">还没有房间，创建一个或从公开房间开始。</p>
@@ -83,11 +94,15 @@ export function GuestLobby({
                   type="button"
                   key={room.id}
                   aria-label={room.name}
+                  disabled={feedback.pending !== null}
+                  aria-busy={feedback.pending === room.id}
                   onClick={() =>
-                    void store.command({
-                      name: "ROOM_SELECT",
-                      payload: { roomId: room.id },
-                    })
+                    void feedback.run(room.id, () =>
+                      store.command({
+                        name: "ROOM_SELECT",
+                        payload: { roomId: room.id },
+                      }),
+                    )
                   }
                 >
                   <span>
@@ -97,7 +112,11 @@ export function GuestLobby({
                       {room.visibility === "PUBLIC" ? "公开" : "私密"}
                     </small>
                   </span>
-                  <Icon name="chevron" size={16} />
+                  <Icon
+                    name={feedback.pending === room.id ? "sync" : "chevron"}
+                    size={18}
+                    className={feedback.pending === room.id ? "is-spinning" : ""}
+                  />
                 </button>
               ))}
             </div>
@@ -112,14 +131,20 @@ export function GuestLobby({
                   <button
                     class="compact-button"
                     type="button"
+                    disabled={feedback.pending !== null}
                     onClick={() =>
-                      void store.command({
-                        name: "INVITATION_ACCEPT",
-                        payload: { invitationId: invitation.id },
-                      })
+                      void feedback.run(
+                        invitation.id,
+                        () =>
+                          store.command({
+                            name: "INVITATION_ACCEPT",
+                            payload: { invitationId: invitation.id },
+                          }),
+                        "已接受邀请",
+                      )
                     }
                   >
-                    接受
+                    {feedback.pending === invitation.id ? "接受中…" : "接受"}
                   </button>
                 </div>
               ))}
@@ -129,6 +154,12 @@ export function GuestLobby({
       ) : null}
 
       <ActionableStatus errorCode={actionError} />
+      <ActionableStatus errorCode={feedback.errorCode} />
+      {feedback.message !== null ? (
+        <p class="command-feedback" role="status">
+          {feedback.message}
+        </p>
+      ) : null}
       <PublicRoomFeed
         rooms={discovery.publicRooms}
         onJoin={onJoinPublicRoom}

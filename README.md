@@ -6,7 +6,30 @@
 
 SyncAction 是面向 Chrome 与 Edge 的多人共享浏览器工作区。成员可以在侧栏中创建房间、共享标签页、查看同伴所在页面、同步播放媒体；获得用户同意和浏览器对当前网站的授权后，还能使用同页光标、弹幕与画笔。
 
-本仓库提供可审阅、可自行构建的源码。此前私有版本的安装包、发布历史和生产运维配置没有迁入；当前仓库没有可下载的预编译 Release。构建自己的服务与扩展时，请先配置自己的服务器地址和管理员身份。
+本仓库提供 MIT 许可源码和独立的 Chrome、Edge 客户端及自托管服务端安装包。此前私有版本的历史和生产运维配置没有迁入。公开版默认服务器
+`https://syncaction.example.com`
+是占位地址，安装后请在扩展顶栏配置实际服务器；服务端必须自行初始化管理员，不含默认账号密码。
+
+## v0.9.10 下载
+
+从 [v0.9.10 Release](https://github.com/thomasthzh/SyncAction/releases/tag/v0.9.10) 下载：
+
+| 资产                                                                                                                     | 用途                                           |
+| ------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------- |
+| [Chrome 客户端](https://github.com/thomasthzh/SyncAction/releases/download/v0.9.10/SyncAction-client-chrome-v0.9.10.zip) | 解压后在 Chrome 加载扩展                       |
+| [Edge 客户端](https://github.com/thomasthzh/SyncAction/releases/download/v0.9.10/SyncAction-client-edge-v0.9.10.zip)     | 解压后在 Edge 加载扩展                         |
+| [服务端](https://github.com/thomasthzh/SyncAction/releases/download/v0.9.10/SyncAction-server-v0.9.10.tar.gz)            | 公共服务、管理员服务、数据库模块和通用部署源码 |
+| [SHA256SUMS.txt](https://github.com/thomasthzh/SyncAction/releases/download/v0.9.10/SHA256SUMS.txt)                      | 三个安装资产的 SHA-256 校验值                  |
+
+安装与升级分别见[客户端指南](https://github.com/thomasthzh/SyncAction/blob/v0.9.10/docs/client.md)、[服务端指南](docs/server.md)，变更见[发布说明](docs/releases/v0.9.10.md)。客户端 ZIP 不是浏览器商店安装包；服务端 tarball 不含客户端。
+
+### 本版变化
+
+- 320–480px 紧凑侧栏采用真实边缘折射、局部高光和轻量流线背景；玻璃层不扭曲文字与按钮。
+- 房间、页面搜索、成员跟随和高频操作保留在主界面；窄屏仍显示“分享当前页”。
+- 表单提供就地规则、错误焦点、密码显隐和重复提交保护；操作反馈不会串到其他服务器或房间。
+- 关闭侧栏后停止无消费者的 UI 状态投影，重新打开时恢复最新快照。
+- 减少透明度、减少动画和强制颜色偏好均有适配；无外部字体或视觉资源请求。
 
 ## 功能与边界
 
@@ -27,7 +50,9 @@ SyncAction 是面向 Chrome 与 Edge 的多人共享浏览器工作区。成员�
 | `design/brand`    | 原创标识及可重生成的扩展图标源文件             |
 | `infra`           | 通用容器镜像与本地测试数据库示例               |
 
-## 本地开发
+## 本地开发（完整源码仓库）
+
+以下客户端构建命令仅适用于完整源码仓库。服务端压缩包不含客户端源码或客户端构建命令，独立启动和升级请直接按[服务端指南](docs/server.md)操作。
 
 需要 Node.js 22.13+、pnpm 10.12.1 和 Docker。安装依赖并启动本地数据库：
 
@@ -53,9 +78,11 @@ pnpm local:client:chrome
 pnpm local:client:edge
 ```
 
-本地构建会将扩展绑定到本地公共服务。普通源码构建中的 `syncaction.example.com`
-只是占位域名；自行部署时通过 `WXT_PUBLIC_SERVER_URL`
-指向自己的 HTTPS 服务，并按自己的网络边界配置服务端。不要把管理员服务或数据库直接暴露到公网。
+本地构建预先声明本地公共服务的浏览器权限，安装后仍需在扩展顶栏添加并选择
+`http://127.0.0.1:29373`。`WXT_PUBLIC_SERVER_URL`
+目前只影响构建权限、输出目录及页面协作排除地址，不会更改运行时默认服务器配置；新安装仍以
+`https://syncaction.example.com`
+占位。自行部署时同样要在顶栏选择实际 HTTPS 公共服务，并按自己的网络边界配置服务端。不要把管理员服务或数据库直接暴露到公网。
 
 ## 检查
 

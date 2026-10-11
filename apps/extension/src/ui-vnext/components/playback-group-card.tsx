@@ -10,18 +10,21 @@ export interface PlaybackGroupCardProps {
   readonly group: MediaGroupView;
   readonly currentUserId: string | null;
   readonly onIntent: (intent: MediaViewIntent) => void;
+  readonly busy?: boolean;
 }
 
 export function PlaybackGroupCard({
   group,
   currentUserId,
   onIntent,
+  busy = false,
 }: PlaybackGroupCardProps): JSX.Element {
   const leader = group.members.find(({ role }) => role === "LEADER") ?? null;
   return (
     <article
       class={`playback-group-row playback-card playback-card--${group.theme}`}
       data-group-id={group.groupId}
+      aria-busy={busy}
     >
       <header class="playback-card__header">
         <div>
@@ -39,19 +42,26 @@ export function PlaybackGroupCard({
           <button
             class="compact-button"
             type="button"
-            disabled={leader.primaryAction.disabled}
+            disabled={busy || leader.primaryAction.disabled}
             onClick={() => onIntent(leader.primaryAction.intent)}
           >
             跳转并同步
           </button>
         ) : null}
       </div>
-      <MemberCluster
-        members={group.members}
-        currentUserId={currentUserId}
-        playbackGroupId={group.groupId}
-        onMemberClick={(member) => onIntent({ type: "JUMP_TO_MEMBER", userId: member.userId })}
-      />
+      <div class="playback-card__controls">
+        <MemberCluster
+          members={group.members}
+          currentUserId={currentUserId}
+          playbackGroupId={group.groupId}
+          onMemberClick={(member) => onIntent({ type: "JUMP_TO_MEMBER", userId: member.userId })}
+        />
+        <div class="playback-card__actions">
+          {group.trailingActions.map((action) => (
+            <ActionButton action={action} onIntent={onIntent} busy={busy} />
+          ))}
+        </div>
+      </div>
       {group.proposals.map((proposal) => (
         <div class="proposal-card" key={proposal.key}>
           <div>
@@ -63,16 +73,11 @@ export function PlaybackGroupCard({
           </div>
           <div class="proposal-card__actions">
             {proposal.trailingActions.map((action) => (
-              <ActionButton action={action} onIntent={onIntent} />
+              <ActionButton action={action} onIntent={onIntent} busy={busy} />
             ))}
           </div>
         </div>
       ))}
-      <div class="playback-card__actions">
-        {group.trailingActions.map((action) => (
-          <ActionButton action={action} onIntent={onIntent} />
-        ))}
-      </div>
     </article>
   );
 }
@@ -80,9 +85,11 @@ export function PlaybackGroupCard({
 function ActionButton({
   action,
   onIntent,
+  busy,
 }: {
   readonly action: MediaViewAction;
   readonly onIntent: (intent: MediaViewIntent) => void;
+  readonly busy: boolean;
 }): JSX.Element {
   return (
     <button
@@ -91,7 +98,7 @@ function ActionButton({
       key={action.key}
       aria-label={action.label}
       title={action.disabledReason ?? action.accessibleText}
-      disabled={action.disabled}
+      disabled={busy || action.disabled}
       onClick={() => onIntent(action.intent)}
     >
       {action.label}

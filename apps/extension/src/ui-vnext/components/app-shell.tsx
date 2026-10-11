@@ -2,6 +2,7 @@ import { useState } from "preact/hooks";
 import type { ComponentChildren, JSX } from "preact";
 import type { UiStore } from "../store.js";
 import { Icon } from "../icons.js";
+import { GlassMaterial } from "./glass-material.js";
 
 export interface AppShellProps {
   readonly store: UiStore;
@@ -37,6 +38,7 @@ export function AppShell({
   return (
     <div class="syncaction-app" data-native-sidepanel>
       <header class="top-bar" data-editorial-identity>
+        <GlassMaterial />
         <div class="brand-lockup">
           <span class="brand-mark" aria-hidden="true">
             <Icon name="logo" size={36} />
