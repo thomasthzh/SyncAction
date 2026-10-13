@@ -925,6 +925,113 @@ describe("ExtensionAppController vNext server hub", () => {
 });
 
 describe("ExtensionAppController realtime product state", () => {
+  it("returns the last coherent projection while a queued mutation is still pending", async () => {
+    const selected = profile(profileAId, serverAUrl, serverAId);
+    const sessions = new FakeSessions();
+    sessions.seed(profileAId, serverAUrl, serverAId);
+    let releaseUpdate: ((value: PublicRoom) => void) | undefined;
+    const updateRoom = vi.fn(
+      (
+        _token: string,
+        _roomId: unknown,
+        input: {
+          name: string;
+          visibility: "PUBLIC" | "PRIVATE";
+          joinPolicy: "OPEN" | "APPROVAL" | "INVITE_ONLY";
+        },
+      ) =>
+        new Promise<PublicRoom>((resolve) => {
+          releaseUpdate = (value) => resolve({ ...value, ...input });
+        }),
+    );
+    const api = apiFixture("a", selected.metadata!, [], { updateRoom });
+    const { app } = createApp({
+      profiles: new FakeProfiles([selected], profileAId),
+      sessions,
+      apis: new Map([[serverAUrl, api]]),
+    });
+    await app.start();
+    await app.selectRoom(roomId);
+
+    const before = await app.getProjectionStatus();
+    const pending = app.updateRoom({
+      name: "Slow update",
+      visibility: "PUBLIC",
+      joinPolicy: "APPROVAL",
+    });
+    await vi.waitFor(() => expect(updateRoom).toHaveBeenCalledOnce());
+
+    const projectedWhilePending = await Promise.race([
+      app.getProjectionStatus(),
+      new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error("PROJECTION_BLOCKED_BY_COMMAND")), 100);
+      }),
+    ]);
+    expect(projectedWhilePending.roomDetail).toEqual(before.roomDetail);
+    expect(projectedWhilePending.selectedRoomId).toBe(before.selectedRoomId);
+
+    releaseUpdate?.({ ...room(), name: "Slow update", roomRevision: 1 });
+    await pending;
+    const after = await app.getProjectionStatus();
+    expect(after.roomDetail).toMatchObject({ name: "Slow update", roomRevision: 1 });
+  });
+
+  it("keeps queued mutations serialized while the projection remains readable", async () => {
+    const selected = profile(profileAId, serverAUrl, serverAId);
+    const sessions = new FakeSessions();
+    sessions.seed(profileAId, serverAUrl, serverAId);
+    const calls: string[] = [];
+    let releaseFirst: (() => void) | undefined;
+    const updateRoom = vi.fn(
+      async (
+        _token: string,
+        _roomId: unknown,
+        input: {
+          name: string;
+          visibility: "PUBLIC" | "PRIVATE";
+          joinPolicy: "OPEN" | "APPROVAL" | "INVITE_ONLY";
+        },
+      ) => {
+        calls.push(input.name);
+        if (input.name === "First update") {
+          await new Promise<void>((resolve) => {
+            releaseFirst = resolve;
+          });
+        }
+        return { ...room(), ...input };
+      },
+    );
+    const api = apiFixture("a", selected.metadata!, [], { updateRoom });
+    const { app } = createApp({
+      profiles: new FakeProfiles([selected], profileAId),
+      sessions,
+      apis: new Map([[serverAUrl, api]]),
+    });
+    await app.start();
+    await app.selectRoom(roomId);
+
+    const first = app.updateRoom({
+      name: "First update",
+      visibility: "PUBLIC",
+      joinPolicy: "APPROVAL",
+    });
+    const second = app.updateRoom({
+      name: "Second update",
+      visibility: "PUBLIC",
+      joinPolicy: "APPROVAL",
+    });
+    await vi.waitFor(() => expect(updateRoom).toHaveBeenCalledOnce());
+    expect(calls).toEqual(["First update"]);
+    await expect(app.getProjectionStatus()).resolves.toMatchObject({
+      selectedRoomId: roomId,
+    });
+
+    releaseFirst?.();
+    await first;
+    await second;
+    expect(calls).toEqual(["First update", "Second update"]);
+  });
+
   it("applies contiguous events, heals one gap, dedupes notifications, and leaves without polling", async () => {
     const meta = metadata(serverAId, {
       capabilities: ["notifications", "volatile-pointer-v2", "content-compatibility-v1"],
