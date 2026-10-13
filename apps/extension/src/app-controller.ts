@@ -408,6 +408,8 @@ export interface ExtensionAppStatus {
   collaboration: ExtensionCollaborationSummary;
 }
 
+type ExtensionAppStatusBase = Omit<ExtensionAppStatus, "room" | "collaboration">;
+
 export interface ExtensionPageAccessContext {
   profileId: string;
   serverOrigin: string;
@@ -471,6 +473,8 @@ export class ExtensionAppController {
   #onboardingRequired = false;
   #started = false;
   #tail: Promise<void> = Promise.resolve();
+  #writeEpoch = 0;
+  #lastProjectionStatus: ExtensionAppStatus | null = null;
   #phase: ExtensionAppPhase = "SIGNED_OUT";
   #account: PublicAccount | null = null;
   #rooms: PublicRoom[] = [];
@@ -1401,31 +1405,35 @@ export class ExtensionAppController {
         this.#errorCode = "SESSION_REQUIRED";
       }
       const runtime = this.#runtime;
-      const room = runtime === undefined ? null : await runtime.getStatus();
-      return structuredClone({
-        phase: this.#phase,
-        account: this.#account,
-        profiles: this.#profilesList,
-        selectedProfileId: this.#profileId,
-        selectedProfile: this.#profile,
-        serverCapabilities: [...this.#serverCapabilities],
-        publicRooms: this.#publicRooms,
-        publicRoomsUnavailableReason: this.#publicRoomsUnavailableReason(),
-        pointerUnavailableReason: this.#pointerUnavailableReason(),
-        contentCompatibilityUnavailableReason: this.#contentCompatibilityUnavailableReason(),
-        notifications: this.#notifications,
-        notificationCursor: this.#notificationCursor,
-        unreadNotificationCount: this.#unreadNotificationCount,
-        onboardingRequired: this.#onboardingRequired,
-        rooms: this.#rooms,
-        invitations: this.#invitations,
-        selectedRoomId: this.#selection?.roomId ?? null,
-        roomDetail: this.#roomDetail,
-        room,
-        errorCode: this.#errorCode,
-        collaboration: projectCollaborationSummary(this.#roomDetail, room),
-      });
+      return this.#composeStatus(
+        this.#captureStatusBase(),
+        runtime === undefined ? null : await runtime.getStatus(),
+      );
     });
+  }
+
+  /**
+   * Read the latest in-memory projection without waiting for a queued command.
+   * The command queue remains the only write path; this read is intentionally
+   * best-effort and does not perform session-expiry side effects.
+   */
+  public async getProjectionStatus(): Promise<ExtensionAppStatus> {
+    if (this.#writeEpoch % 2 === 1 && this.#lastProjectionStatus !== null) {
+      return structuredClone(this.#lastProjectionStatus);
+    }
+    const epoch = this.#writeEpoch;
+    const base = this.#captureStatusBase();
+    const runtime = this.#runtime;
+    const room = runtime === undefined ? null : await runtime.getStatus();
+    if (epoch !== this.#writeEpoch || runtime !== this.#runtime) {
+      if (this.#lastProjectionStatus !== null) {
+        return structuredClone(this.#lastProjectionStatus);
+      }
+      return this.#composeStatus(this.#captureStatusBase(), null);
+    }
+    const status = this.#composeStatus(base, room);
+    this.#lastProjectionStatus = status;
+    return structuredClone(status);
   }
 
   async #configureProfile(profileInput: ServerProfile): Promise<void> {
@@ -2131,6 +2139,38 @@ export class ExtensionAppController {
     this.#errorCode = null;
   }
 
+  #captureStatusBase(): ExtensionAppStatusBase {
+    return structuredClone({
+      phase: this.#phase,
+      account: this.#account,
+      profiles: this.#profilesList,
+      selectedProfileId: this.#profileId,
+      selectedProfile: this.#profile,
+      serverCapabilities: [...this.#serverCapabilities],
+      publicRooms: this.#publicRooms,
+      publicRoomsUnavailableReason: this.#publicRoomsUnavailableReason(),
+      pointerUnavailableReason: this.#pointerUnavailableReason(),
+      contentCompatibilityUnavailableReason: this.#contentCompatibilityUnavailableReason(),
+      notifications: this.#notifications,
+      notificationCursor: this.#notificationCursor,
+      unreadNotificationCount: this.#unreadNotificationCount,
+      onboardingRequired: this.#onboardingRequired,
+      rooms: this.#rooms,
+      invitations: this.#invitations,
+      selectedRoomId: this.#selection?.roomId ?? null,
+      roomDetail: this.#roomDetail,
+      errorCode: this.#errorCode,
+    });
+  }
+
+  #composeStatus(base: ExtensionAppStatusBase, room: ExtensionStatus | null): ExtensionAppStatus {
+    return structuredClone({
+      ...base,
+      room,
+      collaboration: projectCollaborationSummary(base.roomDetail, room),
+    });
+  }
+
   #emitChanged(hint?: UiSliceHint): void {
     for (const listener of [...this.#listeners]) {
       try {
@@ -2142,7 +2182,14 @@ export class ExtensionAppController {
   }
 
   #enqueue<T>(work: () => Promise<T>): Promise<T> {
-    const result = this.#tail.then(work);
+    const result = this.#tail.then(async () => {
+      this.#writeEpoch += 1;
+      try {
+        return await work();
+      } finally {
+        this.#writeEpoch += 1;
+      }
+    });
     this.#tail = result.then(
       () => undefined,
       () => undefined,

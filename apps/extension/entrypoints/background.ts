@@ -249,7 +249,7 @@ export default defineBackground(() => {
     const policyRetry = new AuthenticatedOriginPolicyRetry({
       source: {
         readStatus: async () => {
-          const status = await app.getStatus();
+          const status = await app.getProjectionStatus();
           return {
             phase: status.phase,
             accountId: status.account?.id ?? null,
@@ -363,7 +363,7 @@ export default defineBackground(() => {
     });
     const uiStateHub = new UiStateHub({
       source: {
-        readStatus: () => app.getStatus(),
+        readStatus: () => app.getProjectionStatus(),
         readProfiles: () => profiles.list(),
         readPageAccess,
         subscribeChanged: (listener) => app.subscribe(listener),
