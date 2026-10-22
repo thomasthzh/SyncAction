@@ -42,10 +42,11 @@ export function PlaybackGroupCard({
           <button
             class="compact-button"
             type="button"
+            title={leader.primaryAction.disabledReason ?? leader.primaryAction.accessibleText}
             disabled={busy || leader.primaryAction.disabled}
             onClick={() => onIntent(leader.primaryAction.intent)}
           >
-            跳转并同步
+            打开领播页面
           </button>
         ) : null}
       </div>

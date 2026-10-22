@@ -68,7 +68,8 @@ describe("vNext active room", () => {
     expect(root.querySelector("[data-room-presence-summary]")).not.toBeNull();
     const liveRail = root.querySelector("[data-room-live-rail]");
     expect(liveRail).not.toBeNull();
-    expect(liveRail?.textContent).toContain("5 在线");
+    expect(liveRail?.textContent).toContain("房间已同步");
+    expect(liveRail?.textContent).not.toContain("5 在线");
     expect(liveRail?.textContent).toContain("2 个页面");
     expect(liveRail?.textContent).toContain("1 个播放组");
     const playbackSurface = root.querySelector('[data-editorial-surface="playback"]')!;
@@ -107,7 +108,12 @@ describe("vNext active room", () => {
     expect(groupCard.textContent).toContain("领播 林岚");
     expect(groupCard.textContent).toContain("03:24 / 10:00");
     expect(groupCard.textContent).toContain("3 人");
-    expect(groupCard.textContent).toContain("跳转并同步");
+    expect(groupCard.textContent).not.toContain("跳转并同步");
+    const commandsBeforeOpeningPage = store.commandCalls.length;
+    await click(byRole(groupCard, "button", "打开领播页面"));
+    expect(store.commandCalls.slice(commandsBeforeOpeningPage)).toEqual([
+      { name: "MEDIA_MEMBER_JUMP", payload: { userId: leaderId } },
+    ]);
     expect(documentRow.textContent).toContain("协作文档");
     expect(documentRow.textContent).toContain("docs.example");
     expect(documentRow.textContent).not.toContain("对齐一次");

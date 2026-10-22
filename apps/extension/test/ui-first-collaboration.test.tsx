@@ -33,6 +33,30 @@ function roomStore(): TestUiStore {
 }
 
 describe("first collaboration recovery and truthful results", () => {
+  it("keeps one prominent first-watch instruction while independent page sharing remains available", () => {
+    const store = roomStore();
+    store.update({
+      room: {
+        ...store.room.value,
+        runtime: {
+          ...store.room.value.runtime!,
+          media: { ...store.room.value.runtime!.media!, playbackGroups: [], localMembership: null },
+        },
+      },
+      collaboration: {
+        ...store.collaboration.value,
+        pages: [],
+        playbackGroups: [],
+      },
+    });
+    const root = renderPanel(<App store={store} now={() => FIXTURE_NOW_MS} />);
+    expect(byRole(root, "button", "开始一起看")).toBeTruthy();
+    expect(byRole(root, "button", "分享当前页")).toBeTruthy();
+    expect(root.textContent).toContain("还没有共享页面");
+    expect(root.textContent).not.toContain("把第一张页面分享给朋友");
+    expect(root.textContent).not.toContain("再点击底部");
+  });
+
   it.each([
     [{ kind: "BLOCKED", reason: "ROOM_TAB_LIMIT_REACHED" }, "最多共享 20"],
     [{ kind: "IGNORED", reason: "LOADING" }, "页面仍在加载"],

@@ -115,7 +115,7 @@ export function ActiveRoom({
   const statusCode = roomStatusCode(store);
   const connectionLabel =
     statusCode === null
-      ? "已同步"
+      ? "房间已同步"
       : statusCode === "RECONNECTING" || statusCode === "RECOVERING"
         ? "恢复中"
         : statusCode === "LOADING" ||
@@ -240,10 +240,6 @@ export function ActiveRoom({
           <strong>{connectionLabel}</strong>
         </span>
         <span class="room-live-rail__item">
-          <Icon name="users" size={15} />
-          <strong>{onlineCount} 在线</strong>
-        </span>
-        <span class="room-live-rail__item">
           <Icon name="sync" size={15} />
           <strong>{rows.length} 个页面</strong>
         </span>
@@ -323,11 +319,7 @@ export function ActiveRoom({
           </label>
         ) : null}
         {rows.length === 0 ? (
-          <div class="empty-state">
-            <Icon name="share" size={28} />
-            <strong>把第一张页面分享给朋友</strong>
-            <span>打开想一起看的页面，再点击底部「分享当前页」。</span>
-          </div>
+          <p class="section-description">还没有共享页面</p>
         ) : visibleRows.length === 0 ? (
           <div class="empty-state">
             <strong>没有找到共享页面</strong>
