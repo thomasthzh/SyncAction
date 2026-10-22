@@ -4,6 +4,9 @@ import { DEFAULT_SERVER_PROFILE_ID, type ServerProfile } from "../../server-prof
 import type { UiTransportState } from "../store.js";
 import { Icon } from "../icons.js";
 import { GlassMaterial } from "./glass-material.js";
+import type { UiCommandResult } from "../../ui/ui-protocol.js";
+import { useCommandFeedback } from "../use-command-feedback.js";
+import { ActionableStatus, errorLabel } from "./actionable-status.js";
 
 const PROBE_INTERVAL_MS = 30_000;
 
@@ -15,6 +18,9 @@ export interface ServiceStatusCardProps {
   readonly profile: ServerProfile;
   readonly transport: UiTransportState;
   readonly probe?: ServiceStatusProbe;
+  readonly connectionErrorCode?: string | null;
+  readonly onReconnect?: () => Promise<UiCommandResult>;
+  readonly onOpenServerProfiles?: () => void;
 }
 
 type ProbeState =
@@ -109,8 +115,12 @@ export function ServiceStatusCard({
   profile,
   transport,
   probe,
+  connectionErrorCode = null,
+  onReconnect,
+  onOpenServerProfiles,
 }: ServiceStatusCardProps): JSX.Element {
   const health = useServiceProbe(profile.baseUrl, probe);
+  const feedback = useCommandFeedback();
   const production = profile.profileId === DEFAULT_SERVER_PROFILE_ID;
   const nodeName = production ? "SyncAction" : (profile.metadata?.displayName ?? "自定义节点");
   const host = serverHost(profile.baseUrl);
@@ -119,65 +129,101 @@ export function ServiceStatusCard({
   const transportRecovering = transport !== "CONNECTED";
   const tone = transportRecovering
     ? "checking"
-    : health.state.kind === "ONLINE"
-      ? "online"
-      : health.state.kind === "OFFLINE"
-        ? "offline"
-        : "checking";
+    : connectionErrorCode !== null
+      ? "offline"
+      : health.state.kind === "ONLINE"
+        ? "online"
+        : health.state.kind === "OFFLINE"
+          ? "offline"
+          : "checking";
   const title = transportRecovering
-    ? "连接正在恢复"
-    : health.state.kind === "ONLINE"
-      ? `${nodeName} 服务在线`
-      : health.state.kind === "OFFLINE"
-        ? "服务暂不可用"
-        : health.state.kind === "CHECKING"
-          ? "正在检测服务"
-          : "服务状态待检测";
+    ? "侧栏连接正在恢复"
+    : connectionErrorCode !== null
+      ? "服务器连接需要处理"
+      : health.state.kind === "ONLINE"
+        ? `${nodeName} 服务在线`
+        : health.state.kind === "OFFLINE"
+          ? "服务暂不可用"
+          : health.state.kind === "CHECKING"
+            ? "正在检测服务"
+            : "服务状态待检测";
   const latency =
     health.state.kind === "ONLINE" ? `${String(health.state.latencyMs)} ms` : "延迟 —";
+  const reason = transportRecovering
+    ? "侧栏正在重新连接扩展，暂时显示上次读取的内容；连接恢复后会自动更新。"
+    : connectionErrorCode !== null
+      ? errorLabel(connectionErrorCode)
+      : health.state.kind === "OFFLINE"
+        ? "服务器健康检测未通过。请检查服务器地址和网络连接，仍失败时联系服务器管理员。"
+        : null;
 
   return (
     <section
-      class={`service-status-card service-status-card--${tone}`}
+      class={`service-status-card service-status-card--compact service-status-card--${tone}`}
       aria-labelledby="service-status-title"
     >
       <GlassMaterial />
-      <header class="service-status-card__header">
-        <span class="service-status-card__icon" aria-hidden="true">
-          <Icon name="server" size={18} />
-          <span class={`service-status-card__dot service-status-card__dot--${tone}`} />
-        </span>
-        <div class="service-status-card__title">
-          <strong id="service-status-title" aria-live="polite">
-            {title}
-          </strong>
-          <small title={host}>{host}</small>
-        </div>
-        <span class="service-status-card__version">
-          {version === null || version === undefined ? "版本未提供" : `v${version}`}
-        </span>
-      </header>
-
-      <div class="service-status-card__metrics" aria-label="服务连接信息">
-        <span>{protocolVersion === undefined ? "协议 —" : `协议 v${protocolVersion}`}</span>
-        <span>{latency}</span>
-        <span>{profile.mode === "VNEXT" ? "实时协作" : "兼容模式"}</span>
-      </div>
-
-      {health.state.kind === "OFFLINE" && !transportRecovering && probe !== undefined ? (
-        <button class="service-status-card__retry" type="button" onClick={health.retry}>
-          <Icon name="sync" size={16} />
-          重新连接
-        </button>
-      ) : null}
-
       <details class="service-status-card__details">
-        <summary>服务器信息</summary>
+        <summary class="service-status-card__summary">
+          <span class="service-status-card__icon" aria-hidden="true">
+            <Icon name="server" size={18} />
+            <span class={`service-status-card__dot service-status-card__dot--${tone}`} />
+          </span>
+          <div class="service-status-card__title">
+            <strong id="service-status-title" aria-live="polite">
+              {title}
+            </strong>
+            <small title={host}>{host}</small>
+          </div>
+          <Icon name="chevron" size={16} />
+        </summary>
+
+        <div class="service-status-card__metrics" aria-label="服务连接信息">
+          <span class="service-status-card__version">
+            {version === null || version === undefined ? "版本未提供" : `v${version}`}
+          </span>
+          <span>{protocolVersion === undefined ? "协议 —" : `协议 v${protocolVersion}`}</span>
+          <span>{latency}</span>
+          <span>{profile.mode === "VNEXT" ? "实时协作" : "兼容模式"}</span>
+        </div>
         <p>{production ? `当前连接 SyncAction 服务器 ${host}` : `当前使用自定义服务器 ${host}`}</p>
-        {health.state.kind === "OFFLINE" ? (
-          <p>请检查服务器地址和网络连接，仍失败时联系服务器管理员。</p>
-        ) : null}
+        <p>此处检测服务器能否响应；进入房间后，可分别查看房间连接与视频跟随状态。</p>
       </details>
+
+      {reason === null ? null : (
+        <p class="service-status-card__reason" role="status">
+          {reason}
+        </p>
+      )}
+      {!transportRecovering && (connectionErrorCode !== null || health.state.kind === "OFFLINE") ? (
+        <div class="service-status-card__actions">
+          {connectionErrorCode !== null && onReconnect !== undefined ? (
+            <button
+              class="compact-button"
+              type="button"
+              disabled={feedback.pending !== null}
+              onClick={() => void feedback.run("reconnect", onReconnect)}
+            >
+              {feedback.pending === null ? "重新连接服务器" : "正在连接…"}
+            </button>
+          ) : health.state.kind === "OFFLINE" && probe !== undefined ? (
+            <button class="compact-button" type="button" onClick={health.retry}>
+              重新检测服务
+            </button>
+          ) : null}
+          {onOpenServerProfiles === undefined ? null : (
+            <button
+              class="text-button"
+              type="button"
+              disabled={feedback.pending !== null}
+              onClick={onOpenServerProfiles}
+            >
+              检查服务器
+            </button>
+          )}
+        </div>
+      ) : null}
+      <ActionableStatus errorCode={feedback.errorCode} />
     </section>
   );
 }

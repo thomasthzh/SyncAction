@@ -633,7 +633,15 @@ export function App({
       ) : null}
       {overlay?.kind === "PAGE_PERMISSION" ? (
         <PermissionDialog
+          key={`${serverKey}:${overlay.intentKey}:${overlay.intent?.tabId ?? "preparing"}:${overlay.intent?.documentRevision.roomEpoch ?? ""}:${overlay.intent?.documentRevision.tabUpdatedAtSeq ?? ""}`}
           feature={overlay.feature}
+          {...(overlay.feature === "MEDIA_CONTROL"
+            ? {
+                continuation: overlay.intentKey.startsWith("media-join:")
+                  ? ("JOIN_MEDIA_GROUP" as const)
+                  : ("CREATE_MEDIA_GROUP" as const),
+              }
+            : {})}
           origin={overlay.intent?.origin ?? store.pageAccess.value.origin ?? "当前页面不可授权"}
           browserPermission={
             (overlay.intent?.origin ?? store.pageAccess.value.origin) === null

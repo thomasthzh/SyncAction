@@ -1,0 +1,306 @@
+/* A stable content plane below the floating glass controls. */
+.watch-workspace.editorial-surface {
+  padding: 0;
+  background: var(--sa-paper);
+  border-color: color-mix(in srgb, var(--sa-accent) 16%, var(--sa-border));
+}
+
+.start-watching.watch-workspace {
+  gap: 14px;
+  padding: 18px;
+}
+
+.watch-workspace .watch-workspace__heading {
+  align-items: flex-start;
+  margin: 0;
+  padding: 16px 16px 12px;
+  border-bottom: 1px solid var(--sa-line);
+  background: linear-gradient(125deg, var(--sa-accent-soft), rgb(238 246 252 / 40%));
+}
+
+.watch-workspace__heading h2 {
+  font-size: 15px;
+}
+
+.watch-workspace__heading > span {
+  background: rgb(255 255 255 / 80%);
+}
+
+.watch-workspace__navigation {
+  display: grid;
+  gap: 5px;
+  padding: 12px 16px 0;
+}
+
+.watch-workspace__switcher {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  font-size: 11px;
+}
+
+.watch-workspace__switcher select {
+  min-width: 0;
+  padding-inline: 10px;
+  font-size: 12px;
+  background: #f5f9fc;
+}
+
+.watch-workspace__view-help {
+  color: var(--sa-text-muted);
+  font-size: 11px;
+}
+
+.watch-workspace__return {
+  margin: 4px 16px 0;
+}
+
+.watch-workspace .playback-card {
+  padding: 16px;
+  border: 0;
+  border-radius: 0;
+  animation: sa-watch-enter 180ms var(--sa-ease) both;
+}
+
+.watch-target > div {
+  min-width: 0;
+}
+
+.watch-workspace .watch-target h3 {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--sa-navy);
+  font-size: 19px;
+  line-height: 1.4;
+  letter-spacing: -0.025em;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.watch-target .eyebrow {
+  color: var(--sa-text-muted);
+  letter-spacing: 0;
+}
+
+.watch-target__domain {
+  margin-top: 4px;
+  color: var(--sa-text-muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.watch-workspace .playback-card__summary {
+  margin-top: 12px;
+  gap: 8px;
+}
+
+.watch-progress {
+  font-variant-numeric: tabular-nums;
+}
+
+.watch-membership {
+  display: grid;
+  gap: 4px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--sa-line);
+  border-radius: 12px;
+  color: var(--sa-text-muted);
+  background: #f3f6f9;
+  transition:
+    border-color 180ms var(--sa-ease),
+    background-color 180ms var(--sa-ease),
+    color 180ms var(--sa-ease);
+}
+
+.watch-membership strong {
+  color: var(--sa-navy);
+  font-size: 13px;
+}
+
+.watch-membership p {
+  font-size: 11px;
+  line-height: 1.65;
+}
+
+.watch-membership[data-active-device="true"] {
+  border-color: rgb(8 127 140 / 22%);
+  background: var(--sa-accent-soft);
+}
+
+.watch-membership[data-active-device="true"] strong {
+  color: var(--sa-accent-strong);
+}
+
+.watch-membership[data-media-state="OFFLINE"],
+.watch-membership[data-media-state="DEGRADED"] {
+  border-color: rgb(154 91 0 / 25%);
+  background: #fff8ed;
+}
+
+.watch-workspace .playback-card__controls {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.watch-workspace .member-cluster {
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+}
+
+.watch-workspace .playback-card__actions {
+  justify-content: flex-start;
+  gap: 8px;
+}
+
+.watch-workspace .playback-card__actions > .primary-button {
+  flex: 1;
+  justify-content: center;
+}
+
+.watch-group-options {
+  margin-top: 12px;
+  border-top: 1px solid var(--sa-line);
+  color: var(--sa-text-muted);
+  font-size: 11px;
+}
+
+.watch-group-options summary,
+.watch-new-group summary,
+.permission-technical-details summary {
+  min-height: 44px;
+  align-content: center;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.watch-new-group {
+  min-width: 0;
+  border: 1px solid var(--sa-border);
+  border-radius: var(--sa-radius-control);
+  background: rgb(255 255 255 / 54%);
+}
+
+.watch-new-group > summary {
+  padding-inline: 14px;
+  color: var(--sa-text-muted);
+}
+
+.watch-new-group .start-watching {
+  border: 0;
+  border-top: 1px solid var(--sa-line);
+  border-radius: 0 0 var(--sa-radius-control) var(--sa-radius-control);
+  box-shadow: none;
+}
+
+.watch-group-options p {
+  margin-bottom: 8px;
+}
+
+.watch-group-options > .danger-button {
+  width: 100%;
+  justify-content: center;
+  margin-bottom: 2px;
+}
+
+.watch-group-options > button[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.watch-proposals {
+  min-width: 0;
+}
+
+.watch-proposal-inbox {
+  padding: 14px 16px;
+  border-top: 1px solid var(--sa-line);
+  background: #fff8ed;
+}
+
+.watch-proposal-inbox h3 {
+  font-size: 13px;
+}
+
+.start-watching__steps {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.start-watching__steps > li {
+  position: relative;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  padding-block: 7px;
+  color: var(--sa-text-muted);
+  font-size: 12px;
+}
+
+.start-watching__step-number {
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--sa-border);
+  border-radius: 50%;
+  color: var(--sa-text-muted);
+  background: var(--sa-paper);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.start-watching__steps small {
+  display: block;
+  margin-top: 1px;
+  color: var(--sa-text-muted);
+  font-size: 10px;
+  font-weight: 400;
+}
+
+.start-watching__steps > li + li::after {
+  position: absolute;
+  left: 13px;
+  top: -9px;
+  height: 25px;
+  border-left: 1px solid var(--sa-border-strong);
+  content: "";
+}
+
+.start-watching__steps > li[data-step-state="ACTIVE"] {
+  color: var(--sa-accent-strong);
+  font-weight: 700;
+}
+
+.start-watching__steps > li[data-step-state="ACTIVE"] .start-watching__step-number {
+  border-color: var(--sa-accent);
+  color: white;
+  background: var(--sa-accent);
+  transition: background-color 180ms var(--sa-ease);
+}
+
+.start-watching__steps > li[data-step-state="DONE"] .start-watching__step-number {
+  border-color: rgb(22 121 77 / 30%);
+  color: var(--sa-success);
+  background: #edf8f1;
+}
+
+@keyframes sa-watch-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

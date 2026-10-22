@@ -179,16 +179,75 @@ export function StartWatchingCard({
   }
 
   const pending = stage !== "IDLE" || feedback.pending !== null;
+  const pageShared = access.documentRevision !== null;
+  const siteAllowed = access.browserPermissionGranted && access.termsAccepted;
+  const creating = feedback.pending !== null && stage === "IDLE";
+  const visibleStage = hasGroup
+    ? "JOINED"
+    : stage !== "IDLE"
+      ? stage
+      : feedback.pending !== null
+        ? "CREATING"
+        : !pageShared
+          ? "NEEDS_PAGE"
+          : !siteAllowed
+            ? "NEEDS_PERMISSION"
+            : "READY";
   return (
-    <section class="start-watching editorial-surface" aria-labelledby="start-watching-heading">
+    <section
+      class="start-watching watch-workspace editorial-surface"
+      aria-labelledby="start-watching-heading"
+      data-watch-stage={visibleStage}
+    >
       <div>
         <h2 id="start-watching-heading">从当前视频开始一起看</h2>
         <p class="section-description">
-          打开视频页面，分享后允许当前网站的媒体同步，再邀请朋友加入。
+          {!pageShared
+            ? "先分享当前页面，再按需允许此网站的媒体同步。"
+            : !siteAllowed
+              ? "页面已共享，继续允许当前网站后才能创建播放组。"
+              : "页面与网站许可已具备，创建时仍会确认视频能否同步。"}
         </p>
       </div>
+      <ol class="start-watching__steps" aria-label="开始观看的步骤">
+        <li data-step-state={pageShared ? "DONE" : "ACTIVE"}>
+          <span class="start-watching__step-number" aria-hidden="true">
+            1
+          </span>
+          <span>
+            共享页面
+            <small>
+              {pageShared
+                ? "已共享"
+                : stage === "WAITING_PAGE"
+                  ? "等待房间确认"
+                  : stage === "SHARING"
+                    ? "正在分享"
+                    : "从当前页开始"}
+            </small>
+          </span>
+        </li>
+        <li data-step-state={siteAllowed ? "DONE" : pageShared ? "ACTIVE" : "PENDING"}>
+          <span class="start-watching__step-number" aria-hidden="true">
+            2
+          </span>
+          <span>
+            网站许可<small>{siteAllowed ? "已允许" : "需要本人同意"}</small>
+          </span>
+        </li>
+        <li data-step-state={hasGroup ? "DONE" : pageShared && siteAllowed ? "ACTIVE" : "PENDING"}>
+          <span class="start-watching__step-number" aria-hidden="true">
+            3
+          </span>
+          <span>
+            创建播放组
+            <small>{hasGroup ? "已加入" : creating ? "确认视频中" : "确认可同步的视频"}</small>
+          </span>
+        </li>
+      </ol>
       <button
         class="primary-button"
+        data-start-watching-action
         type="button"
         disabled={pending || hasGroup}
         aria-busy={pending}

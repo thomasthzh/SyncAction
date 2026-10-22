@@ -1,5 +1,5 @@
 import { LogicalTabIdSchema, type ServerCapability } from "@syncaction/protocol";
-import { useMemo, useState } from "preact/hooks";
+import { useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
 import type { JSX } from "preact";
 import type { UiStore } from "../store.js";
 import { Icon } from "../icons.js";
@@ -7,7 +7,7 @@ import { createSharedTabRows, type PageCompatibility } from "../../ui/collaborat
 import { createMediaViewModel, type MediaViewIntent } from "../../ui/media-view-model.js";
 import { ActionableStatus, type StatusRecoveryAction } from "./actionable-status.js";
 import { BottomActionDock } from "./bottom-action-dock.js";
-import { PlaybackGroupCard } from "./playback-group-card.js";
+import { WatchWorkspace } from "./watch-workspace.js";
 import { SharedTabRow } from "./shared-tab-row.js";
 import { RoomSwitcher } from "./room-switcher.js";
 import { StartWatchingCard } from "./start-watching-card.js";
@@ -34,6 +34,14 @@ export function ActiveRoom({
   onRequestPagePermission,
 }: ActiveRoomProps): JSX.Element {
   const [pageQuery, setPageQuery] = useState("");
+  const surface = useRef<HTMLDivElement>(null);
+  const activeElement = document.activeElement;
+  const focusedWatchControl =
+    activeElement instanceof HTMLElement &&
+    surface.current?.contains(activeElement) &&
+    activeElement.closest(".watch-workspace") !== null
+      ? activeElement
+      : null;
   const feedback = useCommandFeedback();
   const shell = store.shell.value;
   const room = store.room.value;
@@ -75,6 +83,27 @@ export function ActiveRoom({
     () => createMediaViewModel({ media, pages, members, nowMs }),
     [media, pages, members, nowMs],
   );
+  const watchConnected =
+    runtime?.state === "SYNCED" &&
+    store.transport.value !== "RECONNECTING" &&
+    media?.state !== "OFFLINE" &&
+    (media === null || media.roomMediaRevision !== null);
+  const watchAwaiting = mediaView.groups.length === 0 && !watchConnected;
+  useLayoutEffect(() => {
+    if (
+      focusedWatchControl !== null &&
+      !focusedWatchControl.isConnected &&
+      document.activeElement === document.body
+    ) {
+      surface.current
+        ?.querySelector<HTMLElement>(
+          mediaView.groups.length === 0
+            ? "[data-start-watching-action], [data-watch-awaiting]"
+            : '[data-editorial-surface="playback"]',
+        )
+        ?.focus();
+    }
+  }, [mediaView.groups.length, media?.localMembership?.playbackGroupId, watchAwaiting]);
   const compatibilityByPage = useMemo(
     () =>
       Object.fromEntries(
@@ -213,7 +242,7 @@ export function ActiveRoom({
   }
 
   return (
-    <div class="active-room">
+    <div class="active-room" ref={surface}>
       <header class="room-header">
         <RoomSwitcher
           store={store}
@@ -245,7 +274,7 @@ export function ActiveRoom({
         </span>
         <span class="room-live-rail__item">
           <Icon name="play" size={15} />
-          <strong>{mediaView.groups.length} 个播放组</strong>
+          <strong>{watchAwaiting ? "播放组待更新" : `${mediaView.groups.length} 个播放组`}</strong>
         </span>
       </div>
 
@@ -260,45 +289,50 @@ export function ActiveRoom({
         <p class={`media-notice media-notice--${mediaView.notice.tone}`}>{mediaView.notice.text}</p>
       )}
 
-      {mediaView.groups.length === 0 ? (
+      {watchAwaiting ? (
+        <section
+          class="start-watching watch-workspace editorial-surface"
+          data-watch-awaiting
+          tabIndex={-1}
+          aria-labelledby="watch-awaiting-heading"
+        >
+          <h2 id="watch-awaiting-heading">播放协作暂未连接</h2>
+          <p class="section-description">
+            连接恢复后会重新显示视频与参与状态；当前先暂停媒体操作。
+          </p>
+        </section>
+      ) : mediaView.groups.length === 0 ? (
         <StartWatchingCard store={store} onRequestPagePermission={onRequestPagePermission} />
       ) : null}
-      {mediaView.groups.length > 0 ? (
-        <section
-          class="playback-section editorial-surface"
-          data-editorial-surface="playback"
-          aria-labelledby="playback-heading"
-        >
-          <header class="section-heading">
-            <div>
-              <h2 id="playback-heading">播放组</h2>
-              <p class="section-description">跟随领播者，自动对齐进度</p>
-            </div>
-            <span>{mediaView.groups.length}</span>
-          </header>
-          <div class="playback-section__list divided-list">
-            {mediaView.groups.map((group) => (
-              <PlaybackGroupCard
-                group={group}
-                currentUserId={currentUserId}
-                onIntent={sendMediaIntent}
-                busy={feedback.pending === "media"}
-                key={group.groupId}
-              />
-            ))}
-          </div>
-        </section>
+      {media !== null && mediaView.groups.length > 0 ? (
+        <WatchWorkspace
+          key={`${shell.selectedProfileId}:${room.selectedRoomId}`}
+          view={mediaView}
+          media={media}
+          currentUserId={currentUserId}
+          onIntent={sendMediaIntent}
+          busy={feedback.pending === "media"}
+        />
+      ) : null}
+      {watchConnected &&
+      media !== null &&
+      mediaView.groups.length > 0 &&
+      media.localMembership === null ? (
+        <details class="watch-new-group">
+          <summary>用当前视频新建播放组</summary>
+          <StartWatchingCard store={store} onRequestPagePermission={onRequestPagePermission} />
+        </details>
       ) : null}
 
       <section
-        class="shared-tab-stream editorial-surface"
+        class="shared-tab-stream shared-tab-stream--supporting editorial-surface"
         data-editorial-surface="shared-pages"
         aria-labelledby="shared-page-heading"
       >
         <header class="section-heading">
           <div>
             <h2 id="shared-page-heading">共享页面</h2>
-            <p class="section-description">点击跳转，与朋友浏览同一页</p>
+            <p class="section-description">房间里的页面，打开不会自动加入播放组</p>
           </div>
           <span>
             {collaboration.capacity.openTabCount}

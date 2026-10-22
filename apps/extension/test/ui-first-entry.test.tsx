@@ -70,7 +70,7 @@ describe("first entry and recoverable room destination", () => {
     expect(root.textContent).toContain("批准后登录");
     expect(root.textContent).not.toContain("创建房间");
     expect(root.querySelector('[aria-label^="账户设置"]')).toBeNull();
-    expect(byRole(root, "button", "登录 | 注册")).toBeTruthy();
+    expect(byRole(root, "button", "批准后登录")).toBeTruthy();
   });
 
   it("does not probe the distribution placeholder and starts directly with server input", async () => {

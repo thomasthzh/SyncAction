@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 
 import { act } from "preact/test-utils";
+import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GlassMaterial } from "../src/ui-vnext/components/glass-material.js";
 import { createGlassRefractionMap } from "../src/ui-vnext/glass-refraction.js";
@@ -13,6 +14,18 @@ describe("glass refraction map", () => {
   const pixel = (x: number, y: number): number[] => [
     ...map.slice((y * width + x) * 4, (y * width + x + 1) * 4),
   ];
+
+  it.each([
+    [420, 800, 22, "8e064f91f4276578e108d80a50902d77912f63b6f16ae46d6283674fe4ff099b"],
+    [95, 47, 23.5, "6f36d04c18bd94442f11cd616e8368572ebb9436f3122b62d7eb79f74767549c"],
+    [10, 11, 0, "7a7c361adbcac0bbd8a0ef53fb5c76817c08cd942563a0d7a55dda752b7ff97f"],
+  ] as const)("preserves the original optical map at %i × %i, radius %i", (w, h, r, hash) => {
+    expect(
+      createHash("sha256")
+        .update(createGlassRefractionMap(w, h, r))
+        .digest("hex"),
+    ).toBe(hash);
+  });
 
   it("keeps the center and pixels outside rounded corners neutral and opaque", () => {
     expect(map).toHaveLength(width * height * 4);

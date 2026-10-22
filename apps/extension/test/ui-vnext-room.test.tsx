@@ -219,6 +219,578 @@ describe("vNext active room", () => {
     expect(tieByProgress.recommendedPlaybackGroupId).toBe(smallerGroupId);
   });
 
+  it("opens the local playback group first and switches only the viewed group", async () => {
+    const store = roomStore({
+      currentUserId: followerAId,
+      localMembership: { playbackGroupId: smallerGroupId, role: "FOLLOWER", activeDevice: true },
+    });
+    const media = store.room.value.runtime!.media!;
+    store.update({
+      room: {
+        ...store.room.value,
+        runtime: {
+          ...store.room.value.runtime!,
+          media: {
+            ...media,
+            playbackGroups: [
+              media.playbackGroups[0]!,
+              playbackGroup({
+                playbackGroupId: smallerGroupId,
+                members: media.playbackGroups[0]!.members.slice(0, 2),
+              }),
+            ],
+          },
+        },
+      },
+    });
+    const root = renderPanel(<App store={store} now={() => nowMs} />);
+    expect(root.querySelectorAll("[data-group-id]")).toHaveLength(1);
+    expect(root.querySelector("[data-group-id]")?.getAttribute("data-group-id")).toBe(
+      smallerGroupId,
+    );
+    expect(root.textContent).toContain("你是跟随者 · 本设备");
+    const chooser = root.querySelector<HTMLSelectElement>('select[aria-label="查看播放组"]')!;
+    chooser.focus();
+    change(chooser, groupId);
+    expect(root.querySelector("[data-group-id]")?.getAttribute("data-group-id")).toBe(groupId);
+    expect(root.textContent).toContain("正在查看其他播放组");
+    expect(root.textContent).toContain("不会改变跟随关系");
+    expect(document.activeElement).toBe(chooser);
+    expect(store.commandCalls).toEqual([]);
+    const viewedCard = root.querySelector("[data-group-id]");
+    act(() =>
+      store.update({
+        room: {
+          ...store.room.value,
+          runtime: {
+            ...store.room.value.runtime!,
+            media: {
+              ...store.room.value.runtime!.media!,
+              roomMediaRevision: (media.roomMediaRevision ?? 0) + 1,
+            },
+          },
+        },
+      }),
+    );
+    expect(document.activeElement).toBe(chooser);
+    expect(root.querySelector("[data-group-id]")).toBe(viewedCard);
+    expect(root.querySelector("[data-group-id]")?.getAttribute("data-group-id")).toBe(groupId);
+    await click(byRole(root, "button", "返回我的播放组"));
+    expect(root.querySelector("[data-group-id]")?.getAttribute("data-group-id")).toBe(
+      smallerGroupId,
+    );
+    expect(store.commandCalls).toEqual([]);
+  });
+
+  it("keeps the first viewed group and its focused control when heartbeat ranking changes", () => {
+    const store = roomStore();
+    const media = store.room.value.runtime!.media!;
+    store.update({
+      room: {
+        ...store.room.value,
+        runtime: {
+          ...store.room.value.runtime!,
+          media: {
+            ...media,
+            playbackGroups: [
+              media.playbackGroups[0]!,
+              playbackGroup({
+                playbackGroupId: smallerGroupId,
+                observed: { ...media.playbackGroups[0]!.observed!, positionMs: 100_000 },
+              }),
+            ],
+          },
+        },
+      },
+    });
+    const root = renderPanel(<App store={store} now={() => nowMs} />);
+    const card = root.querySelector(`[data-group-id="${groupId}"]`)!;
+    const focused = byRole(card, "button", "打开领播页面");
+    focused.focus();
+    act(() =>
+      store.update({
+        room: {
+          ...store.room.value,
+          runtime: {
+            ...store.room.value.runtime!,
+            media: {
+              ...store.room.value.runtime!.media!,
+              playbackGroups: [
+                playbackGroup({
+                  observed: { ...media.playbackGroups[0]!.observed!, positionMs: 100_000 },
+                }),
+                playbackGroup({
+                  playbackGroupId: smallerGroupId,
+                  observed: { ...media.playbackGroups[0]!.observed!, positionMs: 500_000 },
+                }),
+              ],
+            },
+          },
+        },
+      }),
+    );
+    expect(
+      createMediaViewModel({
+        media: store.room.value.runtime!.media!,
+        pages: store.collaboration.value.pages,
+        members: store.collaboration.value.members,
+        nowMs,
+      }).recommendedPlaybackGroupId,
+    ).toBe(smallerGroupId);
+    expect(root.querySelector("[data-group-id]")).toBe(card);
+    expect(document.activeElement).toBe(focused);
+    expect(store.commandCalls).toEqual([]);
+  });
+
+  it("resets viewed navigation on every membership change without reviving an older selection", () => {
+    const store = roomStore({
+      localMembership: { playbackGroupId: groupId, role: "FOLLOWER", activeDevice: true },
+    });
+    const media = store.room.value.runtime!.media!;
+    store.update({
+      room: {
+        ...store.room.value,
+        runtime: {
+          ...store.room.value.runtime!,
+          media: {
+            ...media,
+            playbackGroups: [
+              media.playbackGroups[0]!,
+              playbackGroup({ playbackGroupId: smallerGroupId }),
+            ],
+          },
+        },
+      },
+    });
+    const root = renderPanel(<App store={store} now={() => nowMs} />);
+    change(root.querySelector<HTMLSelectElement>('[aria-label="查看播放组"]')!, smallerGroupId);
+    expect(root.querySelector("[data-group-id]")?.getAttribute("data-group-id")).toBe(
+      smallerGroupId,
+    );
+    act(() =>
+      store.update({
+        room: {
+          ...store.room.value,
+          runtime: {
+            ...store.room.value.runtime!,
+            media: { ...store.room.value.runtime!.media!, localMembership: null },
+          },
+        },
+      }),
+    );
+    act(() =>
+      store.update({
+        room: {
+          ...store.room.value,
+          runtime: {
+            ...store.room.value.runtime!,
+            media: { ...store.room.value.runtime!.media!, localMembership: media.localMembership },
+          },
+        },
+      }),
+    );
+    expect(root.querySelector("[data-group-id]")?.getAttribute("data-group-id")).toBe(groupId);
+    expect(store.commandCalls).toEqual([]);
+  });
+
+  it.each([1, 2])(
+    "recovers lost card focus after deletion with %i groups remaining and fixes the fallback selection",
+    (remaining) => {
+      const store = roomStore();
+      const media = store.room.value.runtime!.media!;
+      const thirdGroupId = CanonicalUuidSchema.parse("00000000-0000-4000-8000-000000000524");
+      const third = playbackGroup({
+        playbackGroupId: thirdGroupId,
+        observed: { ...media.playbackGroups[0]!.observed!, positionMs: 10_000 },
+      });
+      store.update({
+        room: {
+          ...store.room.value,
+          runtime: {
+            ...store.room.value.runtime!,
+            media: {
+              ...media,
+              playbackGroups: [
+                ...media.playbackGroups,
+                playbackGroup({ playbackGroupId: smallerGroupId }),
+                third,
+              ],
+            },
+          },
+        },
+      });
+      const root = renderPanel(<App store={store} now={() => nowMs} />);
+      change(root.querySelector<HTMLSelectElement>('[aria-label="查看播放组"]')!, smallerGroupId);
+      byRole(
+        root.querySelector(`[data-group-id="${smallerGroupId}"]`)!,
+        "button",
+        "打开领播页面",
+      ).focus();
+      act(() =>
+        store.update({
+          room: {
+            ...store.room.value,
+            runtime: {
+              ...store.room.value.runtime!,
+              media: {
+                ...store.room.value.runtime!.media!,
+                playbackGroups:
+                  remaining === 1 ? [media.playbackGroups[0]!] : [media.playbackGroups[0]!, third],
+              },
+            },
+          },
+        }),
+      );
+      const workspace = root.querySelector<HTMLElement>('[data-editorial-surface="playback"]')!;
+      expect(document.activeElement).toBe(
+        remaining === 1 ? workspace : workspace.querySelector("select"),
+      );
+      expect(workspace.tabIndex).toBe(-1);
+      const card = root.querySelector("[data-group-id]");
+      act(() =>
+        store.update({
+          room: {
+            ...store.room.value,
+            runtime: {
+              ...store.room.value.runtime!,
+              media: {
+                ...store.room.value.runtime!.media!,
+                playbackGroups: [
+                  media.playbackGroups[0]!,
+                  { ...third, observed: { ...third.observed!, positionMs: 500_000 } },
+                ],
+              },
+            },
+          },
+        }),
+      );
+      expect(root.querySelector("[data-group-id]")).toBe(card);
+      const outside = byRole(root, "button", "消息");
+      outside.focus();
+      act(() =>
+        store.update({
+          room: {
+            ...store.room.value,
+            runtime: {
+              ...store.room.value.runtime!,
+              media: { ...store.room.value.runtime!.media!, roomMediaRevision: 99 },
+            },
+          },
+        }),
+      );
+      expect(document.activeElement).toBe(outside);
+      expect(store.commandCalls).toEqual([]);
+    },
+  );
+
+  it.each([false, true])(
+    "handles the last group disappearing without stealing outside focus: %s",
+    (outsideFocus) => {
+      const store = roomStore({
+        currentUserId: leaderId,
+        localMembership: { playbackGroupId: groupId, role: "LEADER", activeDevice: true },
+      });
+      const root = renderPanel(<App store={store} now={() => nowMs} />);
+      const card = root.querySelector(`[data-group-id="${groupId}"]`)!;
+      const options = card.querySelector<HTMLDetailsElement>(".watch-group-options")!;
+      options.open = true;
+      const focused = outsideFocus
+        ? byRole(root, "button", "消息")
+        : byRole(card, "button", "关闭播放组");
+      focused.focus();
+      expect(document.activeElement).toBe(focused);
+      act(() =>
+        store.update({
+          room: {
+            ...store.room.value,
+            runtime: {
+              ...store.room.value.runtime!,
+              media: {
+                ...store.room.value.runtime!.media!,
+                playbackGroups: [],
+                localMembership: null,
+              },
+            },
+          },
+        }),
+      );
+      expect(root.querySelector("[data-group-id]")).toBeNull();
+      expect(document.activeElement).toBe(
+        outsideFocus ? focused : byRole(root, "button", "开始一起看"),
+      );
+      expect(store.commandCalls).toEqual([]);
+    },
+  );
+
+  it.each([false, true])(
+    "keeps close focus through a pending command and respects outside focus after confirmation: %s",
+    async (outsideFocus) => {
+      const store = roomStore({
+        currentUserId: leaderId,
+        localMembership: { playbackGroupId: groupId, role: "LEADER", activeDevice: true },
+      });
+      const commandResult = deferred<Awaited<ReturnType<TestUiStore["command"]>>>();
+      store.responder = async (command) =>
+        command.name === "MEDIA_GROUP_CLOSE" ? commandResult.promise : success();
+      const root = renderPanel(<App store={store} now={() => nowMs} />);
+      const card = root.querySelector(`[data-group-id="${groupId}"]`)!;
+      card.querySelector<HTMLDetailsElement>(".watch-group-options")!.open = true;
+      const close = byRole(card, "button", "关闭播放组") as HTMLButtonElement;
+      close.focus();
+
+      await click(close);
+
+      expect(close.disabled).toBe(false);
+      expect(close.getAttribute("aria-disabled")).toBe("true");
+      expect(document.activeElement).toBe(close);
+      expect((byRole(card, "button", "打开领播页面") as HTMLButtonElement).disabled).toBe(true);
+      await click(close);
+      await click(close);
+      expect(store.commandCalls).toEqual([
+        { name: "MEDIA_GROUP_CLOSE", payload: { playbackGroupId: groupId } },
+      ]);
+      const outside = byRole(root, "button", "消息");
+      if (outsideFocus) outside.focus();
+
+      await act(async () => {
+        commandResult.resolve(success());
+        for (let turn = 0; turn < 4; turn += 1) await Promise.resolve();
+      });
+      expect(close.getAttribute("aria-disabled")).toBe("false");
+      expect(document.activeElement).toBe(outsideFocus ? outside : close);
+      act(() =>
+        store.update({
+          room: {
+            ...store.room.value,
+            runtime: {
+              ...store.room.value.runtime!,
+              media: {
+                ...store.room.value.runtime!.media!,
+                playbackGroups: [],
+                localMembership: null,
+              },
+            },
+          },
+        }),
+      );
+      expect(root.querySelector("[data-group-id]")).toBeNull();
+      expect(document.activeElement).toBe(
+        outsideFocus ? outside : byRole(root, "button", "开始一起看"),
+      );
+      expect(store.commandCalls).toHaveLength(1);
+    },
+  );
+
+  it("shows recovery after a real cleared offline media snapshot, then enables starting only after empty state is confirmed online", () => {
+    const store = roomStore({
+      currentUserId: leaderId,
+      localMembership: { playbackGroupId: groupId, role: "LEADER", activeDevice: true },
+    });
+    const root = renderPanel(<App store={store} now={() => nowMs} />);
+    const card = root.querySelector(`[data-group-id="${groupId}"]`)!;
+    byRole(card, "button", "打开领播页面").focus();
+    act(() =>
+      store.update({
+        room: {
+          ...store.room.value,
+          runtime: {
+            ...store.room.value.runtime!,
+            state: "DISCONNECTED",
+            media: {
+              ...store.room.value.runtime!.media!,
+              state: "OFFLINE",
+              roomMediaRevision: null,
+              playbackGroups: [],
+              localMembership: null,
+            },
+          },
+        },
+      }),
+    );
+    const awaiting = root.querySelector<HTMLElement>("[data-watch-awaiting]")!;
+    expect(awaiting).not.toBeNull();
+    expect(awaiting.textContent).toContain("播放协作暂未连接");
+    expect(awaiting.textContent).toContain(
+      "连接恢复后会重新显示视频与参与状态；当前先暂停媒体操作。",
+    );
+    expect(awaiting.tabIndex).toBe(-1);
+    expect(document.activeElement).toBe(awaiting);
+    expect(root.querySelector("[data-start-watching-action]")).toBeNull();
+    expect(root.querySelector("[data-room-live-rail]")?.textContent).toContain("播放组待更新");
+    expect(root.querySelector("[data-room-live-rail]")?.textContent).not.toContain("0 个播放组");
+    expect(root.querySelector('[data-connection-state="SYNCED"]')).toBeNull();
+    act(() =>
+      store.update({
+        room: {
+          ...store.room.value,
+          runtime: {
+            ...store.room.value.runtime!,
+            state: "SYNCED",
+            media: {
+              ...store.room.value.runtime!.media!,
+              state: "ONLINE",
+              roomMediaRevision: null,
+            },
+          },
+        },
+      }),
+    );
+    expect(root.querySelector("[data-watch-awaiting]")).toBe(awaiting);
+    expect(root.querySelector("[data-start-watching-action]")).toBeNull();
+    expect(root.querySelector("[data-room-live-rail]")?.textContent).toContain("播放组待更新");
+    act(() =>
+      store.update({
+        room: {
+          ...store.room.value,
+          runtime: {
+            ...store.room.value.runtime!,
+            media: { ...store.room.value.runtime!.media!, roomMediaRevision: 0 },
+          },
+        },
+      }),
+    );
+    expect(root.querySelector("[data-watch-awaiting]")).toBeNull();
+    const start = byRole(root, "button", "开始一起看") as HTMLButtonElement;
+    expect(start.disabled).toBe(false);
+    expect(document.activeElement).toBe(start);
+    expect(root.querySelector("[data-room-live-rail]")?.textContent).toContain("0 个播放组");
+    expect(store.commandCalls).toEqual([]);
+  });
+
+  it.each(["runtime", "transport", "media"] as const)(
+    "waits for %s readiness when the group list is empty",
+    (boundary) => {
+      const store = roomStore();
+      const runtime = store.room.value.runtime!;
+      store.update({
+        room: {
+          ...store.room.value,
+          runtime: {
+            ...runtime,
+            state: boundary === "runtime" ? "WAITING_SNAPSHOT" : "SYNCED",
+            media: {
+              ...runtime.media!,
+              playbackGroups: [],
+              state: boundary === "media" ? "OFFLINE" : "ONLINE",
+            },
+          },
+        },
+      });
+      if (boundary === "transport") store.transport.value = "RECONNECTING";
+      const root = renderPanel(<App store={store} now={() => nowMs} />);
+      expect(root.querySelector("[data-watch-awaiting]")).not.toBeNull();
+      expect(root.querySelector("[data-start-watching-action]")).toBeNull();
+      expect(store.commandCalls).toEqual([]);
+    },
+  );
+
+  it("allows the original start path for a synced runtime without media status", () => {
+    const store = roomStore();
+    store.update({
+      room: { ...store.room.value, runtime: { ...store.room.value.runtime!, media: null } },
+    });
+    const root = renderPanel(<App store={store} now={() => nowMs} />);
+    expect(root.querySelector("[data-watch-awaiting]")).toBeNull();
+    expect(byRole(root, "button", "开始一起看")).toBeTruthy();
+    expect(store.commandCalls).toEqual([]);
+  });
+
+  it.each([
+    ["LEADER", true, "ONLINE", "你是领播者 · 本设备", null],
+    ["LEADER", true, "OFFLINE", "你是领播者 · 本设备", "媒体连接已断开"],
+    ["FOLLOWER", true, "OFFLINE", "你是跟随者 · 本设备", "媒体连接已断开"],
+    ["READ_ONLY", false, "ONLINE", "当前设备只读", "不会自动跟随"],
+  ] as const)(
+    "shows actual local participation (%s/%s/%s)",
+    (role, activeDevice, state, text, notice) => {
+      const store = roomStore({
+        localMembership: { playbackGroupId: groupId, role, activeDevice },
+      });
+      store.update({
+        room: {
+          ...store.room.value,
+          runtime: {
+            ...store.room.value.runtime!,
+            media: { ...store.room.value.runtime!.media!, state },
+          },
+        },
+      });
+      const root = renderPanel(<App store={store} now={() => nowMs} />);
+      const membership = root.querySelector("[data-watch-membership]")!;
+      expect(membership.textContent).toContain(text);
+      if (notice !== null) expect(membership.textContent).toContain(notice);
+      expect(membership.getAttribute("data-active-device")).toBe(String(activeDevice));
+      if (role === "LEADER") {
+        const options = root.querySelector<HTMLDetailsElement>(".watch-group-options")!;
+        expect(options.open).toBe(false);
+        expect(options.textContent).toContain("关闭播放组");
+        const close = byRole(options, "button", "关闭播放组") as HTMLButtonElement;
+        expect(close.disabled).toBe(state === "OFFLINE");
+        if (state === "OFFLINE") {
+          close.click();
+          expect(store.commandCalls).toEqual([]);
+        }
+      }
+      if (state === "OFFLINE") {
+        expect(root.querySelector(`[data-group-id="${groupId}"]`)).not.toBeNull();
+        expect(root.querySelector("[data-watch-awaiting]")).toBeNull();
+        expect(root.querySelector("[data-start-watching-action]")).toBeNull();
+        act(() =>
+          store.update({
+            room: {
+              ...store.room.value,
+              runtime: {
+                ...store.room.value.runtime!,
+                media: { ...store.room.value.runtime!.media!, localMembership: null },
+              },
+            },
+          }),
+        );
+        expect(root.querySelector(`[data-group-id="${groupId}"]`)).not.toBeNull();
+        expect(root.querySelector(".watch-new-group")).toBeNull();
+        expect(root.querySelector("[data-start-watching-action]")).toBeNull();
+      }
+    },
+  );
+
+  it("keeps the local leader's proposals actionable while viewing another group", async () => {
+    const store = roomStore({
+      currentUserId: leaderId,
+      localMembership: { playbackGroupId: groupId, role: "LEADER", activeDevice: true },
+    });
+    const media = store.room.value.runtime!.media!;
+    store.update({
+      room: {
+        ...store.room.value,
+        runtime: {
+          ...store.room.value.runtime!,
+          media: {
+            ...media,
+            playbackGroups: [
+              ...media.playbackGroups,
+              playbackGroup({ playbackGroupId: smallerGroupId, proposals: [] }),
+            ],
+          },
+        },
+      },
+    });
+    const root = renderPanel(<App store={store} now={() => nowMs} />);
+    change(
+      root.querySelector<HTMLSelectElement>('select[aria-label="查看播放组"]')!,
+      smallerGroupId,
+    );
+    const inbox = root.querySelector(".watch-proposal-inbox")!;
+    expect(inbox.textContent).toContain("小周建议调整进度");
+    expect(store.commandCalls).toEqual([]);
+    await click(byRole(inbox, "button", "同意"));
+    expect(store.commandCalls).toEqual([
+      {
+        name: "MEDIA_PROPOSAL_DECIDE",
+        payload: { playbackGroupId: groupId, proposalId, decision: "APPROVE" },
+      },
+    ]);
+  });
+
   it("sorts shared pages by current viewer, viewer count, and normalized title", () => {
     const store = roomStore();
     const rows = createSharedTabRows({
