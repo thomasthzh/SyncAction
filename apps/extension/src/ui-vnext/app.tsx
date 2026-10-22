@@ -1,4 +1,4 @@
-import type { PublicRoomSummary } from "@syncaction/protocol";
+import { CanonicalUuidSchema, type PublicRoomSummary } from "@syncaction/protocol";
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { JSX } from "preact";
 import type {
@@ -10,6 +10,12 @@ import type { UiCommandInput, UiStore } from "./store.js";
 import type { UiCommandResult } from "../ui/ui-protocol.js";
 import type { PageFeature } from "../ui/ui-protocol.js";
 import type { PageToolShortcutIntent } from "../page-tool-shortcut-intent.js";
+import { isPlaceholderServerOrigin } from "../server-configuration.js";
+import {
+  pendingJoinMatchesServer,
+  type PendingRoomJoin,
+  type PendingRoomJoinStorage,
+} from "../pending-room-join.js";
 import { AppShell } from "./components/app-shell.js";
 import { AccountSettingsDialog } from "./components/account-settings-dialog.js";
 import { ActiveRoom } from "./components/active-room.js";
@@ -47,17 +53,12 @@ export type Overlay =
     }
   | null;
 
-interface DeferredCommand {
-  readonly profileId: string;
-  readonly roomId: string;
-  readonly command: UiCommandInput;
-}
-
 export interface AppProps {
   readonly store: UiStore;
   readonly now?: () => number;
   readonly serverVerifier?: ServerVerifier;
   readonly serviceStatusProbe?: ServiceStatusProbe;
+  readonly pendingRoomJoinStorage?: PendingRoomJoinStorage;
   readonly pagePermissionCoordinator?: Pick<OriginPermissionCoordinator, "capture" | "confirm">;
   readonly privacyPageUrl?: string;
   readonly loadAuthorizedSites?: (profileId: string) => Promise<readonly AuthorizedSiteView[]>;
@@ -70,6 +71,7 @@ export interface AppProps {
 const EMPTY_AUTHORIZED_SITES_LOADER = async (): Promise<readonly AuthorizedSiteView[]> => [];
 
 function selectedServerContext(store: UiStore): {
+  profile: UiStore["shell"]["value"]["profiles"][number];
   profileId: string;
   host: string;
   connected: boolean;
@@ -92,6 +94,7 @@ function selectedServerContext(store: UiStore): {
   const accountKeyLoginSupported =
     profile.metadata?.capabilities.includes("account-key-login-v1") ?? false;
   return {
+    profile,
     profileId: profile.profileId,
     host,
     connected:
@@ -130,6 +133,7 @@ export function App({
   now = () => Date.now(),
   serverVerifier,
   serviceStatusProbe,
+  pendingRoomJoinStorage,
   pagePermissionCoordinator,
   privacyPageUrl = "privacy.html",
   loadAuthorizedSites = EMPTY_AUTHORIZED_SITES_LOADER,
@@ -137,21 +141,61 @@ export function App({
   pagePermissionIntentSource,
 }: AppProps): JSX.Element {
   const [overlay, setOverlay] = useState<Overlay>(null);
-  const [deferredCommand, setDeferredCommand] = useState<DeferredCommand | null>(null);
+  const [deferredCommand, setDeferredCommand] = useState<PendingRoomJoin | null>(null);
+  const deferredRef = useRef<PendingRoomJoin | null>(null);
+  const destinationGeneration = useRef(0);
+  const [destinationStorageError, setDestinationStorageError] = useState(false);
+  const [joining, setJoining] = useState(false);
+  const joinInFlight = useRef(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const openerRef = useRef<HTMLElement | null>(null);
   const serverReturnAuthMode = useRef<AuthMode | null>(null);
   const initialPermissionIntentOpened = useRef(false);
+  const permissionCaptureGeneration = useRef(0);
   const server = selectedServerContext(store);
+  const configurationRequired = isPlaceholderServerOrigin(server.profile.baseUrl);
+  const serverKey = `${server.profileId}:${server.profile.baseUrl}:${server.profile.metadata?.serverId ?? ""}`;
   const effectiveAuthMode =
     overlay?.kind === "AUTH" ? supportedAuthMode(overlay.mode, server) : null;
   const publicRoomKey = store.discovery.value.publicRooms.map(({ roomId }) => roomId).join("|");
+
+  function rememberDestination(intent: PendingRoomJoin | null): void {
+    destinationGeneration.current += 1;
+    deferredRef.current = intent;
+    setDeferredCommand(intent);
+    setDestinationStorageError(false);
+    const generation = destinationGeneration.current;
+    void pendingRoomJoinStorage?.write(intent).catch(() => {
+      if (generation === destinationGeneration.current) setDestinationStorageError(true);
+    });
+  }
+
+  useEffect(() => {
+    if (pendingRoomJoinStorage === undefined) return;
+    let active = true;
+    const generation = destinationGeneration.current;
+    void pendingRoomJoinStorage.read().then(
+      (intent) => {
+        if (!active || generation !== destinationGeneration.current) return;
+        deferredRef.current = intent;
+        setDeferredCommand(intent);
+      },
+      () => {
+        if (active && generation === destinationGeneration.current)
+          setDestinationStorageError(true);
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [pendingRoomJoinStorage]);
 
   useEffect(() => {
     setActionError(null);
   }, [server.profileId, store.room.value.selectedRoomId]);
 
   function openOverlay(next: Exclude<Overlay, null>): void {
+    permissionCaptureGeneration.current += 1;
     if (overlay === null) {
       openerRef.current =
         document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -160,8 +204,9 @@ export function App({
   }
 
   function closeOverlay(options: { clearDeferred?: boolean } = {}): void {
+    permissionCaptureGeneration.current += 1;
     if (options.clearDeferred === true) {
-      setDeferredCommand(null);
+      rememberDestination(null);
     }
     setOverlay(null);
     queueMicrotask(() => openerRef.current?.focus());
@@ -172,11 +217,16 @@ export function App({
     openOverlay({ kind: "SERVER_PROFILES" });
   }
 
+  function openAuth(): void {
+    if (configurationRequired) openServerProfiles("LOGIN");
+    else openOverlay({ kind: "AUTH", mode: "LOGIN" });
+  }
+
   function closeServerProfiles(): void {
     const returnToAuth = serverReturnAuthMode.current;
     const selectedServer = selectedServerContext(store);
     serverReturnAuthMode.current = null;
-    if (returnToAuth === null) {
+    if (returnToAuth === null || isPlaceholderServerOrigin(selectedServer.profile.baseUrl)) {
       closeOverlay();
     } else {
       setOverlay({
@@ -187,14 +237,27 @@ export function App({
   }
 
   useEffect(() => {
+    if (deferredCommand === null || store.transport.value !== "CONNECTED") return;
+    const profile = server.profile;
+    // Initial state precedes metadata verification. Do not discard a valid saved destination then.
     if (
-      deferredCommand !== null &&
-      (deferredCommand.profileId !== server.profileId ||
-        !store.discovery.value.publicRooms.some(({ roomId }) => roomId === deferredCommand.roomId))
+      profile.mode === "UNVERIFIED" &&
+      deferredCommand.profileId === profile.profileId &&
+      deferredCommand.serverOrigin === profile.baseUrl
+    )
+      return;
+    if (
+      !pendingJoinMatchesServer(deferredCommand, profile) ||
+      (store.shell.value.phase !== "ERROR" &&
+        store.shell.value.errorCode !== "PUBLIC_CATALOG_UNAVAILABLE" &&
+        !store.discovery.value.publicRooms.some(
+          ({ roomId, joinPolicy }) =>
+            roomId === deferredCommand.roomId && joinPolicy === deferredCommand.joinPolicy,
+        ))
     ) {
-      setDeferredCommand(null);
+      rememberDestination(null);
     }
-  }, [deferredCommand, publicRoomKey, server.profileId, store.discovery]);
+  }, [deferredCommand, publicRoomKey, serverKey, store.transport.value, store.discovery.value]);
 
   useEffect(() => {
     setOverlay((current) => {
@@ -220,15 +283,25 @@ export function App({
         ? { name: "ROOM_JOIN_OPEN", payload: { roomId: room.roomId } }
         : { name: "ROOM_JOIN_REQUEST", payload: { roomId: room.roomId } };
     const result = await store.command(command);
-    if (selectedServerContext(store).profileId !== server.profileId) return result;
+    const selected = selectedServerContext(store).profile;
+    if (
+      selected.profileId !== server.profileId ||
+      selected.baseUrl !== server.profile.baseUrl ||
+      selected.metadata?.serverId !== server.profile.metadata?.serverId
+    )
+      return result;
     if (
       !result.ok &&
       (result.errorCode === "AUTHENTICATION_REQUIRED" || result.errorCode === "SESSION_REQUIRED")
     ) {
-      setDeferredCommand({
+      rememberDestination({
+        version: 1,
         profileId: server.profileId,
+        serverOrigin: server.profile.baseUrl,
+        serverId: server.profile.metadata?.serverId ?? null,
         roomId: room.roomId,
-        command,
+        roomName: room.name,
+        joinPolicy: room.joinPolicy === "OPEN" ? "OPEN" : "APPROVAL",
       });
       openOverlay({ kind: "AUTH", mode: "LOGIN" });
       return { ...result, errorCode: "AUTHENTICATION_REQUIRED" };
@@ -251,6 +324,8 @@ export function App({
         }
       | { mode: "KEY_LOGIN"; activationKey: string },
   ): Promise<UiCommandResult> {
+    const generation = destinationGeneration.current;
+    const authServer = server.profile;
     const result = await (input.mode === "LOGIN"
       ? store.command({
           name: "AUTH_LOGIN",
@@ -282,25 +357,60 @@ export function App({
               name: "AUTH_KEY_LOGIN",
               payload: { activationKey: input.activationKey },
             }));
-    if (!result.ok || selectedServerContext(store).profileId !== server.profileId) {
+    const selected = selectedServerContext(store).profile;
+    if (
+      !result.ok ||
+      selected.profileId !== authServer.profileId ||
+      selected.baseUrl !== authServer.baseUrl ||
+      selected.metadata?.serverId !== authServer.metadata?.serverId
+    ) {
       return result;
     }
-
-    const queued = input.mode === "REGISTER" ? null : deferredCommand;
-    setDeferredCommand(null);
-    if (
-      queued !== null &&
-      queued.profileId === store.shell.value.selectedProfileId &&
-      store.discovery.value.publicRooms.some(({ roomId }) => roomId === queued.roomId)
-    ) {
-      const replayResult = await store.command(queued.command);
-      if (selectedServerContext(store).profileId !== server.profileId) return result;
-      if (!replayResult.ok) {
-        setActionError(replayResult.errorCode);
-      }
+    if (input.mode !== "REGISTER" && generation === destinationGeneration.current) {
+      await continueDestination();
     }
     closeOverlay();
     return result;
+  }
+
+  async function continueDestination(): Promise<void> {
+    const queued = deferredRef.current;
+    if (queued === null || joinInFlight.current) return;
+    if (store.shell.value.account?.status !== "ACTIVE") {
+      openAuth();
+      return;
+    }
+    const profile = selectedServerContext(store).profile;
+    if (store.shell.value.errorCode === "PUBLIC_CATALOG_UNAVAILABLE") {
+      setActionError("PUBLIC_CATALOG_UNAVAILABLE");
+      return;
+    }
+    const room = store.discovery.value.publicRooms.find(({ roomId }) => roomId === queued.roomId);
+    if (!pendingJoinMatchesServer(queued, profile) || room?.joinPolicy !== queued.joinPolicy) {
+      rememberDestination(null);
+      return;
+    }
+    const generation = destinationGeneration.current;
+    joinInFlight.current = true;
+    setJoining(true);
+    try {
+      const result = await store.command({
+        name: queued.joinPolicy === "OPEN" ? "ROOM_JOIN_OPEN" : "ROOM_JOIN_REQUEST",
+        payload: { roomId: room.roomId },
+      });
+      if (
+        generation !== destinationGeneration.current ||
+        !pendingJoinMatchesServer(queued, selectedServerContext(store).profile)
+      )
+        return;
+      if (result.ok) rememberDestination(null);
+      else setActionError(result.errorCode);
+    } catch {
+      if (generation === destinationGeneration.current) setActionError("NETWORK_ERROR");
+    } finally {
+      joinInFlight.current = false;
+      setJoining(false);
+    }
   }
 
   async function createRoom(input: {
@@ -319,9 +429,18 @@ export function App({
     return result;
   }
 
-  function openPagePermission(intentKey: string): void {
+  function openPagePermission(intentKey: string, expectedUrl?: string): void {
+    const mediaJoinGroupId = intentKey.startsWith("media-join:")
+      ? CanonicalUuidSchema.parse(intentKey.slice("media-join:".length))
+      : undefined;
     const feature =
-      intentKey === "danmaku" ? "DANMAKU" : intentKey === "pen" ? "DRAWING" : "POINTER";
+      intentKey === "media-create" || mediaJoinGroupId !== undefined
+        ? "MEDIA_CONTROL"
+        : intentKey === "danmaku"
+          ? "DANMAKU"
+          : intentKey === "pen"
+            ? "DRAWING"
+            : "POINTER";
     openOverlay({
       kind: "PAGE_PERMISSION",
       intentKey,
@@ -332,15 +451,26 @@ export function App({
     if (pagePermissionCoordinator === undefined) {
       return;
     }
-    void pagePermissionCoordinator.capture(feature).then(
+    const generation = permissionCaptureGeneration.current;
+    const capture =
+      expectedUrl === undefined
+        ? pagePermissionCoordinator.capture(feature)
+        : pagePermissionCoordinator.capture(feature, expectedUrl);
+    void capture.then(
       (intent) => {
+        if (generation !== permissionCaptureGeneration.current) return;
         setOverlay((current) =>
           current?.kind === "PAGE_PERMISSION" && current.intentKey === intentKey
-            ? { ...current, intent, preflightErrorCode: null }
+            ? {
+                ...current,
+                intent: mediaJoinGroupId === undefined ? intent : { ...intent, mediaJoinGroupId },
+                preflightErrorCode: null,
+              }
             : current,
         );
       },
       (error: unknown) => {
+        if (generation !== permissionCaptureGeneration.current) return;
         const errorCode =
           error instanceof Error && error.message.length > 0
             ? error.message
@@ -386,17 +516,40 @@ export function App({
       store={store}
       serverHost={server.host}
       serverConnected={server.connected}
-      onOpenAuth={() => openOverlay({ kind: "AUTH", mode: "LOGIN" })}
+      onOpenAuth={openAuth}
       onOpenMessages={() => openOverlay({ kind: "MESSAGES" })}
       onOpenServerProfiles={() => openServerProfiles()}
       onOpenAccountSettings={
-        server.accountSettingsSupported ? () => openOverlay({ kind: "ACCOUNT_SETTINGS" }) : null
+        server.accountSettingsSupported && store.shell.value.account?.status === "ACTIVE"
+          ? () => openOverlay({ kind: "ACCOUNT_SETTINGS" })
+          : null
       }
     >
-      {store.shell.value.onboardingRequired ? <UpgradeNotice store={store} /> : null}
+      {destinationStorageError ? (
+        <p role="alert">无法保存加入进度，请保持此侧栏打开后重试。</p>
+      ) : null}
+      {deferredCommand !== null && store.room.value.selectedRoomId === null ? (
+        <section class="editorial-surface" aria-label="待继续的加入任务">
+          <p>已保留目标房间：{deferredCommand.roomName}</p>
+          <button
+            class="primary-button"
+            type="button"
+            disabled={joining}
+            onClick={() => void continueDestination()}
+          >
+            {joining ? "正在加入…" : `继续加入 ${deferredCommand.roomName}`}
+          </button>
+          <button class="text-button" type="button" onClick={() => rememberDestination(null)}>
+            取消加入
+          </button>
+        </section>
+      ) : null}
+      {store.shell.value.onboardingRequired && !configurationRequired ? (
+        <UpgradeNotice store={store} />
+      ) : null}
       {store.room.value.selectedRoomId !== null ? (
         <ActiveRoom
-          key={`${server.profileId}:${store.room.value.selectedRoomId}`}
+          key={`${serverKey}:${store.room.value.selectedRoomId}`}
           store={store}
           serverHost={server.host}
           now={now}
@@ -412,7 +565,8 @@ export function App({
           actionError={actionError}
           onJoinPublicRoom={joinPublicRoom}
           onOpenCreateRoom={() => openOverlay({ kind: "CREATE_ROOM" })}
-          onOpenAuth={() => openOverlay({ kind: "AUTH", mode: "LOGIN" })}
+          onOpenAuth={openAuth}
+          onOpenServerProfiles={() => openServerProfiles()}
           {...(serviceStatusProbe === undefined ? {} : { serviceStatusProbe })}
         />
       )}
@@ -434,7 +588,7 @@ export function App({
       ) : null}
       {overlay?.kind === "ACCOUNT_SETTINGS" &&
       server.accountSettingsSupported &&
-      store.shell.value.account !== null ? (
+      store.shell.value.account?.status === "ACTIVE" ? (
         <AccountSettingsDialog
           store={store}
           account={store.shell.value.account}
@@ -462,6 +616,7 @@ export function App({
       {overlay?.kind === "SERVER_PROFILES" ? (
         <ServerProfileDialog
           store={store}
+          initialSetup={configurationRequired}
           {...(serverVerifier === undefined ? {} : { verifier: serverVerifier })}
           onClose={closeServerProfiles}
           onSelected={closeServerProfiles}
@@ -479,13 +634,17 @@ export function App({
       {overlay?.kind === "PAGE_PERMISSION" ? (
         <PermissionDialog
           feature={overlay.feature}
-          origin={store.pageAccess.value.origin ?? "当前页面不可授权"}
+          origin={overlay.intent?.origin ?? store.pageAccess.value.origin ?? "当前页面不可授权"}
           browserPermission={
-            store.pageAccess.value.origin === null
+            (overlay.intent?.origin ?? store.pageAccess.value.origin) === null
               ? "无可请求权限"
-              : `${store.pageAccess.value.origin}/*`
+              : `${overlay.intent?.origin ?? store.pageAccess.value.origin}/*`
           }
-          termsVersion={store.pageAccess.value.serverTermsVersion ?? "未提供"}
+          termsVersion={
+            overlay.intent?.serverTermsVersion ??
+            store.pageAccess.value.serverTermsVersion ??
+            "未提供"
+          }
           privacyPageUrl={privacyPageUrl}
           ready={overlay.intent !== null}
           externalErrorCode={overlay.preflightErrorCode}

@@ -30,6 +30,7 @@ import {
   type ElementAnchorSignatureRequest,
   type ElementAnchorSignatureResponse,
   type PageCapabilityMessage,
+  type PageCollaborationInboundMessage,
   type PageDisposeReason,
 } from "../src/page-collaboration/messages.js";
 import {
@@ -57,7 +58,9 @@ class PageCollaborationRuntime {
   readonly #host: PageOverlayHost;
   readonly #listener: (
     message: unknown,
-  ) => void | Promise<PageCapabilityMessage | ElementAnchorSignatureResponse>;
+    sender: unknown,
+    sendResponse: (response?: unknown) => void,
+  ) => boolean | void;
   readonly #onDispose: () => void;
   #pointer: PointerPageRuntime | undefined;
   #media: MediaPageRuntime | undefined;
@@ -82,12 +85,9 @@ class PageCollaborationRuntime {
         void browser.runtime.sendMessage(PageCapabilityMessageSchema.parse(message));
       },
     });
-    this.#listener = (messageInput) => {
-      const parsed = PageCollaborationInboundMessageSchema.safeParse(messageInput);
-      if (!parsed.success) {
-        return;
-      }
-      const message = parsed.data;
+    const handleMessage = (
+      message: PageCollaborationInboundMessage,
+    ): void | Promise<PageCapabilityMessage | ElementAnchorSignatureResponse | void> => {
       switch (message.type) {
         case "syncaction.page.announce":
           this.announce();
@@ -129,8 +129,7 @@ class PageCollaborationRuntime {
           ) {
             break;
           }
-          void this.#mediaRuntime()?.handle(message);
-          break;
+          return this.#mediaRuntime()?.handle(message);
         }
         case "syncaction.danmaku.command":
           if (!this.#updateToolContext(message.context)) {
@@ -259,6 +258,18 @@ class PageCollaborationRuntime {
           this.dispose(message.reason);
           break;
       }
+    };
+    this.#listener = (messageInput, _sender, sendResponse) => {
+      const parsed = PageCollaborationInboundMessageSchema.safeParse(messageInput);
+      if (!parsed.success) return;
+      const response = handleMessage(parsed.data);
+      if (response instanceof Promise) {
+        // Keep the native Chrome channel open on versions before Promise
+        // listener responses were supported. Unrelated messages return above.
+        void response.then(sendResponse, () => sendResponse());
+        return true;
+      }
+      sendResponse(response);
     };
     browser.runtime.onMessage.addListener(this.#listener);
   }

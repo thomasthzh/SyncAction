@@ -225,26 +225,42 @@ describe("media controller pure logic", () => {
         ended: true,
       },
     },
-  ])("seeks and pauses exact $status leader authority", ({ status, authority }) => {
-    const authoritativeGroup = PlaybackGroupSnapshotSchema.parse({
-      ...group,
-      status,
-      observed: authority,
-    });
+  ])(
+    "pauses matching $status leader authority and seeks only real drift",
+    ({ status, authority }) => {
+      const authoritativeGroup = PlaybackGroupSnapshotSchema.parse({
+        ...group,
+        status,
+        observed: authority,
+      });
 
-    expect(
-      planMediaLeaderAuthorityRestoration(
-        authoritativeGroup,
-        target,
-        {
-          ...group.observed!,
-          positionMs: authority.positionMs,
-        },
-        nowMs,
-        false,
-      ),
-    ).toEqual([{ type: "SEEK", positionMs: authority.positionMs }, { type: "PAUSE" }]);
-  });
+      expect(
+        planMediaLeaderAuthorityRestoration(
+          authoritativeGroup,
+          target,
+          {
+            ...group.observed!,
+            positionMs: authority.positionMs,
+          },
+          nowMs,
+          false,
+        ),
+      ).toEqual([{ type: "PAUSE" }]);
+      expect(
+        planMediaLeaderAuthorityRestoration(
+          authoritativeGroup,
+          target,
+          {
+            ...group.observed!,
+            paused: true,
+            positionMs: authority.positionMs - 1,
+          },
+          nowMs,
+          false,
+        ),
+      ).toEqual([{ type: "SEEK", positionMs: authority.positionMs }]);
+    },
+  );
 
   it("treats an explicit small seek as intent without changing the ordinary drift threshold", () => {
     const smallSeek = {

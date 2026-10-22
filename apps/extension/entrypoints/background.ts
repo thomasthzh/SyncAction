@@ -411,15 +411,16 @@ export default defineBackground(() => {
     })(),
   );
 
-  browser.runtime.onMessage.addListener((message: unknown, sender) => {
+  browser.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
     let pageMessage;
     try {
       pageMessage = parsePageOutboundMessageFromSender(message, sender);
-    } catch (error) {
-      return Promise.reject(error);
+    } catch {
+      sendResponse();
+      return;
     }
     if (pageMessage !== null) {
-      return (async () => {
+      void (async () => {
         if (!(await pageCollaborationPort.validateOutboundMessage(pageMessage))) {
           return undefined;
         }
@@ -536,7 +537,8 @@ export default defineBackground(() => {
           }
         }
         return undefined;
-      })();
+      })().then(sendResponse, () => sendResponse());
+      return true;
     }
     return undefined;
   });

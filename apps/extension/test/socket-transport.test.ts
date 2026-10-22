@@ -907,6 +907,42 @@ describe("SocketReplicaTransport pointer channel", () => {
 });
 
 describe("SocketReplicaTransport media channel", () => {
+  it("replays only the latest valid media snapshot when the controller subscribes after room sync", () => {
+    const { socket, transport } = createConnectedTransport();
+    const handler = vi.fn();
+    socket.emit("media.groups.snapshot", { ...mediaSnapshot, roomMediaRevision: 0, groups: [] });
+    socket.emit("media.groups.snapshot", mediaSnapshot);
+    socket.emit("media.groups.snapshot", {
+      ...mediaSnapshot,
+      privateUrl: "https://private.example/watch",
+    });
+    transport.setMediaHandler(handler);
+    expect(handler).toHaveBeenCalledExactlyOnceWith(mediaSnapshot);
+    transport.setMediaHandler(undefined);
+    transport.setMediaHandler(handler);
+    expect(handler).toHaveBeenCalledOnce();
+  });
+
+  it.each(["disconnect", "stop"] as const)(
+    "discards buffered media snapshots on %s",
+    async (kind) => {
+      const { socket, transport } = createConnectedTransport();
+      socket.emit("media.groups.snapshot", mediaSnapshot);
+      if (kind === "disconnect") socket.emit("disconnect");
+      else await transport.disconnect();
+      const handler = vi.fn();
+      transport.setMediaHandler(handler);
+      expect(handler).not.toHaveBeenCalled();
+      if (kind === "disconnect") {
+        socket.emit("connect");
+        expect(handler).not.toHaveBeenCalled();
+        const fresh = { ...mediaSnapshot, roomMediaRevision: 2, groups: [] };
+        socket.emit("media.groups.snapshot", fresh);
+        expect(handler).toHaveBeenCalledExactlyOnceWith(fresh);
+      }
+    },
+  );
+
   it("delivers one strict media snapshot and ignores malformed messages", () => {
     const { socket, transport } = createConnectedTransport();
     const handler = vi.fn();

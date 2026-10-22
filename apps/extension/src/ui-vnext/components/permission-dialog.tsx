@@ -39,6 +39,7 @@ export function PermissionDialog({
   const [agreed, setAgreed] = useState(false);
   const [pending, setPending] = useState(false);
   const [errorCode, setErrorCode] = useState<string | null>(null);
+  const [permissionSaved, setPermissionSaved] = useState(false);
 
   function confirm(): void {
     if (!agreed || pending || !ready) {
@@ -56,7 +57,8 @@ export function PermissionDialog({
     void Promise.resolve(outcome).then(
       (result) => {
         setPending(false);
-        if (result.granted) {
+        setPermissionSaved(result.granted);
+        if (result.granted && result.errorCode === null) {
           onClose();
         } else {
           setErrorCode(result.errorCode ?? "PAGE_PERMISSION_DENIED");
@@ -77,7 +79,14 @@ export function PermissionDialog({
           <p class="eyebrow">按网站授权</p>
           <h2 id={titleId}>允许页面协作</h2>
         </div>
-        <button class="icon-button" type="button" aria-label="关闭" title="关闭" onClick={onClose}>
+        <button
+          class="icon-button"
+          type="button"
+          aria-label="关闭"
+          title="关闭"
+          disabled={pending}
+          onClick={onClose}
+        >
           <Icon name="close" />
         </button>
       </header>
@@ -124,6 +133,7 @@ export function PermissionDialog({
         <input
           name="agreement"
           type="checkbox"
+          disabled={pending}
           checked={agreed}
           onChange={(event) => setAgreed(event.currentTarget.checked)}
         />
@@ -131,7 +141,7 @@ export function PermissionDialog({
       </label>
       <ActionableStatus errorCode={externalErrorCode ?? errorCode} />
       <footer class="dialog-actions">
-        <button class="secondary-button" type="button" onClick={onClose}>
+        <button class="secondary-button" type="button" disabled={pending} onClick={onClose}>
           取消
         </button>
         <button
@@ -140,7 +150,13 @@ export function PermissionDialog({
           disabled={!agreed || pending || !ready}
           onClick={confirm}
         >
-          {pending ? "正在请求…" : !ready ? "正在检查…" : "允许当前站点"}
+          {pending
+            ? "正在启用…"
+            : !ready
+              ? "正在检查…"
+              : permissionSaved
+                ? "重试启用"
+                : "允许当前站点"}
         </button>
       </footer>
     </ModalDialog>

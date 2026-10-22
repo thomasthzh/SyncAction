@@ -53,11 +53,18 @@ afterEach(() => unmountPanel());
 describe("vNext active room", () => {
   it("keeps room identity, playback, shared pages, and clustered members in one surface", async () => {
     const store = roomStore();
+    store.update({
+      pageAccess: {
+        ...store.pageAccess.value,
+        browserPermissionGranted: true,
+        termsAccepted: true,
+      },
+    });
     const root = renderPanel(<App store={store} now={() => nowMs} />);
 
     expect(root.textContent).toContain("联合研究室");
     expect(root.textContent).toContain("5 在线 · 6 位成员");
-    expect(root.textContent).toContain("syncaction.example.com");
+    expect(root.textContent).toContain("demo.syncaction.example");
     expect(root.querySelector("[data-room-presence-summary]")).not.toBeNull();
     const liveRail = root.querySelector("[data-room-live-rail]");
     expect(liveRail).not.toBeNull();
@@ -123,7 +130,7 @@ describe("vNext active room", () => {
       name: "MEDIA_MEMBER_JUMP",
       payload: { userId: leaderId },
     });
-    await click(byRole(videoRow, "button", "查看 房主 Alex 当前页面"));
+    await click(byRole(videoRow, "button", "查看 房主 Thomas 当前页面"));
     expect(store.commandCalls.at(-1)).toEqual({
       name: "MEDIA_MEMBER_JUMP",
       payload: { userId: ownerId },
@@ -602,7 +609,7 @@ function roomStore(
   const currentUserId = options.currentUserId ?? ownerId;
   const store = new TestUiStore();
   const members = [
-    member(ownerId, "owner", "房主 Alex", "OWNER"),
+    member(ownerId, "owner", "房主 Thomas", "OWNER"),
     member(leaderId, "leader", "林岚", "MEMBER"),
     member(followerAId, "zhou", "小周", "MEMBER"),
     member(followerBId, "qing", "阿青", "MEMBER"),
@@ -665,7 +672,7 @@ function roomStore(
         },
       ],
       members: [
-        collaborationMember(ownerId, "房主 Alex", "OWNER", true, [videoPageId]),
+        collaborationMember(ownerId, "房主 Thomas", "OWNER", true, [videoPageId]),
         collaborationMember(leaderId, "林岚", "MEMBER", true, [videoPageId]),
         collaborationMember(followerAId, "小周", "MEMBER", true, [videoPageId]),
         collaborationMember(followerBId, "阿青", "MEMBER", true, [videoPageId]),

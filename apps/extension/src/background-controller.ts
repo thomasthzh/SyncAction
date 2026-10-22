@@ -5,6 +5,8 @@ import {
   RoomIdSchema,
   SupportedUrlSchema,
   type ContentCompatibility,
+  type DocumentRevision,
+  type MediaCommandAck,
   type PageCompatibilityReport,
 } from "@syncaction/protocol";
 import {
@@ -364,6 +366,7 @@ export class BackgroundController {
         page: this.#pagePort,
         transport,
         compatibility: presenceController,
+        onStatusChanged: () => this.#notifyStatusChanged(),
         ...(this.#mediaNavigationPort === undefined
           ? {}
           : { navigation: this.#mediaNavigationPort }),
@@ -849,14 +852,28 @@ export class BackgroundController {
     this.#notifyStatusChanged();
   }
 
+  public async createMediaGroup(
+    tabId: number,
+    expectedRevision?: DocumentRevision,
+  ): Promise<MediaCommandAck> {
+    const acknowledgement = await this.#requireMediaController().createGroupFromCurrentPage(
+      tabId,
+      expectedRevision,
+    );
+    this.#notifyStatusChanged();
+    return acknowledgement;
+  }
+
   public async alignMediaGroupOnce(playbackGroupId: string): Promise<void> {
     await this.#requireMediaController().alignOnce(playbackGroupId);
     this.#notifyStatusChanged();
   }
 
-  public async joinMediaGroup(playbackGroupId: string): Promise<void> {
-    await this.#requireMediaController().joinGroup(playbackGroupId);
+  public async joinMediaGroup(playbackGroupId: string): Promise<MediaCommandAck> {
+    const acknowledgement = await this.#requireMediaController().joinGroup(playbackGroupId);
+    if (!acknowledgement.accepted) throw new Error(acknowledgement.code);
     this.#notifyStatusChanged();
+    return acknowledgement;
   }
 
   public async leaveMediaGroup(playbackGroupId?: string): Promise<void> {

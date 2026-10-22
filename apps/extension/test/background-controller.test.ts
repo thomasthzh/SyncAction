@@ -842,7 +842,7 @@ describe("BackgroundController", () => {
         operation: {
           type: "tab.navigate",
           logicalTabId,
-          url: "https://github.com/example/syncaction",
+          url: "https://github.com/thomasthzh/SyncAction",
         },
       }),
     );
@@ -1153,6 +1153,125 @@ describe("BackgroundController", () => {
     expect(pagePort.mediaLocks.every((locked) => !locked)).toBe(true);
   });
 
+  it("creates the first media group only for a current observed shared tab", async () => {
+    const onStatusChanged = vi.fn();
+    const controller = new BackgroundController({
+      persistence,
+      configStore: new StaticConfigStore(config),
+      transportFactory: () => transport,
+      browserPort: new MutableBrowserPort(),
+      browserSessionId: "018f8f8e-4b5c-7d6e-8f90-123456789ab5",
+      pagePort: new FakePointerPagePort(),
+      onStatusChanged,
+    });
+    await controller.start();
+    await controller.handleActiveTabChanged(20);
+    transport.emitMedia({
+      type: "media.groups.snapshot",
+      protocolVersion: 1,
+      roomId: snapshot.roomId,
+      roomMediaRevision: 0,
+      groups: [],
+    });
+    await controller.whenIdle();
+    await expect(controller.createMediaGroup(20)).rejects.toThrow("MEDIA_NOT_READY");
+    await controller.handlePagePermissionBoundaryChanged();
+    const context = {
+      roomId: snapshot.roomId,
+      logicalTabId: snapshot.order[0]!,
+      documentRevision: { roomEpoch: 0, tabUpdatedAtSeq: 1 },
+      frameKey: "top",
+    };
+    const target = {
+      logicalTabId: context.logicalTabId,
+      documentRevision: context.documentRevision,
+      frameKey: "top",
+      provider: "HTML5" as const,
+      mediaKey: "html5:main",
+      durationMs: 120_000,
+    };
+    await controller.handleMediaObserved(20, 0, {
+      type: "syncaction.media.observed",
+      event: "DISCOVERED",
+      context,
+      target,
+      observed: {
+        observedAtClientMs: Date.now(),
+        positionMs: 1_000,
+        paused: true,
+        playbackRate: 1,
+        ended: false,
+        buffering: false,
+      },
+      applyToken: null,
+      resultCode: null,
+    });
+    await expect(controller.createMediaGroup(20)).resolves.toMatchObject({ accepted: true });
+    expect(transport.mediaCommands).toHaveLength(1);
+    expect(transport.mediaCommands[0]).toMatchObject({ type: "group.create", target });
+    expect((await controller.getStatus()).media?.playbackGroups).toEqual([]);
+    onStatusChanged.mockClear();
+    transport.emitMedia({
+      type: "media.groups.snapshot",
+      protocolVersion: 1,
+      roomId: snapshot.roomId,
+      roomMediaRevision: 1,
+      groups: [
+        {
+          playbackGroupId: "00000000-0000-4000-8000-000000000001",
+          roomId: snapshot.roomId,
+          groupRevision: 1,
+          status: "PAUSED",
+          leaderUserId: userId,
+          leaderDeviceId: config.deviceId,
+          members: [
+            {
+              userId,
+              username: "owner",
+              displayName: "Owner",
+              activeDeviceId: config.deviceId,
+              joinedAtServerMs: Date.now(),
+              online: true,
+            },
+          ],
+          target,
+          observed: {
+            observedAtClientMs: Date.now(),
+            positionMs: 1_000,
+            paused: true,
+            playbackRate: 1,
+            ended: false,
+            buffering: false,
+          },
+          observedAtServerMs: Date.now(),
+          proposals: [],
+          leaderGraceExpiresAtServerMs: null,
+          updatedAtServerMs: Date.now(),
+        },
+      ],
+    });
+    await controller.whenIdle();
+    expect((await controller.getStatus()).media?.playbackGroups).toHaveLength(1);
+    expect(onStatusChanged).toHaveBeenCalledOnce();
+    vi.spyOn(transport, "sendMediaCommand").mockImplementationOnce(async (command) =>
+      MediaCommandAckSchema.parse({
+        type: "media.command.ack",
+        protocolVersion: 1,
+        commandId: command.commandId,
+        roomId,
+        roomMediaRevision: 1,
+        accepted: false,
+        code: "GROUP_MEMBER_LIMIT_REACHED",
+        playbackGroupId: "00000000-0000-4000-8000-000000000001",
+        groupRevision: 1,
+      }),
+    );
+    await expect(controller.joinMediaGroup("00000000-0000-4000-8000-000000000001")).rejects.toThrow(
+      "GROUP_MEMBER_LIMIT_REACHED",
+    );
+    await controller.stop();
+  });
+
   it("routes page tool commands only to the active synchronized browser binding", async () => {
     const browserPort = new MutableBrowserPort();
     const pagePort = new FakePointerPagePort();
@@ -1250,6 +1369,7 @@ describe("BackgroundController", () => {
     const playbackGroupId = "00000000-0000-4000-8000-000000000101";
     const proposalId = "00000000-0000-4000-8000-000000000201";
     const actions = [
+      controller.createMediaGroup(20),
       controller.jumpToMediaMember(userId),
       controller.alignMediaGroupOnce(playbackGroupId),
       controller.joinMediaGroup(playbackGroupId),

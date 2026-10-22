@@ -1,3 +1,4 @@
+import { DurableOperationSchema } from "@syncaction/protocol";
 import { describe, expect, it, vi } from "vitest";
 import {
   ExtensionCommandRouter,
@@ -26,13 +27,19 @@ interface RecordedCall {
   args: unknown[];
 }
 
-function fakeApp(calls: RecordedCall[]): ExtensionCommandAppPort {
+function fakeApp(
+  calls: RecordedCall[],
+  shareBrowserTab?: ExtensionCommandAppPort["shareBrowserTab"],
+): ExtensionCommandAppPort {
   return new Proxy(
     {},
     {
       get: (_target, property) => {
         if (typeof property !== "string") {
           return undefined;
+        }
+        if (property === "shareBrowserTab" && shareBrowserTab !== undefined) {
+          return shareBrowserTab;
         }
         return async (...args: unknown[]) => {
           calls.push({ method: property, args });
@@ -61,6 +68,7 @@ function command(name: UiCommand["name"], payload?: unknown): UiCommand {
 function createRouter(input?: {
   tab?: { id?: number; url?: string; pendingUrl?: string };
   removed?: boolean;
+  shareBrowserTab?: ExtensionCommandAppPort["shareBrowserTab"];
 }) {
   const calls: RecordedCall[] = [];
   const browser: ExtensionCommandBrowserPort = {
@@ -95,7 +103,7 @@ function createRouter(input?: {
     ),
   };
   const router = new ExtensionCommandRouter({
-    app: fakeApp(calls),
+    app: fakeApp(calls, input?.shareBrowserTab),
     browser,
     pageCollaborationPort,
     commandBindings,
@@ -262,6 +270,7 @@ const cases: Array<{
     args: [true],
   },
   { name: "PEN_TOGGLE", method: "togglePagePen", args: [] },
+  { name: "MEDIA_GROUP_CREATE", method: "createMediaGroup", args: [42] },
   {
     name: "MEDIA_MEMBER_JUMP",
     payload: { userId },
@@ -322,6 +331,162 @@ describe("ExtensionCommandRouter", () => {
 
     expect(calls).toEqual([{ method: "selectServer", args: ["team-server"] }]);
     expect(pageCollaborationPort.refreshOriginAccess).toHaveBeenCalledOnce();
+  });
+
+  it("requires a real active tab and rejects caller-supplied media targets", async () => {
+    const missing = createRouter({ tab: {} });
+    await expect(missing.router.execute(command("MEDIA_GROUP_CREATE"))).rejects.toThrow(
+      "ACTIVE_TAB_NOT_FOUND",
+    );
+    expect(missing.calls).toEqual([]);
+    const tampered = createRouter();
+    await expect(
+      tampered.router.execute({
+        type: "ui.command",
+        commandId,
+        name: "MEDIA_GROUP_CREATE",
+        payload: { tabId: 42, target: null },
+      }),
+    ).rejects.toThrow("INVALID_EXTENSION_MESSAGE");
+    expect(tampered.calls).toEqual([]);
+  });
+
+  it("keeps a resumed media command bound to its captured page", async () => {
+    const expectedContext = {
+      profileId: "server-a",
+      roomId,
+      tabId: 42,
+      documentRevision: { roomEpoch: 0, tabUpdatedAtSeq: 1 },
+    };
+    const ready = createRouter();
+    await ready.router.execute(command("MEDIA_GROUP_CREATE", { expectedContext }));
+    expect(ready.calls).toEqual([{ method: "createMediaGroup", args: [42, expectedContext] }]);
+    const switched = createRouter({ tab: { id: 43 } });
+    await expect(
+      switched.router.execute(command("MEDIA_GROUP_CREATE", { expectedContext })),
+    ).rejects.toThrow("PAGE_PERMISSION_INTENT_STALE");
+    expect(switched.calls).toEqual([]);
+  });
+
+  it("retains the original share result and freezes the current page URL for continuation", async () => {
+    const operation = DurableOperationSchema.parse({
+      type: "tab.create",
+      logicalTabId,
+      url: "https://news.example/article",
+      after: null,
+    });
+    const shared = createRouter({
+      shareBrowserTab: async () => ({ kind: "INTENT_RECORDED", operation }),
+    });
+    await expect(shared.router.execute(command("CURRENT_TAB_SHARE"))).resolves.toEqual({
+      kind: "INTENT_RECORDED",
+      operation,
+      sharedPageContext: { tabId: 42, url: "https://news.example/article" },
+    });
+    const unchanged = createRouter({
+      shareBrowserTab: async () => ({ kind: "IGNORED", reason: "NO_CHANGE" }),
+    });
+    await expect(unchanged.router.execute(command("CURRENT_TAB_SHARE"))).resolves.toEqual({
+      kind: "IGNORED",
+      reason: "NO_CHANGE",
+      sharedPageContext: { tabId: 42, url: "https://news.example/article" },
+    });
+    const loading = createRouter({
+      shareBrowserTab: async () => ({ kind: "IGNORED", reason: "LOADING" }),
+    });
+    await expect(loading.router.execute(command("CURRENT_TAB_SHARE"))).resolves.toEqual({
+      kind: "IGNORED",
+      reason: "LOADING",
+    });
+  });
+
+  it("binds a permission-resumed join to the current tab and pending URL while preserving the original group", async () => {
+    const expectedContext = {
+      profileId: "server-a",
+      roomId,
+      tabId: 42,
+      documentRevision: { roomEpoch: 0, tabUpdatedAtSeq: 1 },
+      url: "https://news.example/article",
+    };
+    const ready = createRouter();
+    await ready.router.execute(command("MEDIA_GROUP_JOIN", { playbackGroupId, expectedContext }));
+    expect(ready.calls).toEqual([
+      { method: "joinMediaGroup", args: [playbackGroupId, expectedContext] },
+    ]);
+    for (const tab of [
+      { id: 43, url: expectedContext.url },
+      { id: 42, url: expectedContext.url, pendingUrl: "https://news.example/other" },
+    ]) {
+      const switched = createRouter({ tab });
+      await expect(
+        switched.router.execute(command("MEDIA_GROUP_JOIN", { playbackGroupId, expectedContext })),
+      ).rejects.toThrow("PAGE_PERMISSION_INTENT_STALE");
+      expect(switched.calls).toEqual([]);
+    }
+  });
+
+  it("rejects continuation after same-tab same-origin navigation while sharing was pending", async () => {
+    const tab = { id: 42, url: "https://news.example/first" };
+    const operation = DurableOperationSchema.parse({
+      type: "tab.create",
+      logicalTabId,
+      url: "https://news.example/second",
+      after: null,
+    });
+    let releaseShare!: () => void;
+    const heldShare = new Promise<void>((resolve) => {
+      releaseShare = resolve;
+    });
+    const shareBrowserTab = vi.fn(async () => {
+      await heldShare;
+      return { kind: "INTENT_RECORDED", operation } as const;
+    });
+    const { router, calls } = createRouter({ tab, shareBrowserTab });
+    const sharing = router.execute(command("CURRENT_TAB_SHARE"));
+    await vi.waitFor(() => expect(shareBrowserTab).toHaveBeenCalledOnce());
+    tab.url = "https://news.example/second";
+    releaseShare();
+
+    const result = await sharing;
+    expect(result).toEqual({
+      kind: "INTENT_RECORDED",
+      operation,
+      sharedPageContext: { tabId: 42, url: "https://news.example/first" },
+    });
+    await expect(
+      router.execute(
+        command("MEDIA_GROUP_CREATE", {
+          expectedContext: {
+            profileId: "server-a",
+            roomId,
+            tabId: 42,
+            documentRevision: { roomEpoch: 0, tabUpdatedAtSeq: 1 },
+            url: "https://news.example/first",
+          },
+        }),
+      ),
+    ).rejects.toThrow("PAGE_PERMISSION_INTENT_STALE");
+    expect(calls).toEqual([]);
+  });
+
+  it("checks pending navigation before dispatching a captured media command", async () => {
+    const expectedContext = {
+      profileId: "server-a",
+      roomId,
+      tabId: 42,
+      documentRevision: { roomEpoch: 0, tabUpdatedAtSeq: 1 },
+      url: "https://news.example/first",
+    };
+    const ready = createRouter({ tab: { id: 42, url: expectedContext.url } });
+    await ready.router.execute(command("MEDIA_GROUP_CREATE", { expectedContext }));
+    expect(ready.calls).toEqual([{ method: "createMediaGroup", args: [42, expectedContext] }]);
+    const navigating = createRouter({
+      tab: { id: 42, url: expectedContext.url, pendingUrl: "https://news.example/second" },
+    });
+    await expect(
+      navigating.router.execute(command("MEDIA_GROUP_CREATE", { expectedContext })),
+    ).rejects.toThrow("PAGE_PERMISSION_INTENT_STALE");
+    expect(navigating.calls).toEqual([]);
   });
 
   it("refreshes current page state and shortcut bindings without accepting a tab ID", async () => {

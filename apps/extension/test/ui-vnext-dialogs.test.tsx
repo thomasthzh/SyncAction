@@ -50,11 +50,11 @@ describe("vNext server and permission dialogs", () => {
     const store = new TestUiStore();
     const root = renderPanel(<App store={store} />);
 
-    await click(byRole(root, "button", "切换服务器，当前 syncaction.example.com"));
+    await click(byRole(root, "button", "切换服务器，当前 demo.syncaction.example"));
 
     expect(root.textContent).toContain("服务器");
     expect(root.textContent).toContain("SyncAction 香港");
-    expect(root.textContent).toContain("syncaction.example.com");
+    expect(root.textContent).toContain("demo.syncaction.example");
     expect(root.textContent).toContain("当前");
     expect(root.textContent).toContain("默认服务器");
     await click(byRole(root, "button", "已授权站点"));
@@ -69,7 +69,7 @@ describe("vNext server and permission dialogs", () => {
       const store = new TestUiStore();
       const verifyFromClick = vi.fn<(input: unknown) => Promise<VerifiedServerCandidate>>();
       const root = renderPanel(<App store={store} serverVerifier={{ verifyFromClick }} />);
-      await click(byRole(root, "button", "切换服务器，当前 syncaction.example.com"));
+      await click(byRole(root, "button", "切换服务器，当前 demo.syncaction.example"));
       await click(byRole(root, "button", "添加服务器"));
       input(root.querySelector<HTMLInputElement>('input[name="serverUrl"]')!, baseUrl);
       await click(byRole(root, "button", "验证服务器"));
@@ -92,7 +92,7 @@ describe("vNext server and permission dialogs", () => {
           healthyAt: 1,
         });
       const root = renderPanel(<App store={store} serverVerifier={{ verifyFromClick }} />);
-      await click(byRole(root, "button", "切换服务器，当前 syncaction.example.com"));
+      await click(byRole(root, "button", "切换服务器，当前 demo.syncaction.example"));
       await click(byRole(root, "button", "添加服务器"));
       input(root.querySelector<HTMLInputElement>('input[name="serverUrl"]')!, baseUrl);
       await click(byRole(root, "button", "验证服务器"));
@@ -121,7 +121,7 @@ describe("vNext server and permission dialogs", () => {
     });
     const store = new TestUiStore();
     const root = renderPanel(<App store={store} serverVerifier={verifier} />);
-    await click(byRole(root, "button", "切换服务器，当前 syncaction.example.com"));
+    await click(byRole(root, "button", "切换服务器，当前 demo.syncaction.example"));
     await click(byRole(root, "button", "添加服务器"));
     input(
       root.querySelector<HTMLInputElement>('input[name="serverUrl"]')!,
@@ -167,7 +167,7 @@ describe("vNext server and permission dialogs", () => {
       })),
     };
     const root = renderPanel(<App store={store} serverVerifier={verifier} />);
-    await click(byRole(root, "button", "切换服务器，当前 syncaction.example.com"));
+    await click(byRole(root, "button", "切换服务器，当前 demo.syncaction.example"));
     await click(byRole(root, "button", "添加服务器"));
     input(
       root.querySelector<HTMLInputElement>('input[name="serverUrl"]')!,
@@ -228,7 +228,7 @@ describe("vNext server and permission dialogs", () => {
       return success();
     };
     const root = renderPanel(<App store={store} />);
-    await click(byRole(root, "button", "切换服务器，当前 syncaction.example.com"));
+    await click(byRole(root, "button", "切换服务器，当前 demo.syncaction.example"));
     await click(byRole(root, "button", "选择 Team Shanghai"));
 
     expect(store.commandCalls.at(-1)).toEqual({
@@ -256,7 +256,7 @@ describe("vNext server and permission dialogs", () => {
       })),
     };
     const root = renderPanel(<App store={store} serverVerifier={verifier} />);
-    await click(byRole(root, "button", "切换服务器，当前 syncaction.example.com"));
+    await click(byRole(root, "button", "切换服务器，当前 demo.syncaction.example"));
     await click(byRole(root, "button", "添加服务器"));
     input(root.querySelector<HTMLInputElement>('input[name="serverUrl"]')!, known.baseUrl);
     await click(byRole(root, "button", "验证服务器"));
@@ -305,7 +305,7 @@ describe("vNext server and permission dialogs", () => {
   it("shares one focus trap, Escape close, and opener restoration across dialogs", async () => {
     const store = new TestUiStore();
     const root = renderPanel(<App store={store} />);
-    const opener = byRole(root, "button", "切换服务器，当前 syncaction.example.com");
+    const opener = byRole(root, "button", "切换服务器，当前 demo.syncaction.example");
     opener.focus();
     await click(opener);
     const dialog = root.querySelector<HTMLElement>('[role="dialog"]')!;

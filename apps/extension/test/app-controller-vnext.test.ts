@@ -1,4 +1,5 @@
 import {
+  MediaCommandAckSchema,
   ServerMetaSchema,
   type Notification,
   type PublicRoomsInvalidated,
@@ -24,6 +25,9 @@ import {
   type RoomRuntimeFactoryInput,
 } from "../src/app-controller.js";
 import type { ExtensionStatus } from "../src/background-controller.js";
+import { ExtensionCommandRouter } from "../src/extension-command-router.js";
+import { projectUiState } from "../src/ui/ui-state-hub.js";
+import type { UiPageAccessSlice } from "../src/ui/ui-protocol.js";
 import {
   ExtensionProductSessionSchema,
   type ExtensionProductSession,
@@ -49,11 +53,26 @@ const requestId = "50000000-0000-4000-8000-000000000001";
 const clientOpId = "60000000-0000-4000-8000-000000000001";
 const playbackGroupId = "70000000-0000-4000-8000-000000000001";
 const timestamp = "2026-07-30T00:00:00.000Z";
+const noPageAccess: UiPageAccessSlice = {
+  bindings: null,
+  tabId: null,
+  documentRevision: null,
+  contentCompatibility: null,
+  origin: null,
+  supported: false,
+  browserPermissionGranted: false,
+  termsAccepted: false,
+  serverTermsVersion: null,
+  disclosureVersion: 1,
+  enabledFeatures: [],
+  policySyncPendingCount: 0,
+  reason: "NO_ACTIVE_TAB",
+};
 
 const account: PublicAccount = {
   id: userId,
-  username: "alex",
-  displayName: "Alex",
+  username: "thomas",
+  displayName: "Thomas",
   status: "ACTIVE",
   passwordResetRequired: false,
   createdAt: timestamp,
@@ -121,8 +140,8 @@ function roomDetail(role: "OWNER" | "MEMBER" = "OWNER", revision = 0): PublicRoo
     members: [
       {
         userId,
-        username: "alex",
-        displayName: "Alex",
+        username: "thomas",
+        displayName: "Thomas",
         role,
         joinedAt: timestamp,
       },
@@ -269,9 +288,9 @@ class FakeSessions implements ExtensionProductSessionPort {
       deviceId: input.deviceId,
       sessionId: input.response.sessionId,
       accessToken: input.response.accessToken,
-      accessTokenExpiresAt: 10_000,
+      accessTokenExpiresAt: Date.now() + 10_000,
       refreshToken: input.response.refreshToken,
-      refreshTokenExpiresAt: 20_000,
+      refreshTokenExpiresAt: Date.now() + 20_000,
       account: input.response.account,
     });
     this.sessions.set(profileId, value);
@@ -295,9 +314,9 @@ class FakeSessions implements ExtensionProductSessionPort {
       deviceId,
       sessionId: response.sessionId,
       accessToken: `access-${profileId}`,
-      accessTokenExpiresAt: 10_000,
+      accessTokenExpiresAt: Date.now() + 10_000,
       refreshToken: profileId === profileAId ? "A".repeat(43) : "B".repeat(43),
-      refreshTokenExpiresAt: 20_000,
+      refreshTokenExpiresAt: Date.now() + 20_000,
       account,
     });
     this.sessions.set(profileId, value);
@@ -595,6 +614,836 @@ function createApp(input: {
 }
 
 describe("ExtensionAppController vNext server hub", () => {
+  it("returns only the initial committed snapshot during the first startup request", async () => {
+    const selected = profile(profileAId, serverAUrl, serverAId);
+    const api = apiFixture("a", selected.metadata!, []);
+    let release!: () => void;
+    let entered!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const barrier = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.mocked(api.getHealth).mockImplementationOnce(async () => {
+      entered();
+      await barrier;
+      return { status: "ok" };
+    });
+    const { app } = createApp({
+      profiles: new FakeProfiles([selected], profileAId),
+      apis: new Map([[serverAUrl, api]]),
+    });
+    const initial = await app.getProjectionStatus();
+    const starting = app.start();
+    await waiting;
+    expect(await app.getProjectionStatus()).toEqual(initial);
+    release();
+    await starting;
+    expect((await app.getProjectionStatus()).selectedProfileId).toBe(profileAId);
+  });
+
+  it("reads the committed snapshot while a discovery request is held", async () => {
+    const selected = profile(profileAId, serverAUrl, serverAId);
+    const api = apiFixture("a", selected.metadata!, []);
+    const { app } = createApp({
+      profiles: new FakeProfiles([selected], profileAId),
+      apis: new Map([[serverAUrl, api]]),
+    });
+    await app.start();
+    let release!: () => void;
+    let entered!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const barrier = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.mocked(api.listPublicRooms).mockImplementationOnce(async () => {
+      entered();
+      await barrier;
+      return { items: [], nextCursor: null };
+    });
+    const refresh = app.refreshPublicRooms();
+    await waiting;
+    try {
+      const outcome = await Promise.race([
+        app.getStatus().then((status) => ({ kind: "status", status }) as const),
+        new Promise<{ kind: "blocked" }>((resolve) =>
+          setTimeout(() => resolve({ kind: "blocked" }), 0),
+        ),
+      ]);
+      expect(outcome.kind).toBe("status");
+      if (outcome.kind === "status") {
+        expect(outcome.status.publicRooms).toHaveLength(1);
+        outcome.status.publicRooms.length = 0;
+        expect((await app.getStatus()).publicRooms).toHaveLength(1);
+      }
+    } finally {
+      release();
+      await refresh;
+    }
+    expect((await app.getStatus()).publicRooms).toEqual([]);
+  });
+
+  it("publishes a safe connecting phase before room I/O and restores it on failure", async () => {
+    const meta = metadata(serverAId, { capabilities: [] });
+    const selected = profile(profileAId, serverAUrl, serverAId, { metadata: meta });
+    const sessions = new FakeSessions();
+    sessions.seed(profileAId, serverAUrl, serverAId);
+    const api = apiFixture("a", meta, []);
+    const { app } = createApp({
+      profiles: new FakeProfiles([selected], profileAId),
+      sessions,
+      apis: new Map([[serverAUrl, api]]),
+    });
+    await app.start();
+    let entered!: () => void;
+    let fail!: (cause: Error) => void;
+    const waiting = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    vi.mocked(api.getRoom).mockImplementationOnce(async () => {
+      entered();
+      return new Promise<PublicRoomDetail>((_resolve, reject) => {
+        fail = reject;
+      });
+    });
+    const selection = app.selectRoom(roomId);
+    await waiting;
+    expect(await app.getStatus()).toMatchObject({
+      phase: "CONNECTING_ROOM",
+      selectedRoomId: null,
+      roomDetail: null,
+    });
+    fail(new Error("ROOM_LOOKUP_FAILED"));
+    await expect(selection).rejects.toThrow("ROOM_LOOKUP_FAILED");
+    expect(await app.getStatus()).toMatchObject({
+      phase: "AUTHENTICATED_NO_ROOM",
+      selectedRoomId: null,
+      roomDetail: null,
+    });
+  });
+
+  it("refreshes runtime snapshots independently and discards a late reply after switching profiles", async () => {
+    const first = profile(profileAId, serverAUrl, serverAId, {
+      metadata: metadata(serverAId, { capabilities: [] }),
+    });
+    const second = profile(profileBId, serverBUrl, serverBId, {
+      metadata: metadata(serverBId, { capabilities: [] }),
+    });
+    const sessions = new FakeSessions();
+    sessions.seed(profileAId, serverAUrl, serverAId);
+    const runtime = fakeRuntime([]);
+    const live = runtimeStatus();
+    runtime.getStatus = vi.fn(async () => structuredClone(live));
+    let runtimeInput!: RoomRuntimeFactoryInput;
+    const { app } = createApp({
+      profiles: new FakeProfiles([first, second], profileAId),
+      sessions,
+      apis: new Map([
+        [serverAUrl, apiFixture("a", first.metadata!, [])],
+        [serverBUrl, apiFixture("b", second.metadata!, [])],
+      ]),
+      runtimeFactory: (input) => {
+        runtimeInput = input;
+        return runtime;
+      },
+    });
+    await app.start();
+    await app.selectRoom(roomId);
+    live.serverSeq = 7;
+    runtimeInput.onStatusChanged?.();
+    await vi.waitFor(async () => expect((await app.getStatus()).room?.serverSeq).toBe(7));
+    const reads = vi.mocked(runtime.getStatus).mock.calls.length;
+    const listener = vi.fn();
+    app.subscribe(listener);
+    await Promise.all(Array.from({ length: 20 }, () => app.getStatus()));
+    expect(runtime.getStatus).toHaveBeenCalledTimes(reads);
+    expect(listener).not.toHaveBeenCalled();
+
+    let staleReadEntered!: () => void;
+    let releaseStaleRead!: () => void;
+    const staleReadWaiting = new Promise<void>((resolve) => {
+      staleReadEntered = resolve;
+    });
+    const staleReadBarrier = new Promise<void>((resolve) => {
+      releaseStaleRead = resolve;
+    });
+    vi.mocked(runtime.getStatus).mockImplementationOnce(async () => {
+      const old = structuredClone(live);
+      staleReadEntered();
+      await staleReadBarrier;
+      return old;
+    });
+    runtimeInput.onStatusChanged?.();
+    await staleReadWaiting;
+    live.serverSeq = 8;
+    await app.handleActiveTabChanged(42);
+    releaseStaleRead();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect((await app.getStatus()).room?.serverSeq).toBe(8);
+
+    let entered!: () => void;
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const barrier = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.mocked(runtime.getStatus).mockImplementationOnce(async () => {
+      entered();
+      await barrier;
+      return live;
+    });
+    runtimeInput.onStatusChanged?.();
+    await waiting;
+    await app.selectServer(profileBId);
+    release();
+    await Promise.resolve();
+    await Promise.resolve();
+    runtimeInput.onNotificationCreated?.(notification());
+    await Promise.resolve();
+    expect(await app.getStatus()).toMatchObject({
+      selectedProfileId: profileBId,
+      room: null,
+      notifications: [],
+    });
+    await expect(runtimeInput.getAccessToken()).rejects.toThrow("SESSION_REQUIRED");
+  });
+
+  it.each(["none", "success", "failure"] as const)(
+    "retries a failed runtime projection only for a pending event (next=%s)",
+    async (next) => {
+      const selected = profile(profileAId, serverAUrl, serverAId, {
+        metadata: metadata(serverAId, { capabilities: [] }),
+      });
+      const sessions = new FakeSessions();
+      sessions.seed(profileAId, serverAUrl, serverAId);
+      const runtime = fakeRuntime([]);
+      const live = runtimeStatus();
+      runtime.getStatus = vi.fn(async () => structuredClone(live));
+      let runtimeInput!: RoomRuntimeFactoryInput;
+      const { app } = createApp({
+        profiles: new FakeProfiles([selected], profileAId),
+        sessions,
+        apis: new Map([[serverAUrl, apiFixture("a", selected.metadata!, [])]]),
+        runtimeFactory: (input) => {
+          runtimeInput = input;
+          return runtime;
+        },
+      });
+      await app.start();
+      await app.selectRoom(roomId);
+      const reads = vi.mocked(runtime.getStatus).mock.calls.length;
+      let entered!: () => void;
+      let fail!: (cause: Error) => void;
+      const waiting = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      vi.mocked(runtime.getStatus).mockImplementationOnce(() => {
+        entered();
+        return new Promise((_resolve, reject) => {
+          fail = reject;
+        });
+      });
+      runtimeInput.onStatusChanged?.();
+      await waiting;
+      live.serverSeq = 7;
+      if (next !== "none") {
+        if (next === "failure") {
+          vi.mocked(runtime.getStatus).mockRejectedValueOnce(new Error("SECOND_READ_FAILED"));
+        }
+        runtimeInput.onStatusChanged?.();
+      }
+      fail(new Error("FIRST_READ_FAILED"));
+      const expectedReads = reads + (next === "none" ? 1 : 2);
+      await vi.waitFor(() => expect(runtime.getStatus).toHaveBeenCalledTimes(expectedReads));
+      if (next === "success") {
+        await vi.waitFor(async () => expect((await app.getStatus()).room?.serverSeq).toBe(7));
+      } else {
+        expect((await app.getStatus()).room?.serverSeq).toBe(0);
+      }
+      for (let index = 0; index < 10; index += 1) await Promise.resolve();
+      expect(runtime.getStatus).toHaveBeenCalledTimes(expectedReads);
+      await app.stop();
+    },
+  );
+
+  it("expires the local session at a lifecycle checkpoint without read side effects and clears its timer on stop", async () => {
+    vi.useFakeTimers();
+    try {
+      const selected = profile(profileAId, serverAUrl, serverAId, {
+        metadata: metadata(serverAId, { capabilities: [] }),
+      });
+      const sessions = new FakeSessions();
+      sessions.seed(profileAId, serverAUrl, serverAId);
+      const runtime = fakeRuntime([]);
+      const { app } = createApp({
+        profiles: new FakeProfiles([selected], profileAId),
+        sessions,
+        apis: new Map([[serverAUrl, apiFixture("a", selected.metadata!, [])]]),
+        runtimeFactory: () => runtime,
+      });
+      await app.start();
+      await app.selectRoom(roomId);
+      const calls = sessions.calls.length;
+      await app.getStatus();
+      expect(sessions.calls).toHaveLength(calls);
+      expect(vi.getTimerCount()).toBe(1);
+      await vi.advanceTimersByTimeAsync(21_000);
+      expect(await app.getStatus()).toMatchObject({
+        phase: "SESSION_EXPIRED",
+        account: null,
+        room: null,
+        errorCode: "SESSION_REQUIRED",
+      });
+      expect(runtime.stop).toHaveBeenCalledOnce();
+      await expect(app.createMediaGroup(42)).rejects.toThrow("SESSION_REQUIRED");
+      expect(runtime.stop).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+      await app.stop();
+      expect(vi.getTimerCount()).toBe(0);
+      sessions.seed(profileAId, serverAUrl, serverAId);
+      await app.start();
+      expect(vi.getTimerCount()).toBe(1);
+      await app.stop();
+      expect(vi.getTimerCount()).toBe(0);
+      expect(sessions.sessions.has(profileAId)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["read", "clear", "stop"] as const)(
+    "preserves an accepted update when the final session checkpoint fails to %s and retries once per timer",
+    async (failure) => {
+      vi.useFakeTimers();
+      try {
+        const selected = profile(profileAId, serverAUrl, serverAId, {
+          metadata: metadata(serverAId, { capabilities: [] }),
+        });
+        const sessions = new FakeSessions();
+        sessions.seed(profileAId, serverAUrl, serverAId);
+        const runtime = fakeRuntime([]);
+        const readStatus = vi.spyOn(sessions, "getStatus");
+        const api = apiFixture("a", selected.metadata!, [], {
+          updateRoom: vi.fn(async (_token, _roomId, input) => {
+            if (failure === "read") {
+              readStatus.mockRejectedValueOnce(new Error("SESSION_STORAGE_UNAVAILABLE"));
+            } else {
+              sessions.statuses.set(profileAId, { kind: "SIGNED_OUT" });
+              if (failure === "clear") {
+                vi.spyOn(sessions, "clear").mockRejectedValueOnce(
+                  new Error("SESSION_STORAGE_UNAVAILABLE"),
+                );
+              } else {
+                vi.mocked(runtime.stop).mockRejectedValueOnce(new Error("RUNTIME_STOP_FAILED"));
+              }
+            }
+            return { ...room(), ...input };
+          }),
+        });
+        const { app } = createApp({
+          profiles: new FakeProfiles([selected], profileAId),
+          sessions,
+          apis: new Map([[serverAUrl, api]]),
+          runtimeFactory: () => runtime,
+        });
+        await app.start();
+        await app.selectRoom(roomId);
+        const before = await app.getStatus();
+        const listener = vi.fn();
+        app.subscribe(listener);
+
+        await expect(
+          app.updateRoom({ name: "Accepted update", visibility: "PUBLIC", joinPolicy: "OPEN" }),
+        ).resolves.toBeUndefined();
+        expect(await app.getStatus()).toEqual(before);
+        expect(vi.getTimerCount()).toBe(1);
+        const checkpointReads = readStatus.mock.calls.length;
+        await vi.advanceTimersByTimeAsync(999);
+        expect(readStatus).toHaveBeenCalledTimes(checkpointReads);
+        await vi.advanceTimersByTimeAsync(1);
+        if (failure === "read") {
+          expect(await app.getStatus()).toMatchObject({ roomDetail: { name: "Accepted update" } });
+          expect(vi.getTimerCount()).toBe(1);
+        } else {
+          expect(await app.getStatus()).toMatchObject({
+            phase: "SESSION_EXPIRED",
+            account: null,
+            room: null,
+          });
+          expect(vi.getTimerCount()).toBe(0);
+        }
+        expect(listener).toHaveBeenCalledTimes(2);
+        expect(api.updateRoom).toHaveBeenCalledOnce();
+        await app.stop();
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("does not run a command after a failed initial session checkpoint or replace its business error", async () => {
+    const selected = profile(profileAId, serverAUrl, serverAId, {
+      metadata: metadata(serverAId, { capabilities: [] }),
+    });
+    const sessions = new FakeSessions();
+    sessions.seed(profileAId, serverAUrl, serverAId);
+    const api = apiFixture("a", selected.metadata!, []);
+    const { app } = createApp({
+      profiles: new FakeProfiles([selected], profileAId),
+      sessions,
+      apis: new Map([[serverAUrl, api]]),
+    });
+    await app.start();
+    await app.selectRoom(roomId);
+    const readStatus = vi.spyOn(sessions, "getStatus");
+    readStatus.mockRejectedValueOnce(new Error("SESSION_CHECK_FAILED"));
+    const input = { name: "Blocked update", visibility: "PUBLIC", joinPolicy: "OPEN" } as const;
+    await expect(app.updateRoom(input)).rejects.toThrow("SESSION_CHECK_FAILED");
+    expect(api.updateRoom).not.toHaveBeenCalled();
+
+    vi.mocked(api.updateRoom).mockImplementationOnce(async () => {
+      readStatus.mockRejectedValueOnce(new Error("FINAL_CHECK_FAILED"));
+      throw new Error("ROOM_UPDATE_REJECTED");
+    });
+    await expect(app.updateRoom(input)).rejects.toThrow("ROOM_UPDATE_REJECTED");
+    await app.stop();
+  });
+
+  it("bounds repeated checkpoint failures and can stop while session storage is unavailable", async () => {
+    vi.useFakeTimers();
+    try {
+      const selected = profile(profileAId, serverAUrl, serverAId, {
+        metadata: metadata(serverAId, { capabilities: [] }),
+      });
+      const sessions = new FakeSessions();
+      sessions.seed(profileAId, serverAUrl, serverAId);
+      const runtime = fakeRuntime([]);
+      const api = apiFixture("a", selected.metadata!, []);
+      const { app } = createApp({
+        profiles: new FakeProfiles([selected], profileAId),
+        sessions,
+        apis: new Map([[serverAUrl, api]]),
+        runtimeFactory: () => runtime,
+      });
+      await app.start();
+      await app.selectRoom(roomId);
+      const readStatus = vi
+        .spyOn(sessions, "getStatus")
+        .mockRejectedValue(new Error("SESSION_STORAGE_UNAVAILABLE"));
+      await expect(
+        app.updateRoom({ name: "Blocked update", visibility: "PUBLIC", joinPolicy: "OPEN" }),
+      ).rejects.toThrow("SESSION_STORAGE_UNAVAILABLE");
+      expect(api.updateRoom).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(1);
+      expect(readStatus).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(999);
+      expect(readStatus).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(readStatus).toHaveBeenCalledTimes(4);
+      expect(vi.getTimerCount()).toBe(1);
+
+      await expect(app.stop()).resolves.toBeUndefined();
+      expect(runtime.stop).toHaveBeenCalledOnce();
+      expect(await app.getStatus()).toMatchObject({
+        phase: "SIGNED_OUT",
+        room: null,
+        account: null,
+      });
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(readStatus).toHaveBeenCalledTimes(4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["runtime", "catalog"] as const)(
+    "cleans up the expiry timer and product view when stopping the %s fails",
+    async (failure) => {
+      vi.useFakeTimers();
+      try {
+        const selected = profile(profileAId, serverAUrl, serverAId);
+        const sessions = new FakeSessions();
+        sessions.seed(profileAId, serverAUrl, serverAId);
+        const runtime = fakeRuntime([]);
+        const { app, catalogs } = createApp({
+          profiles: new FakeProfiles([selected], profileAId),
+          sessions,
+          apis: new Map([[serverAUrl, apiFixture("a", selected.metadata!, [])]]),
+          runtimeFactory: () => runtime,
+        });
+        await app.start();
+        await app.selectRoom(roomId);
+        if (failure === "runtime") {
+          vi.mocked(runtime.stop).mockRejectedValueOnce(new Error("STOP_FAILED"));
+        } else {
+          catalogs[0]!.stop.mockRejectedValueOnce(new Error("STOP_FAILED"));
+        }
+        await expect(app.stop()).rejects.toThrow("STOP_FAILED");
+        expect(catalogs[0]!.stop).toHaveBeenCalledOnce();
+        expect(await app.getStatus()).toMatchObject({
+          phase: "SIGNED_OUT",
+          room: null,
+          account: null,
+        });
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each(["command", "event"] as const)(
+    "retains the last runtime event when the %s projection completes first",
+    async (firstCompletion) => {
+      const selected = profile(profileAId, serverAUrl, serverAId, {
+        metadata: metadata(serverAId, { capabilities: [] }),
+      });
+      const sessions = new FakeSessions();
+      sessions.seed(profileAId, serverAUrl, serverAId);
+      const runtime = fakeRuntime([]);
+      const live = runtimeStatus();
+      runtime.getStatus = vi.fn(async () => structuredClone(live));
+      let runtimeInput!: RoomRuntimeFactoryInput;
+      const { app } = createApp({
+        profiles: new FakeProfiles([selected], profileAId),
+        sessions,
+        apis: new Map([[serverAUrl, apiFixture("a", selected.metadata!, [])]]),
+        runtimeFactory: (input) => {
+          runtimeInput = input;
+          return runtime;
+        },
+      });
+      await app.start();
+      await app.selectRoom(roomId);
+      let commandEntered!: () => void;
+      let releaseCommand!: () => void;
+      const commandWaiting = new Promise<void>((resolve) => {
+        commandEntered = resolve;
+      });
+      const commandBarrier = new Promise<void>((resolve) => {
+        releaseCommand = resolve;
+      });
+      let eventEntered!: () => void;
+      let releaseEvent!: () => void;
+      const eventWaiting = new Promise<void>((resolve) => {
+        eventEntered = resolve;
+      });
+      const eventBarrier = new Promise<void>((resolve) => {
+        releaseEvent = resolve;
+      });
+      vi.mocked(runtime.getStatus)
+        .mockImplementationOnce(async () => {
+          const snapshot = structuredClone(live);
+          commandEntered();
+          await commandBarrier;
+          return snapshot;
+        })
+        .mockImplementationOnce(async () => {
+          const snapshot = structuredClone(live);
+          eventEntered();
+          await eventBarrier;
+          return snapshot;
+        });
+      const command = app.handleActiveTabChanged(42);
+      await commandWaiting;
+      live.serverSeq = 9;
+      runtimeInput.onStatusChanged?.();
+      await eventWaiting;
+      if (firstCompletion === "command") {
+        releaseCommand();
+        await command;
+        releaseEvent();
+      } else {
+        releaseEvent();
+        await vi.waitFor(async () => expect((await app.getStatus()).room?.serverSeq).toBe(9));
+        live.serverSeq = 10;
+        releaseCommand();
+        await command;
+      }
+      const expectedSeq = firstCompletion === "command" ? 9 : 10;
+      await vi.waitFor(async () =>
+        expect((await app.getStatus()).room?.serverSeq).toBe(expectedSeq),
+      );
+      await app.stop();
+    },
+  );
+
+  it("keeps the public placeholder unconfigured without probing the network", async () => {
+    const baseUrl = "https://syncaction.example.com";
+    const selected = profile(profileAId, baseUrl, serverAId, {
+      mode: "UNVERIFIED",
+      metadata: null,
+    });
+    const api = apiFixture("placeholder", metadata(serverAId), []);
+    const { app, catalogs } = createApp({
+      profiles: new FakeProfiles([selected], profileAId),
+      apis: new Map([[baseUrl, api]]),
+    });
+
+    await app.start();
+    await expect(app.getStatus()).resolves.toMatchObject({
+      phase: "SIGNED_OUT",
+      errorCode: "SERVER_NOT_CONFIGURED",
+      selectedProfileId: profileAId,
+    });
+    await app.selectServer(profileAId);
+    expect(api.getHealth).not.toHaveBeenCalled();
+    expect(api.getMeta).not.toHaveBeenCalled();
+    expect(api.listPublicRooms).not.toHaveBeenCalled();
+    expect(catalogs).toHaveLength(0);
+  });
+
+  it("retries the same failed profile but leaves an active room untouched", async () => {
+    const meta = metadata(serverAId, { capabilities: [] });
+    const selected = profile(profileAId, serverAUrl, serverAId, { metadata: meta });
+    const api = apiFixture("a", meta, []);
+    vi.mocked(api.getHealth).mockRejectedValueOnce(new Error("SERVER_OFFLINE"));
+    const sessions = new FakeSessions();
+    sessions.seed(profileAId, serverAUrl, serverAId);
+    const { app, runtimeEvents } = createApp({
+      profiles: new FakeProfiles([selected], profileAId),
+      sessions,
+      apis: new Map([[serverAUrl, api]]),
+    });
+    await app.start();
+    expect((await app.getStatus()).phase).toBe("ERROR");
+    await app.selectServer(profileAId);
+    expect((await app.getStatus()).phase).toBe("AUTHENTICATED_NO_ROOM");
+    expect(api.getHealth).toHaveBeenCalledTimes(2);
+    await app.selectRoom(roomId);
+    await app.selectServer(profileAId);
+    expect((await app.getStatus()).phase).toBe("ROOM_ACTIVE");
+    expect(api.getHealth).toHaveBeenCalledTimes(2);
+    expect(runtimeEvents).toEqual(["runtime:start"]);
+  });
+
+  it("routes first-group creation through the real app and preserves media failures", async () => {
+    const meta = metadata(serverAId, { capabilities: [] });
+    const selected = profile(profileAId, serverAUrl, serverAId, { metadata: meta });
+    const sessions = new FakeSessions();
+    sessions.seed(profileAId, serverAUrl, serverAId);
+    const runtime = fakeRuntime([]);
+    const acknowledgement = {
+      type: "media.command.ack" as const,
+      protocolVersion: 1 as const,
+      commandId: clientOpId,
+      roomId: roomId as PublicRoom["id"],
+      accepted: true as const,
+      code: null,
+      playbackGroupId,
+      groupRevision: 1,
+      roomMediaRevision: 1,
+    };
+    runtime.createMediaGroup = vi.fn(async () => acknowledgement);
+    const { app } = createApp({
+      profiles: new FakeProfiles([selected], profileAId),
+      sessions,
+      apis: new Map([[serverAUrl, apiFixture("a", meta, [])]]),
+      runtimeFactory: () => runtime,
+    });
+    const router = new ExtensionCommandRouter({
+      app,
+      browser: { tabs: { query: async () => [{ id: 42, url: "https://video.example/watch" }] } },
+      pageCollaborationPort: {
+        removeOrigin: async () => false,
+        refreshOriginAccess: async () => undefined,
+      },
+      commandBindings: { read: async () => ({}) as never },
+      originConsents: { markPolicySynchronized: async () => undefined },
+    });
+    const command = { type: "ui.command", commandId: clientOpId, name: "MEDIA_GROUP_CREATE" };
+    await app.start();
+    await expect(router.execute(command)).rejects.toThrow("ROOM_RUNTIME_UNAVAILABLE");
+    await app.selectRoom(roomId);
+    await expect(router.execute(command)).resolves.toEqual(acknowledgement);
+    expect(runtime.createMediaGroup).toHaveBeenCalledWith(42);
+    runtime.getPageDocumentRevision = vi.fn(async () => ({ roomEpoch: 0, tabUpdatedAtSeq: 1 }));
+    const expectedContext = {
+      profileId: profileAId,
+      tabId: 42,
+      roomId: room().id,
+      documentRevision: { roomEpoch: 0, tabUpdatedAtSeq: 1 },
+    };
+    await expect(router.execute({ ...command, payload: { expectedContext } })).resolves.toEqual(
+      acknowledgement,
+    );
+    expect(runtime.createMediaGroup).toHaveBeenLastCalledWith(42, expectedContext.documentRevision);
+    await expect(
+      router.execute({
+        ...command,
+        payload: { expectedContext: { ...expectedContext, profileId: profileBId } },
+      }),
+    ).rejects.toThrow("PAGE_PERMISSION_INTENT_STALE");
+    await expect(
+      router.execute({
+        ...command,
+        payload: { expectedContext: { ...expectedContext, roomId: requestId } },
+      }),
+    ).rejects.toThrow("PAGE_PERMISSION_INTENT_STALE");
+    vi.mocked(runtime.getPageDocumentRevision).mockResolvedValueOnce({
+      roomEpoch: 0,
+      tabUpdatedAtSeq: 2,
+    });
+    await expect(router.execute({ ...command, payload: { expectedContext } })).rejects.toThrow(
+      "MEDIA_CONTEXT_CHANGED",
+    );
+    expect(runtime.createMediaGroup).toHaveBeenCalledTimes(2);
+    vi.mocked(runtime.createMediaGroup!).mockRejectedValueOnce(new Error("MEDIA_NOT_READY"));
+    await expect(router.execute(command)).rejects.toThrow("MEDIA_NOT_READY");
+    vi.mocked(runtime.createMediaGroup!).mockRejectedValueOnce(
+      new Error("MEDIA_PERMISSION_REQUIRED"),
+    );
+    await expect(router.execute(command)).rejects.toThrow("MEDIA_PERMISSION_REQUIRED");
+  });
+
+  it("joins through the real router only for the captured permission context and rejects negative acknowledgements", async () => {
+    const meta = metadata(serverAId, { capabilities: [] });
+    const selected = profile(profileAId, serverAUrl, serverAId, { metadata: meta });
+    const sessions = new FakeSessions();
+    sessions.seed(profileAId, serverAUrl, serverAId);
+    const runtime = fakeRuntime([]);
+    const acknowledgement = MediaCommandAckSchema.parse({
+      type: "media.command.ack",
+      protocolVersion: 1,
+      commandId: clientOpId,
+      roomId,
+      accepted: true,
+      code: null,
+      playbackGroupId,
+      groupRevision: 1,
+      roomMediaRevision: 1,
+    });
+    runtime.joinMediaGroup = vi.fn(async () => acknowledgement);
+    runtime.getPageDocumentRevision = vi.fn(async () => ({ roomEpoch: 0, tabUpdatedAtSeq: 1 }));
+    const { app } = createApp({
+      profiles: new FakeProfiles([selected], profileAId),
+      sessions,
+      apis: new Map([[serverAUrl, apiFixture("a", meta, [])]]),
+      runtimeFactory: () => runtime,
+    });
+    const tab = { id: 42, url: "https://video.example/watch" };
+    const router = new ExtensionCommandRouter({
+      app,
+      browser: { tabs: { query: async () => [tab] } },
+      pageCollaborationPort: {
+        removeOrigin: async () => false,
+        refreshOriginAccess: async () => undefined,
+      },
+      commandBindings: { read: async () => ({}) as never },
+      originConsents: { markPolicySynchronized: async () => undefined },
+    });
+    const expectedContext = {
+      profileId: profileAId,
+      roomId: room().id,
+      tabId: 42,
+      documentRevision: { roomEpoch: 0, tabUpdatedAtSeq: 1 },
+      url: tab.url,
+    };
+    const command = {
+      type: "ui.command",
+      commandId: clientOpId,
+      name: "MEDIA_GROUP_JOIN",
+      payload: { playbackGroupId, expectedContext },
+    };
+    await app.start();
+    await app.selectRoom(roomId);
+    await expect(router.execute(command)).resolves.toBeUndefined();
+    expect(runtime.joinMediaGroup).toHaveBeenCalledWith(playbackGroupId);
+    for (const mismatch of [
+      { profileId: profileBId },
+      { roomId: requestId },
+      { tabId: 43 },
+      { url: "https://video.example/other" },
+    ]) {
+      await expect(
+        router.execute({
+          ...command,
+          payload: { playbackGroupId, expectedContext: { ...expectedContext, ...mismatch } },
+        }),
+      ).rejects.toThrow("PAGE_PERMISSION_INTENT_STALE");
+    }
+    vi.mocked(runtime.getPageDocumentRevision).mockResolvedValueOnce({
+      roomEpoch: 0,
+      tabUpdatedAtSeq: 2,
+    });
+    await expect(router.execute(command)).rejects.toThrow("MEDIA_CONTEXT_CHANGED");
+    expect(runtime.joinMediaGroup).toHaveBeenCalledOnce();
+    vi.mocked(runtime.joinMediaGroup).mockResolvedValueOnce(
+      MediaCommandAckSchema.parse({
+        ...acknowledgement,
+        accepted: false,
+        code: "GROUP_NOT_FOUND",
+        playbackGroupId: null,
+        groupRevision: null,
+      }),
+    );
+    await expect(router.execute(command)).rejects.toThrow("GROUP_NOT_FOUND");
+    await expect(
+      router.execute({ ...command, payload: { playbackGroupId } }),
+    ).resolves.toBeUndefined();
+    await app.stop();
+  });
+
+  it.each(["room", "profile"] as const)(
+    "does not deliver a queued join after replacing the %s runtime",
+    async (boundary) => {
+      const meta = metadata(serverAId, { capabilities: [] });
+      const selected = profile(profileAId, serverAUrl, serverAId, { metadata: meta });
+      const other = profile(profileBId, serverBUrl, serverBId, {
+        metadata: metadata(serverBId, { capabilities: [] }),
+      });
+      const sessions = new FakeSessions();
+      sessions.seed(profileAId, serverAUrl, serverAId);
+      sessions.seed(profileBId, serverBUrl, serverBId);
+      const api = apiFixture("a", meta, []);
+      const secondRoomId = requestId as PublicRoom["id"];
+      vi.mocked(api.listRooms).mockResolvedValue([room(), { ...room(), id: secondRoomId }]);
+      vi.mocked(api.getRoom).mockImplementation(async (_token, id) => ({
+        ...roomDetail(),
+        id: id as PublicRoom["id"],
+      }));
+      const runtimes: RoomRuntime[] = [];
+      const { app } = createApp({
+        profiles: new FakeProfiles([selected, other], profileAId),
+        sessions,
+        apis: new Map([
+          [serverAUrl, api],
+          [serverBUrl, apiFixture("b", other.metadata!, [])],
+        ]),
+        runtimeFactory: () => {
+          const runtime = fakeRuntime([]);
+          runtime.joinMediaGroup = vi.fn(async () => undefined);
+          runtimes.push(runtime);
+          return runtime;
+        },
+      });
+      await app.start();
+      await app.selectRoom(roomId);
+      const switching =
+        boundary === "room" ? app.selectRoom(secondRoomId) : app.selectServer(profileBId);
+      const selecting = boundary === "profile" ? app.selectRoom(roomId) : Promise.resolve();
+      const joined = expect(app.joinMediaGroup(playbackGroupId)).rejects.toThrow(
+        "MEDIA_CONTEXT_CHANGED",
+      );
+      await switching;
+      await selecting;
+      await joined;
+      expect(runtimes).toHaveLength(2);
+      expect(
+        runtimes.every((runtime) => vi.mocked(runtime.joinMediaGroup).mock.calls.length === 0),
+      ).toBe(true);
+      await app.stop();
+    },
+  );
+
   it("activates an account and persists profile changes through the existing session", async () => {
     const selected = profile(profileAId, serverAUrl, serverAId, {
       metadata: metadata(serverAId, {
@@ -625,33 +1474,33 @@ describe("ExtensionAppController vNext server hub", () => {
 
     await app.activateAccount({
       activationKey: `sak_${"A".repeat(43)}`,
-      username: "alex",
-      displayName: "Alex",
+      username: "thomas",
+      displayName: "Thomas",
       password: "correct horse battery",
     });
     expect(activateAccount).toHaveBeenCalledWith({
       activationKey: `sak_${"A".repeat(43)}`,
-      username: "alex",
-      displayName: "Alex",
+      username: "thomas",
+      displayName: "Thomas",
       password: "correct horse battery",
       deviceId,
     });
     expect(await app.getStatus()).toMatchObject({
       phase: "AUTHENTICATED_NO_ROOM",
-      account: { username: "alex" },
+      account: { username: "thomas" },
     });
 
     await app.updateAccountProfile({
-      username: "alex.renamed",
-      displayName: "Alex Renamed",
+      username: "thomas.renamed",
+      displayName: "Thomas Renamed",
     });
     expect(updateProfile).toHaveBeenCalledWith("access-token", {
-      username: "alex.renamed",
-      displayName: "Alex Renamed",
+      username: "thomas.renamed",
+      displayName: "Thomas Renamed",
     });
     expect(sessions.calls).toContain(`sessions:updateAccount:${profileAId}`);
     expect(await app.getStatus()).toMatchObject({
-      account: { username: "alex.renamed", displayName: "Alex Renamed" },
+      account: { username: "thomas.renamed", displayName: "Thomas Renamed" },
     });
 
     await app.changeAccountPassword({
@@ -870,7 +1719,7 @@ describe("ExtensionAppController vNext server hub", () => {
     });
     expect(sessions.calls).toEqual([`sessions:clear:${profileAId}`]);
     expect(api.logout).not.toHaveBeenCalled();
-    await expect(app.login({ username: "alex", password: "password" })).rejects.toThrow(
+    await expect(app.login({ username: "thomas", password: "password" })).rejects.toThrow(
       "SERVER_IDENTITY_CHANGED",
     );
     expect(api.login).not.toHaveBeenCalled();
@@ -1078,6 +1927,11 @@ describe("ExtensionAppController realtime product state", () => {
     await vi.waitFor(async () =>
       expect((await app.getStatus()).roomDetail?.members).toHaveLength(2),
     );
+    const afterJoin = await app.getStatus();
+    expect(() => projectUiState(afterJoin, afterJoin.profiles, noPageAccess)).not.toThrow();
+    expect(afterJoin.rooms).toEqual([room("OWNER", 1)]);
+    await expect(app.closeMediaGroup(playbackGroupId)).resolves.toBeUndefined();
+    expect(events).toContain(`media:close:${playbackGroupId}`);
     expect(api.getRoom).toHaveBeenCalledOnce();
     expect(api.listRooms).toHaveBeenCalledOnce();
 
@@ -1099,7 +1953,11 @@ describe("ExtensionAppController realtime product state", () => {
       joinPolicy: "INVITE_ONLY",
     });
     await vi.waitFor(() => expect(api.getRoom).toHaveBeenCalledTimes(2));
-    expect((await app.getStatus()).roomDetail?.name).toBe("Gap healed");
+    const afterGap = await app.getStatus();
+    expect(afterGap.roomDetail?.name).toBe("Gap healed");
+    expect(afterGap.roomDetail?.members).toEqual(currentDetail.members);
+    expect(afterGap.roomDetail?.pendingInvitations).toEqual(currentDetail.pendingInvitations);
+    expect(() => projectUiState(afterGap, afterGap.profiles, noPageAccess)).not.toThrow();
     expect(api.listRooms).toHaveBeenCalledOnce();
 
     const created = notification();
@@ -1210,7 +2068,7 @@ describe("ExtensionAppController realtime product state", () => {
       enableVolatilePointer: false,
       enableContentCompatibility: false,
     });
-    expect(listener).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(listener).toHaveBeenCalledOnce());
     expect(listener).toHaveBeenLastCalledWith(["room", "collaboration"]);
     listener.mockClear();
     await app.handleActiveTabChanged(42);

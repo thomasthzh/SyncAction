@@ -649,6 +649,17 @@ h3 {
   font-weight: 400;
 }
 
+.start-watching {
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+}
+
+.start-watching h2 {
+  margin: 0 0 6px;
+  font-size: 18px;
+}
+
 .editorial-surface {
   min-width: 0;
   padding: 14px;

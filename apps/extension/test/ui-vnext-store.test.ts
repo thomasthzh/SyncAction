@@ -21,7 +21,7 @@ function slices(): UiStateSlices {
       profiles: [
         {
           profileId: "syncaction-production",
-          baseUrl: "https://syncaction.example.com",
+          baseUrl: "https://demo.syncaction.example",
           mode: "UNVERIFIED",
           metadata: null,
           lastHealthyAt: null,

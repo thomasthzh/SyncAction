@@ -4,6 +4,7 @@ import { useCommandFeedback } from "../use-command-feedback.js";
 import { Icon, type IconName } from "../icons.js";
 import { ActionableStatus } from "./actionable-status.js";
 import { GlassMaterial } from "./glass-material.js";
+import { shareResult } from "../share-result.js";
 
 export interface BottomActionDockProps {
   readonly store: UiStore;
@@ -88,31 +89,10 @@ export function BottomActionDock({
       tool.label,
       async () => {
         const result = await store.command(command);
-        if (command.name !== "CURRENT_TAB_SHARE" || !result.ok) return result;
-        // Command delivery can succeed without recording a share operation.
-        const value = result.value;
-        let errorCode = "SHARE_RESULT_UNKNOWN";
-        if (typeof value === "object" && value !== null && "kind" in value) {
-          const reason = "reason" in value ? value.reason : null;
-          switch (value.kind) {
-            case "INTENT_RECORDED":
-              return result;
-            case "IGNORED":
-              if (reason === "NO_CHANGE") {
-                successMessage = "当前页面已在共享列表中";
-                return result;
-              }
-              errorCode = reason === "LOADING" ? "SHARE_PAGE_LOADING" : "SHARE_NOT_SUBMITTED";
-              break;
-            case "BLOCKED":
-              errorCode = reason === "ROOM_TAB_LIMIT_REACHED" ? reason : "SHARE_NOT_READY";
-              break;
-            case "RECOVERY_REQUIRED":
-              errorCode = "SHARE_RECOVERY_REQUIRED";
-              break;
-          }
-        }
-        return { type: result.type, commandId: result.commandId, ok: false, errorCode };
+        if (command.name !== "CURRENT_TAB_SHARE") return result;
+        const outcome = shareResult(result);
+        if (outcome.message !== null) successMessage = outcome.message;
+        return outcome.result;
       },
       () => successMessage,
     );

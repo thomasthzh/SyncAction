@@ -73,7 +73,7 @@ export function AppShell({
               </span>
             ) : null}
           </button>
-          {account === null ? (
+          {account?.status !== "ACTIVE" || shell.phase === "SESSION_EXPIRED" ? (
             <button class="auth-button" type="button" onClick={onOpenAuth}>
               登录 | 注册
             </button>

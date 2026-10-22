@@ -155,12 +155,9 @@ export function planMediaLeaderAuthorityRestoration(
   const leaderPositionMs = predictGroupPosition(group, nowMs);
   const localNow = predictMediaObservation(localObserved, localTarget, nowMs);
   const driftMs = leaderPositionMs - localNow.positionMs;
-  const forceSeek =
-    forceSeekInput ||
-    group.observed.paused ||
-    group.observed.ended ||
-    group.status === "ENDED_WAITING" ||
-    Math.abs(driftMs) >= 300;
+  const stationary =
+    group.observed.paused || group.observed.ended || group.status === "ENDED_WAITING";
+  const forceSeek = forceSeekInput || Math.abs(driftMs) >= (stationary ? 1 : 300);
   const actions: MediaPageApplyAction[] = [];
 
   if (forceSeek) {

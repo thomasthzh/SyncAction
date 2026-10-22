@@ -42,8 +42,8 @@ const proposalId = "00000000-0000-4000-8000-000000000102";
 
 const account: PublicAccount = {
   id: userId,
-  username: "alex",
-  displayName: "Alex",
+  username: "thomas",
+  displayName: "Thomas",
   status: "ACTIVE",
   passwordResetRequired: false,
   createdAt: "2026-07-27T00:00:00.000Z",
@@ -71,8 +71,8 @@ function detail(value: PublicRoom): PublicRoomDetail {
     members: [
       {
         userId,
-        username: "alex",
-        displayName: "Alex",
+        username: "thomas",
+        displayName: "Thomas",
         role: value.role,
         joinedAt: "2026-07-27T00:00:00.000Z",
       },
@@ -118,8 +118,8 @@ class FakeSessions implements ExtensionProductSessionPort {
       kind: "AUTHENTICATED",
       account: input.response.account,
       deviceId: String(input.deviceId),
-      accessTokenExpiresAt: 2,
-      refreshTokenExpiresAt: 3,
+      accessTokenExpiresAt: Date.now() + 10_000,
+      refreshTokenExpiresAt: Date.now() + 20_000,
     };
     this.stored = {
       version: 2,
@@ -132,9 +132,9 @@ class FakeSessions implements ExtensionProductSessionPort {
       deviceId: String(input.deviceId) as ExtensionProductSession["deviceId"],
       sessionId: input.response.sessionId,
       accessToken: input.response.accessToken,
-      accessTokenExpiresAt: 2,
+      accessTokenExpiresAt: Date.now() + 10_000,
       refreshToken: input.response.refreshToken,
-      refreshTokenExpiresAt: 3,
+      refreshTokenExpiresAt: Date.now() + 20_000,
       account: input.response.account,
     };
     return this.stored!;
@@ -427,8 +427,8 @@ describe("ExtensionAppController", () => {
       kind: "AUTHENTICATED",
       account,
       deviceId,
-      accessTokenExpiresAt: 2,
-      refreshTokenExpiresAt: 3,
+      accessTokenExpiresAt: Date.now() + 10_000,
+      refreshTokenExpiresAt: Date.now() + 20_000,
     };
     const app = new ExtensionAppController({
       serverUrl,
@@ -494,8 +494,8 @@ describe("ExtensionAppController", () => {
       kind: "AUTHENTICATED",
       account,
       deviceId,
-      accessTokenExpiresAt: 2,
-      refreshTokenExpiresAt: 3,
+      accessTokenExpiresAt: Date.now() + 10_000,
+      refreshTokenExpiresAt: Date.now() + 20_000,
     };
     const app = new ExtensionAppController({
       serverUrl,
@@ -537,8 +537,8 @@ describe("ExtensionAppController", () => {
       kind: "AUTHENTICATED",
       account,
       deviceId,
-      accessTokenExpiresAt: 2,
-      refreshTokenExpiresAt: 3,
+      accessTokenExpiresAt: Date.now() + 10_000,
+      refreshTokenExpiresAt: Date.now() + 20_000,
     };
     const app = new ExtensionAppController({
       serverUrl,
@@ -570,8 +570,8 @@ describe("ExtensionAppController", () => {
       kind: "AUTHENTICATED",
       account,
       deviceId,
-      accessTokenExpiresAt: 2,
-      refreshTokenExpiresAt: 3,
+      accessTokenExpiresAt: Date.now() + 10_000,
+      refreshTokenExpiresAt: Date.now() + 20_000,
     };
     const app = new ExtensionAppController({
       serverUrl,
@@ -668,8 +668,8 @@ describe("ExtensionAppController", () => {
       kind: "AUTHENTICATED",
       account,
       deviceId,
-      accessTokenExpiresAt: 2,
-      refreshTokenExpiresAt: 3,
+      accessTokenExpiresAt: Date.now() + 10_000,
+      refreshTokenExpiresAt: Date.now() + 20_000,
     };
     const runtimes: FakeRuntime[] = [];
     const app = new ExtensionAppController({
@@ -749,12 +749,12 @@ describe("ExtensionAppController", () => {
     });
 
     await app.start();
-    await app.login({ username: "alex", password: "correct horse battery" });
+    await app.login({ username: "thomas", password: "correct horse battery" });
 
     const status = await app.getStatus();
     expect(status).toMatchObject({
       phase: "AUTHENTICATED_NO_ROOM",
-      account: { username: "alex" },
+      account: { username: "thomas" },
       rooms: [{ id: firstRoomId }, { id: secondRoomId }],
       selectedRoomId: null,
     });
@@ -762,7 +762,7 @@ describe("ExtensionAppController", () => {
     expect(JSON.stringify(status)).not.toContain("correct horse battery");
     expect(events).toEqual(["session:establish"]);
     expect(api.login).toHaveBeenCalledWith({
-      username: "alex",
+      username: "thomas",
       password: "correct horse battery",
       deviceId,
     });
@@ -782,14 +782,14 @@ describe("ExtensionAppController", () => {
     await app.start();
 
     await app.register({
-      username: "alex",
-      displayName: "Alex",
+      username: "thomas",
+      displayName: "Thomas",
       password: "correct horse battery",
     });
 
     expect(await app.getStatus()).toMatchObject({
       phase: "ACCOUNT_PENDING",
-      account: { username: "alex", status: "PENDING" },
+      account: { username: "thomas", status: "PENDING" },
       room: null,
     });
   });
@@ -807,8 +807,8 @@ describe("ExtensionAppController", () => {
       kind: "AUTHENTICATED",
       account,
       deviceId,
-      accessTokenExpiresAt: 2,
-      refreshTokenExpiresAt: 3,
+      accessTokenExpiresAt: Date.now() + 10_000,
+      refreshTokenExpiresAt: Date.now() + 20_000,
     };
     const runtimeFactory = vi.fn(({ room }: { room: PublicRoom }) => {
       return new FakeRuntime(room.id, events);
@@ -860,8 +860,8 @@ describe("ExtensionAppController", () => {
       kind: "AUTHENTICATED",
       account,
       deviceId,
-      accessTokenExpiresAt: 2,
-      refreshTokenExpiresAt: 3,
+      accessTokenExpiresAt: Date.now() + 10_000,
+      refreshTokenExpiresAt: Date.now() + 20_000,
     };
     const app = new ExtensionAppController({
       serverUrl,
@@ -899,8 +899,8 @@ describe("ExtensionAppController", () => {
       kind: "AUTHENTICATED",
       account,
       deviceId,
-      accessTokenExpiresAt: 2,
-      refreshTokenExpiresAt: 3,
+      accessTokenExpiresAt: Date.now() + 10_000,
+      refreshTokenExpiresAt: Date.now() + 20_000,
     };
     const app = new ExtensionAppController({
       serverUrl,
@@ -940,8 +940,8 @@ describe("ExtensionAppController", () => {
       kind: "AUTHENTICATED",
       account,
       deviceId,
-      accessTokenExpiresAt: 2,
-      refreshTokenExpiresAt: 3,
+      accessTokenExpiresAt: Date.now() + 10_000,
+      refreshTokenExpiresAt: Date.now() + 20_000,
     };
     secondSessions.status = structuredClone(firstSessions.status);
     const first = new ExtensionAppController({
@@ -1011,8 +1011,8 @@ describe("ExtensionAppController", () => {
       kind: "AUTHENTICATED",
       account,
       deviceId,
-      accessTokenExpiresAt: 2,
-      refreshTokenExpiresAt: 3,
+      accessTokenExpiresAt: Date.now() + 10_000,
+      refreshTokenExpiresAt: Date.now() + 20_000,
     };
     sessions.stored = {
       version: 2,
@@ -1022,9 +1022,9 @@ describe("ExtensionAppController", () => {
       deviceId: deviceId as ExtensionProductSession["deviceId"],
       sessionId: sessionResponse().sessionId,
       accessToken: "access-token",
-      accessTokenExpiresAt: 2,
+      accessTokenExpiresAt: Date.now() + 10_000,
       refreshToken: "A".repeat(43),
-      refreshTokenExpiresAt: 3,
+      refreshTokenExpiresAt: Date.now() + 20_000,
       account,
     };
     const api = createApi();
@@ -1057,8 +1057,8 @@ describe("ExtensionAppController", () => {
       kind: "AUTHENTICATED",
       account,
       deviceId,
-      accessTokenExpiresAt: 2,
-      refreshTokenExpiresAt: 3,
+      accessTokenExpiresAt: Date.now() + 10_000,
+      refreshTokenExpiresAt: Date.now() + 20_000,
     };
     const app = new ExtensionAppController({
       serverUrl,
@@ -1095,8 +1095,8 @@ describe("ExtensionAppController", () => {
       kind: "AUTHENTICATED",
       account,
       deviceId,
-      accessTokenExpiresAt: 2,
-      refreshTokenExpiresAt: 3,
+      accessTokenExpiresAt: Date.now() + 10_000,
+      refreshTokenExpiresAt: Date.now() + 20_000,
     };
     const logicalTabId = "018f8f8e-4b5c-7d6e-8f90-123456789ab6";
     const runtimeStatus: ExtensionStatus = {
@@ -1115,8 +1115,8 @@ describe("ExtensionAppController", () => {
         presences: [
           {
             userId,
-            username: "alex",
-            displayName: "Alex",
+            username: "thomas",
+            displayName: "Thomas",
             deviceId: "018f8f8e-4b5c-7d6e-8f90-123456789ab7" as NonNullable<
               ExtensionStatus["presence"]
             >["presences"][number]["deviceId"],
@@ -1127,8 +1127,8 @@ describe("ExtensionAppController", () => {
           },
           {
             userId,
-            username: "alex",
-            displayName: "Alex",
+            username: "thomas",
+            displayName: "Thomas",
             deviceId: "018f8f8e-4b5c-7d6e-8f90-123456789ab8" as NonNullable<
               ExtensionStatus["presence"]
             >["presences"][number]["deviceId"],
@@ -1235,7 +1235,7 @@ describe("ExtensionAppController", () => {
       members: [
         {
           userId,
-          displayName: "Alex",
+          displayName: "Thomas",
           roomRole: "OWNER",
           online: true,
           deviceCount: 2,
@@ -1299,8 +1299,8 @@ describe("ExtensionAppController", () => {
       kind: "AUTHENTICATED",
       account,
       deviceId,
-      accessTokenExpiresAt: 2,
-      refreshTokenExpiresAt: 3,
+      accessTokenExpiresAt: Date.now() + 10_000,
+      refreshTokenExpiresAt: Date.now() + 20_000,
     };
     const logicalTabId = "018f8f8e-4b5c-7d6e-8f90-123456789ab6";
     const followerId = "018f8f8e-4b5c-7d6e-8f90-123456789ab7";
@@ -1323,8 +1323,8 @@ describe("ExtensionAppController", () => {
       members: [
         {
           userId,
-          username: "alex",
-          displayName: "Alex",
+          username: "thomas",
+          displayName: "Thomas",
           activeDeviceId: deviceId,
           joinedAtServerMs: 1_700_000_000_000,
           online: true,
@@ -1442,6 +1442,7 @@ describe("ExtensionAppController", () => {
       throw new Error("expected local media membership");
     }
     runtimeStatus.media.localMembership.activeDevice = false;
+    await app.handleActiveTabChanged(42);
     expect((await app.getStatus()).collaboration.proposals).toEqual([]);
   });
 });

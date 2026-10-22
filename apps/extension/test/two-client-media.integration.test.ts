@@ -31,6 +31,7 @@ import {
   type MediaPagePort,
   type MediaScheduler,
 } from "../src/media-controller.js";
+import { predictMediaObservation } from "../src/media-controller-correction.js";
 import {
   MediaObservedMessageSchema,
   type MediaObservedMessage,
@@ -997,9 +998,26 @@ async function publishLeaderControl(input: {
   try {
     await waitFor(
       () =>
+        [input.leader, ...input.followers].every((client) => {
+          const observed = client.media.getStatus().playbackGroups[0]?.observed;
+          return (
+            observed !== undefined &&
+            observed !== null &&
+            observed.observedAtClientMs >= input.state.observedAtClientMs &&
+            observed.positionMs ===
+              predictMediaObservation(input.state, input.target, observed.observedAtClientMs)
+                .positionMs &&
+            observed.paused === input.state.paused &&
+            observed.playbackRate === input.state.playbackRate &&
+            observed.ended === input.state.ended &&
+            observed.buffering === input.state.buffering
+          );
+        }) &&
         input.followers.every((follower) =>
           actionsSince(follower.page, marks.get(follower) ?? 0).some(
-            (action) => action.type === input.expectedAction,
+            (action) =>
+              action.type === input.expectedAction &&
+              (action.type !== "SEEK" || action.positionMs === input.state.positionMs),
           ),
         ),
       `${input.expectedAction} did not reach both followers`,

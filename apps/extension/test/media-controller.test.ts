@@ -17,7 +17,8 @@ import {
   type PlaybackGroupSnapshot,
 } from "@syncaction/protocol";
 import { ReplicaRecordSchema, type ReplicaRecord } from "@syncaction/replica";
-import { describe, expect, it } from "vitest";
+import { applyLeaderHeartbeat, type RoomMediaState } from "@syncaction/media";
+import { describe, expect, it, vi } from "vitest";
 import {
   MediaController,
   type MediaControllerOptions,
@@ -31,6 +32,7 @@ import {
   type MediaPageApplyAction,
 } from "../src/page-collaboration/messages.js";
 import type { MediaTransport } from "../src/socket-transport.js";
+import { planMediaLeaderAuthorityRestoration } from "../src/media-controller-correction.js";
 
 const roomId = RoomIdSchema.parse("018f8f8e-4b5c-7d6e-8f90-123456789a01");
 const logicalTabId = LogicalTabIdSchema.parse("018f8f8e-4b5c-7d6e-8f90-123456789a02");
@@ -421,6 +423,7 @@ function harness(
     tabId?: number;
     presenceLogicalTabId?: string | null;
     mediaCompatible?: boolean;
+    onStatusChanged?: () => void;
   } = {},
 ): Harness {
   const scheduler = new FakeScheduler();
@@ -477,6 +480,7 @@ function harness(
     now: () => scheduler.now,
     createUuid: () => `00000000-0000-4000-8000-${String(uuidCounter++).padStart(12, "0")}`,
     scheduler,
+    ...(options.onStatusChanged === undefined ? {} : { onStatusChanged: options.onStatusChanged }),
   };
   return {
     controller: new MediaController(controllerOptions),
@@ -528,6 +532,282 @@ async function observe(
   await value.controller.handleMediaObserved(10, 0, observedMessage(observed, overrides));
   await value.controller.whenIdle();
 }
+
+describe("creating a playback group from the current shared page", () => {
+  it("accepts the transport snapshot after a permission boundary and creation ACK while ignoring the old handler", async () => {
+    const onStatusChanged = vi.fn();
+    const value = harness({ onStatusChanged });
+    await connect(value, snapshot([]));
+    const oldHandler = value.transport.handler!;
+    await value.controller.handlePermissionBoundaryChanged();
+    await observe(value);
+    await expect(value.controller.createGroupFromCurrentPage(10)).resolves.toMatchObject({
+      accepted: true,
+    });
+    onStatusChanged.mockClear();
+    oldHandler(snapshot([group()], 99));
+    await value.controller.whenIdle();
+    expect(value.controller.getStatus().playbackGroups).toEqual([]);
+    expect(onStatusChanged).not.toHaveBeenCalled();
+    value.transport.emit(snapshot([group()], 2));
+    await value.controller.whenIdle();
+    expect(value.controller.getStatus()).toMatchObject({ roomMediaRevision: 2 });
+    expect(value.controller.getStatus().playbackGroups).toHaveLength(1);
+    expect(onStatusChanged).toHaveBeenCalledOnce();
+    await value.controller.dispose();
+  });
+
+  it("does not reinstall the media subscription when stopped during permission cleanup", async () => {
+    const value = harness();
+    await connect(value);
+    await observe(value);
+    let entered!: () => void;
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const barrier = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.spyOn(value.page, "setFollowerLock").mockImplementationOnce(async () => {
+      entered();
+      await barrier;
+    });
+    const boundary = value.controller.handlePermissionBoundaryChanged();
+    await waiting;
+    const stopping = value.controller.setSynchronized(false);
+    release();
+    await Promise.all([boundary, stopping]);
+    expect(value.transport.handler).toBeUndefined();
+    expect(value.controller.getStatus().playbackGroups).toEqual([]);
+    await value.controller.dispose();
+  });
+
+  it("notifies after a delayed authoritative snapshot even when creation was already acknowledged", async () => {
+    const onStatusChanged = vi.fn();
+    const value = harness({ onStatusChanged });
+    await connect(value, snapshot([]));
+    await observe(value);
+    onStatusChanged.mockClear();
+    let release!: () => void;
+    const barrier = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let observing!: Promise<void>;
+    value.transport.commandResponder = (command) => {
+      value.page.observeBarrier = barrier;
+      observing = value.controller.handleActiveTabChanged(10);
+      value.transport.emit(snapshot([group()], 2));
+      return MediaCommandAckSchema.parse({
+        type: "media.command.ack",
+        protocolVersion: 1,
+        commandId: command.commandId,
+        roomId,
+        roomMediaRevision: 2,
+        accepted: true,
+        code: null,
+        playbackGroupId,
+        groupRevision: 3,
+      });
+    };
+    await expect(value.controller.createGroupFromCurrentPage(10)).resolves.toMatchObject({
+      accepted: true,
+    });
+    expect(value.controller.getStatus().playbackGroups).toEqual([]);
+    expect(onStatusChanged).not.toHaveBeenCalled();
+    release();
+    await observing;
+    await value.controller.whenIdle();
+    expect(value.controller.getStatus().playbackGroups).toHaveLength(1);
+    expect(onStatusChanged).toHaveBeenCalledOnce();
+    await value.controller.dispose();
+  });
+
+  it("notifies remote snapshot changes and failures, ignores duplicate snapshots, and isolates observer errors", async () => {
+    const notifiedErrors: Array<string | null> = [];
+    const onStatusChanged = vi.fn(() => {
+      notifiedErrors.push(value.controller.getStatus().errorCode);
+      throw new Error("UI_OBSERVER_FAILED");
+    });
+    const value = harness({ onStatusChanged });
+    await connect(value, snapshot([]));
+    onStatusChanged.mockClear();
+    const remoteGroup = group({ members: [member(leaderUserId, leaderDeviceId)] });
+    value.transport.emit(snapshot([remoteGroup], 2));
+    await value.controller.whenIdle();
+    expect(onStatusChanged).toHaveBeenCalledOnce();
+    expect(value.controller.getStatus()).toMatchObject({ roomMediaRevision: 2, errorCode: null });
+    value.transport.emit(snapshot([remoteGroup], 2));
+    await value.controller.whenIdle();
+    expect(onStatusChanged).toHaveBeenCalledOnce();
+    value.transport.emit(snapshot([{ ...remoteGroup, groupRevision: 2 }], 3));
+    await value.controller.whenIdle();
+    expect(onStatusChanged).toHaveBeenCalledTimes(2);
+    expect(value.controller.getStatus()).toMatchObject({ errorCode: "STALE_MEDIA_SNAPSHOT" });
+    value.transport.emit(snapshot([], 4));
+    await value.controller.whenIdle();
+    expect(onStatusChanged).toHaveBeenCalledTimes(3);
+    expect(value.controller.getStatus()).toMatchObject({ roomMediaRevision: 4, errorCode: null });
+    let entered!: () => void;
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const barrier = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    value.replicaGates.push({
+      entered,
+      promise: barrier.then(() => {
+        throw new Error("SNAPSHOT_READ_FAILED");
+      }),
+    });
+    value.transport.emit(snapshot([], 5));
+    await waiting;
+    expect(onStatusChanged).toHaveBeenCalledTimes(3);
+    release();
+    await value.controller.whenIdle();
+    expect(onStatusChanged).toHaveBeenCalledTimes(4);
+    expect(notifiedErrors.at(-1)).toBe("SNAPSHOT_READ_FAILED");
+    await value.controller.dispose();
+  });
+
+  it.each([false, true])(
+    "does not notify a previous connection's snapshot after disconnection (failed=%s)",
+    async (failSnapshot) => {
+      const onStatusChanged = vi.fn();
+      const value = harness({ onStatusChanged });
+      await connect(value, snapshot([]));
+      onStatusChanged.mockClear();
+      const oldHandler = value.transport.handler!;
+      let entered!: () => void;
+      let release!: () => void;
+      const waiting = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const barrier = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      value.replicaGates.push({
+        entered,
+        promise: barrier.then(() => {
+          if (failSnapshot) throw new Error("STALE_SNAPSHOT_READ_FAILED");
+        }),
+      });
+      value.transport.emit(snapshot([group()], 2));
+      await waiting;
+      const disconnected = value.controller.setSynchronized(false);
+      release();
+      await disconnected;
+      expect(onStatusChanged).not.toHaveBeenCalled();
+      await value.controller.setSynchronized(true);
+      expect(value.controller.getStatus().errorCode).toBeNull();
+      oldHandler(snapshot([group()], 99));
+      await value.controller.whenIdle();
+      expect(onStatusChanged).not.toHaveBeenCalled();
+      value.transport.emit(snapshot([], 3));
+      await value.controller.whenIdle();
+      expect(onStatusChanged).toHaveBeenCalledOnce();
+      await value.controller.dispose();
+      onStatusChanged.mockClear();
+      oldHandler(snapshot([group()], 100));
+      await value.controller.whenIdle();
+      expect(onStatusChanged).not.toHaveBeenCalled();
+    },
+  );
+
+  it("propagates a rejected server acknowledgement instead of reporting creation", async () => {
+    const value = harness();
+    await connect(value, snapshot([]));
+    await observe(value);
+    value.transport.commandResponder = (command) =>
+      MediaCommandAckSchema.parse({
+        type: "media.command.ack",
+        protocolVersion: 1,
+        commandId: command.commandId,
+        roomId,
+        roomMediaRevision: 1,
+        accepted: false,
+        code: "GROUP_LIMIT_REACHED",
+        playbackGroupId: null,
+        groupRevision: null,
+      });
+    await expect(value.controller.createGroupFromCurrentPage(10)).rejects.toThrow(
+      "GROUP_LIMIT_REACHED",
+    );
+    await value.controller.dispose();
+  });
+
+  it("submits the current observed media after rechecking page permission", async () => {
+    const value = harness();
+    await connect(value, snapshot([]));
+    await observe(value);
+    const observationsBefore = value.page.observations.length;
+
+    await expect(value.controller.createGroupFromCurrentPage(10)).resolves.toMatchObject({
+      accepted: true,
+    });
+    expect(value.page.observations).toHaveLength(observationsBefore + 1);
+    expect(value.page.observations.at(-1)).toMatchObject({ tabId: 10, frameId: 0, target });
+    expect(value.transport.commands.at(-1)).toMatchObject({
+      type: "group.create",
+      target,
+      observed: playing,
+    });
+    await value.controller.dispose();
+  });
+
+  it("does not create an empty group before media is detected or for another tab", async () => {
+    const value = harness();
+    await connect(value, snapshot([]));
+    await expect(value.controller.createGroupFromCurrentPage(10)).rejects.toThrow(
+      "MEDIA_NOT_READY",
+    );
+    await observe(value);
+    await expect(value.controller.createGroupFromCurrentPage(11)).rejects.toThrow(
+      "MEDIA_NOT_READY",
+    );
+    expect(value.transport.commands).toHaveLength(0);
+    await value.controller.dispose();
+  });
+
+  it("rejects a stale document and revoked permission before sending a command", async () => {
+    const value = harness();
+    await connect(value, snapshot([]));
+    await observe(value);
+    value.page.observeErrorOnce = new Error("MEDIA_PERMISSION_REQUIRED");
+    await expect(
+      value.controller.createGroupFromCurrentPage(10, { roomEpoch: 0, tabUpdatedAtSeq: 11 }),
+    ).rejects.toThrow("MEDIA_CONTEXT_CHANGED");
+    await expect(value.controller.createGroupFromCurrentPage(10)).rejects.toThrow(
+      "MEDIA_PERMISSION_REQUIRED",
+    );
+    value.replicaRecord.confirmedSnapshot!.tabs[0]!.updatedAtSeq += 1;
+    await expect(value.controller.createGroupFromCurrentPage(10)).rejects.toThrow(
+      "STALE_MEDIA_CONTEXT",
+    );
+    expect(value.transport.commands).toHaveLength(0);
+    await value.controller.dispose();
+  });
+
+  it("rejects a tab switch while the permission recheck is pending", async () => {
+    const value = harness();
+    await connect(value, snapshot([]));
+    await observe(value);
+    let release!: () => void;
+    value.page.observeBarrier = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const creation = value.controller.createGroupFromCurrentPage(10);
+    await Promise.resolve();
+    const switched = value.controller.handleActiveTabChanged(11);
+    release();
+    await expect(creation).rejects.toThrow("MEDIA_NOT_READY");
+    await switched;
+    expect(value.transport.commands).toHaveLength(0);
+    await value.controller.dispose();
+  });
+});
 
 interface LeaderAuthorityBatchFixture {
   authority: MediaObservedState;
@@ -2311,25 +2591,175 @@ describe("MediaController", () => {
     ]);
   });
 
-  it("keeps periodic leader heartbeats after buffering and ready snapshots need no page action", async () => {
-    const value = harness({
-      userId: leaderUserId,
-      deviceId: leaderDeviceId,
-    });
-    await connect(value);
-    await observe(value);
-    const initialAlignment = value.page.applies.at(-1);
-    if (initialAlignment === undefined) {
-      throw new Error("expected initial leader alignment");
-    }
-    await reportApplyResult(value, initialAlignment, playing);
+  it.each([false, true])(
+    "keeps periodic leader heartbeats after buffering and ready snapshots need no page action (paused=%s)",
+    async (paused) => {
+      const observed = { ...playing, paused };
+      const value = harness({
+        userId: leaderUserId,
+        deviceId: leaderDeviceId,
+      });
+      await connect(value, snapshot([group({ observed, status: paused ? "PAUSED" : "PLAYING" })]));
+      await observe(value, observed);
+      const initialAlignment = value.page.applies.at(-1);
+      if (initialAlignment === undefined) {
+        throw new Error("expected initial leader alignment");
+      }
+      await reportApplyResult(value, initialAlignment, observed);
+      value.page.applies.length = 0;
+      value.transport.heartbeats.length = 0;
+
+      const buffering = {
+        ...observed,
+        buffering: true,
+      };
+      await value.controller.handleMediaObserved(
+        10,
+        0,
+        observedMessage(buffering, {
+          event: "STATE_CHANGED",
+          trigger: "BUFFERING",
+        }),
+      );
+      value.transport.emit(
+        snapshot(
+          [
+            group({
+              groupRevision: 4,
+              status: "LOADING",
+              observed: buffering,
+              observedAtServerMs: nowMs,
+              updatedAtServerMs: nowMs + 1,
+            }),
+          ],
+          2,
+        ),
+      );
+      await value.controller.whenIdle();
+
+      await value.controller.handleMediaObserved(
+        10,
+        0,
+        observedMessage(observed, {
+          event: "STATE_CHANGED",
+          trigger: "READY",
+        }),
+      );
+      value.transport.emit(
+        snapshot(
+          [
+            group({
+              groupRevision: 5,
+              status: paused ? "PAUSED" : "PLAYING",
+              observed,
+              observedAtServerMs: nowMs,
+              updatedAtServerMs: nowMs + 2,
+            }),
+          ],
+          3,
+        ),
+      );
+      await value.controller.whenIdle();
+      expect(value.page.applies).toHaveLength(0);
+
+      value.transport.heartbeats.length = 0;
+      value.scheduler.advanceBy(paused ? 2_000 : 500);
+      await value.controller.whenIdle();
+
+      expect(value.transport.heartbeats).toEqual([
+        expect.objectContaining({
+          groupRevision: 5,
+          buffering: false,
+          playbackRate: 1,
+        }),
+      ]);
+    },
+  );
+
+  it.each([
+    { paused: true, ended: false, drift: 0, force: false, seek: false },
+    { paused: true, ended: true, drift: 0, force: false, seek: false },
+    { paused: true, ended: false, drift: 0.5, force: false, seek: false },
+    { paused: true, ended: false, drift: 1, force: false, seek: true },
+    { paused: true, ended: true, drift: -1, force: false, seek: true },
+    { paused: false, ended: false, drift: 299, force: false, seek: false },
+    { paused: false, ended: false, drift: 300, force: false, seek: true },
+    { paused: true, ended: false, drift: 0, force: true, seek: true },
+  ])(
+    "plans leader alignment only for an explicit force or meaningful drift: %j",
+    ({ paused, ended, drift, force, seek }) => {
+      const observed = { ...playing, paused, ended, buffering: true };
+      const authoritative = group({ observed, status: ended ? "ENDED_WAITING" : "LOADING" });
+      expect(
+        planMediaLeaderAuthorityRestoration(
+          authoritative,
+          target,
+          { ...observed, positionMs: observed.positionMs + drift },
+          nowMs,
+          force,
+        ),
+      ).toEqual(seek ? [{ type: "SEEK", positionMs: observed.positionMs }] : []);
+    },
+  );
+
+  it("keeps a paused buffering heartbeat and server snapshot loop bounded without controller-induced seeks", async () => {
+    const value = harness({ userId: leaderUserId, deviceId: leaderDeviceId });
+    const paused = { ...playing, positionMs: 0, paused: true };
+    let state: RoomMediaState = {
+      roomId,
+      roomMediaRevision: 1,
+      groups: [group({ status: "PAUSED", observed: paused })],
+    };
+    await connect(value, snapshot([...state.groups], state.roomMediaRevision));
+    await observe(value, paused);
+    const alignment = value.page.applies.at(-1)!;
+    await reportApplyResult(value, alignment, paused);
     value.page.applies.length = 0;
     value.transport.heartbeats.length = 0;
-
-    const buffering = {
-      ...playing,
-      buffering: true,
+    const buffering = { ...paused, buffering: true };
+    const replies: Promise<void>[] = [];
+    value.page.onApply = (apply) => {
+      if (apply.action.type !== "SEEK") return;
+      replies.push(
+        value.controller.handleMediaObserved(
+          10,
+          0,
+          observedMessage(buffering, {
+            event: "APPLY_RESULT",
+            applyToken: apply.applyToken,
+          }),
+        ),
+      );
+      replies.push(
+        value.controller.handleMediaObserved(
+          10,
+          0,
+          observedMessage(paused, {
+            event: "STATE_CHANGED",
+            trigger: "READY",
+          }),
+        ),
+      );
     };
+    vi.spyOn(value.transport, "publishMediaHeartbeat").mockImplementation((heartbeat) => {
+      value.transport.heartbeats.push(heartbeat);
+      // Bound the broken implementation's feedback so the regression fails rather than hangs.
+      if (value.transport.heartbeats.length > 12) return;
+      const transition = applyLeaderHeartbeat(
+        state,
+        heartbeat,
+        {
+          userId: leaderUserId,
+          deviceId: leaderDeviceId,
+          username: "leader",
+          displayName: "Leader",
+        },
+        value.scheduler.now,
+      );
+      expect(transition.outcome.ok).toBe(true);
+      state = transition.state;
+      value.transport.emit(snapshot([...state.groups], state.roomMediaRevision));
+    });
     await value.controller.handleMediaObserved(
       10,
       0,
@@ -2338,57 +2768,23 @@ describe("MediaController", () => {
         trigger: "BUFFERING",
       }),
     );
-    value.transport.emit(
-      snapshot(
-        [
-          group({
-            groupRevision: 4,
-            status: "LOADING",
-            observed: buffering,
-            observedAtServerMs: nowMs,
-            updatedAtServerMs: nowMs + 1,
-          }),
-        ],
-        2,
-      ),
-    );
     await value.controller.whenIdle();
-
-    await value.controller.handleMediaObserved(
-      10,
-      0,
-      observedMessage(playing, {
-        event: "STATE_CHANGED",
-        trigger: "READY",
-      }),
-    );
-    value.transport.emit(
-      snapshot(
-        [
-          group({
-            groupRevision: 5,
-            status: "PLAYING",
-            observed: playing,
-            observedAtServerMs: nowMs,
-            updatedAtServerMs: nowMs + 2,
-          }),
-        ],
-        3,
-      ),
-    );
-    await value.controller.whenIdle();
-
-    value.transport.heartbeats.length = 0;
+    await Promise.all(replies);
+    expect(value.page.applies).toEqual([]);
+    expect(value.transport.heartbeats).toHaveLength(1);
+    expect(state.roomMediaRevision).toBe(2);
     value.scheduler.advanceBy(500);
     await value.controller.whenIdle();
-
-    expect(value.transport.heartbeats).toEqual([
-      expect.objectContaining({
-        groupRevision: 5,
-        buffering: false,
-        playbackRate: 1,
-      }),
-    ]);
+    expect(value.transport.heartbeats).toHaveLength(1);
+    value.scheduler.advanceBy(1_500);
+    await value.controller.whenIdle();
+    expect(value.transport.heartbeats).toHaveLength(2);
+    value.scheduler.advanceBy(2_000);
+    await value.controller.whenIdle();
+    expect(value.page.applies).toEqual([]);
+    expect(value.transport.heartbeats).toHaveLength(3);
+    expect(state.roomMediaRevision).toBe(4);
+    await value.controller.dispose();
   });
 
   it("does not retag a stale leader sample across even a sub-ms media change", async () => {

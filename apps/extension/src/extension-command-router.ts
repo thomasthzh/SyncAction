@@ -1,6 +1,7 @@
+import { SupportedUrlSchema } from "@syncaction/protocol";
 import type { ExtensionAppController } from "./app-controller.js";
 import type { PageToolCommandBindings } from "./command-bindings.js";
-import { UiCommandSchema } from "./ui/ui-protocol.js";
+import { UiCommandSchema, type MediaGroupCreateExpectedContext } from "./ui/ui-protocol.js";
 
 export type ExtensionCommandAppPort = Pick<
   ExtensionAppController,
@@ -40,6 +41,7 @@ export type ExtensionCommandAppPort = Pick<
   | "toggleDanmakuInput"
   | "setDanmakuHidden"
   | "togglePagePen"
+  | "createMediaGroup"
   | "jumpToMediaMember"
   | "alignMediaGroupOnce"
   | "joinMediaGroup"
@@ -220,9 +222,18 @@ export class ExtensionCommandRouter {
       case "ROOM_DISSOLVE":
         result = await this.#app.dissolveRoom();
         break;
-      case "CURRENT_TAB_SHARE":
-        result = await this.#app.shareBrowserTab((await this.#activeTab()).id);
+      case "CURRENT_TAB_SHARE": {
+        const tab = await this.#activeTab();
+        const url = tab.pendingUrl ?? tab.url;
+        const shared = await this.#app.shareBrowserTab(tab.id);
+        result =
+          (shared?.kind === "INTENT_RECORDED" ||
+            (shared?.kind === "IGNORED" && shared.reason === "NO_CHANGE")) &&
+          SupportedUrlSchema.safeParse(url).success
+            ? { ...shared, sharedPageContext: { tabId: tab.id, url } }
+            : shared;
         break;
+      }
       case "BROWSER_RECOVERY_CONFIRM":
         result = await this.#app.confirmBrowserRecovery();
         break;
@@ -259,12 +270,27 @@ export class ExtensionCommandRouter {
       case "MEDIA_MEMBER_JUMP":
         result = await this.#app.jumpToMediaMember(command.payload.userId);
         break;
+      case "MEDIA_GROUP_CREATE": {
+        const expected = command.payload?.expectedContext;
+        const tab = await this.#activeMediaTab(expected);
+        result =
+          expected === undefined
+            ? await this.#app.createMediaGroup(tab.id)
+            : await this.#app.createMediaGroup(tab.id, expected);
+        break;
+      }
       case "MEDIA_GROUP_ALIGN_ONCE":
         result = await this.#app.alignMediaGroupOnce(command.payload.playbackGroupId);
         break;
-      case "MEDIA_GROUP_JOIN":
-        result = await this.#app.joinMediaGroup(command.payload.playbackGroupId);
+      case "MEDIA_GROUP_JOIN": {
+        const expected = command.payload.expectedContext;
+        if (expected !== undefined) await this.#activeMediaTab(expected);
+        result =
+          expected === undefined
+            ? await this.#app.joinMediaGroup(command.payload.playbackGroupId)
+            : await this.#app.joinMediaGroup(command.payload.playbackGroupId, expected);
         break;
+      }
       case "MEDIA_GROUP_LEAVE":
         result = await this.#app.leaveMediaGroup(command.payload.playbackGroupId);
         break;
@@ -285,6 +311,18 @@ export class ExtensionCommandRouter {
         return unreachableCommand(command);
     }
     return jsonSafeResult(result);
+  }
+
+  async #activeMediaTab(expected?: MediaGroupCreateExpectedContext) {
+    const tab = await this.#activeTab();
+    if (
+      expected !== undefined &&
+      (tab.id !== expected.tabId ||
+        (expected.url !== undefined && (tab.pendingUrl ?? tab.url) !== expected.url))
+    ) {
+      throw new Error("PAGE_PERMISSION_INTENT_STALE");
+    }
+    return tab;
   }
 
   async #activeTab(): Promise<ExtensionCommandBrowserTab & { id: number }> {

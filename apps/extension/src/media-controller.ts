@@ -1,12 +1,14 @@
 import {
   CanonicalUuidSchema,
   DeviceIdSchema,
+  DocumentRevisionSchema,
   MediaGroupsSnapshotMessageSchema,
   MediaObservedStateSchema,
   MediaTargetSchema,
   PlaybackActionSchema,
   RoomIdSchema,
   type MediaCommand,
+  type DocumentRevision,
   type MediaCommandAck,
   type MediaGroupsSnapshotMessage,
   type MediaObservedState,
@@ -133,6 +135,7 @@ export interface MediaControllerOptions {
   now?: () => number;
   createUuid?: () => string;
   scheduler?: MediaScheduler;
+  onStatusChanged?: () => void;
 }
 
 export class MediaControllerError extends Error {
@@ -208,6 +211,7 @@ export class MediaController {
   readonly #now: () => number;
   readonly #createUuid: () => string;
   readonly #scheduler: MediaScheduler;
+  readonly #onStatusChanged: (() => void) | undefined;
   readonly #heartbeat: MediaHeartbeatCoordinator;
   readonly #follower: MediaFollowerSession;
   readonly #routes = new Map<string, MediaRoute>();
@@ -242,6 +246,7 @@ export class MediaController {
     this.#transport = options.transport;
     this.#compatibility = options.compatibility;
     this.#navigation = options.navigation;
+    this.#onStatusChanged = options.onStatusChanged;
     this.#now = options.now ?? Date.now;
     this.#createUuid = options.createUuid ?? (() => crypto.randomUUID());
     const scheduler = options.scheduler ?? defaultScheduler;
@@ -307,18 +312,40 @@ export class MediaController {
       return this.whenIdle();
     }
     const generation = this.#generation;
-    this.#transport.setMediaHandler((message) => {
-      this.#enqueue(async () => {
-        if (this.#synchronized && generation === this.#generation) {
-          await this.#acceptSnapshot(message, generation);
-        }
-      });
-    });
+    this.#bindMediaHandler(generation);
     this.#heartbeat.start();
     if (this.#activeTabId !== undefined) {
       this.#enqueue(() => this.#observeTopFrame(this.#activeTabId!, generation));
     }
     return this.whenIdle();
+  }
+
+  #bindMediaHandler(generation: number): void {
+    this.#transport.setMediaHandler((message) => {
+      this.#enqueue(async () => {
+        if (this.#synchronized && generation === this.#generation) {
+          const previousSnapshot = this.#snapshot;
+          const previousError = this.#errorCode;
+          try {
+            await this.#acceptSnapshot(message, generation);
+          } catch (cause) {
+            if (this.#generationGuard(generation)()) {
+              this.#errorCode = errorCode(cause, "MEDIA_CONTROLLER_FAILURE");
+            }
+          }
+          if (
+            this.#generationGuard(generation)() &&
+            (this.#snapshot !== previousSnapshot || this.#errorCode !== previousError)
+          ) {
+            try {
+              this.#onStatusChanged?.();
+            } catch {
+              // UI observation must not interrupt authoritative media state.
+            }
+          }
+        }
+      });
+    });
   }
 
   public async handleActiveTabChanged(tabIdInput: unknown): Promise<void> {
@@ -585,15 +612,18 @@ export class MediaController {
       this.#currentLeaderGroup()?.playbackGroupId ??
       null;
     this.#generation += 1;
+    const generation = this.#generation;
+    this.#transport.setMediaHandler(undefined);
     this.#pendingGestureObservations.clear();
     await this.#clearControlState(null, false);
+    if (!this.#generationGuard(generation)()) return;
+    this.#bindMediaHandler(generation);
     if (realignmentGroupId !== null && this.#groupById(realignmentGroupId) !== undefined) {
       this.#leaderAuthorityBlockedGroupId = realignmentGroupId;
       this.#follower.setPendingForcedAlignment(realignmentGroupId);
     }
     this.#routes.clear();
     if (this.#synchronized && this.#activeTabId !== undefined) {
-      const generation = this.#generation;
       this.#enqueue(() => this.#observeTopFrame(this.#activeTabId!, generation));
     }
     await this.whenIdle();
@@ -635,6 +665,76 @@ export class MediaController {
     if (report.message.errorCode === "ORIGIN_PERMISSION_REVOKED") {
       await this.handlePermissionBoundaryChanged();
     }
+  }
+
+  public async createGroupFromCurrentPage(
+    tabIdInput: unknown,
+    expectedRevisionInput?: DocumentRevision,
+  ): Promise<MediaCommandAck> {
+    const tabId = LocalTabIdSchema.parse(tabIdInput);
+    const expectedRevision =
+      expectedRevisionInput === undefined
+        ? undefined
+        : DocumentRevisionSchema.parse(expectedRevisionInput);
+    this.#requireOnline();
+    const generation = this.#generation;
+    const local = this.#localObservation;
+    if (tabId !== this.#activeTabId || local === null || local.tabId !== tabId) {
+      throw new MediaControllerError(
+        this.#currentPageCapabilityError() ?? this.#errorCode ?? "MEDIA_NOT_READY",
+      );
+    }
+    if (
+      expectedRevision !== undefined &&
+      (local.context.documentRevision.roomEpoch !== expectedRevision.roomEpoch ||
+        local.context.documentRevision.tabUpdatedAtSeq !== expectedRevision.tabUpdatedAtSeq)
+    ) {
+      throw new MediaControllerError("MEDIA_CONTEXT_CHANGED");
+    }
+    if (!(await this.#isRouteCurrent(local))) {
+      throw new MediaControllerError("STALE_MEDIA_CONTEXT");
+    }
+    if (generation !== this.#generation || tabId !== this.#activeTabId) {
+      throw new MediaControllerError("MEDIA_NOT_READY");
+    }
+    const capabilityError = this.#currentPageCapabilityError();
+    if (capabilityError !== null) {
+      throw new MediaControllerError(capabilityError);
+    }
+    // The page adapter rechecks the exact frame's permission and current server
+    // consent. A cached observation must not authorize creation after revocation.
+    await this.#page.observe(local.tabId, local.frameId, local.context, local.target);
+    this.#requireOnline();
+    const current = this.#localObservation;
+    if (
+      generation !== this.#generation ||
+      tabId !== this.#activeTabId ||
+      current === null ||
+      current.tabId !== tabId ||
+      !sameMediaContext(current.context, local.context) ||
+      !sameMediaTarget(current.target, local.target)
+    ) {
+      throw new MediaControllerError("MEDIA_NOT_READY");
+    }
+    if (!(await this.#isRouteCurrent(current))) {
+      throw new MediaControllerError("STALE_MEDIA_CONTEXT");
+    }
+    const ready = this.#localObservation;
+    if (
+      generation !== this.#generation ||
+      tabId !== this.#activeTabId ||
+      ready === null ||
+      ready.frameId !== current.frameId ||
+      !sameMediaContext(ready.context, current.context) ||
+      !sameMediaTarget(ready.target, current.target)
+    ) {
+      throw new MediaControllerError("MEDIA_NOT_READY");
+    }
+    const currentCapabilityError = this.#currentPageCapabilityError();
+    if (currentCapabilityError !== null) {
+      throw new MediaControllerError(currentCapabilityError);
+    }
+    return this.createGroup(ready.target, ready.observed);
   }
 
   public async createGroup(
