@@ -4,13 +4,14 @@ const canvas = document.querySelector("#film");
 const ctx = canvas.getContext("2d", { alpha: false });
 const logo = new Image();
 const C = {
-  ink: "#17384c",
-  muted: "#5c7383",
-  teal: "#087f8c",
-  purple: "#7462d5",
-  light: "#edf5f8",
-  line: "#d7e5eb",
+  ink: "#1d1d1f",
+  muted: "#6e6e73",
+  teal: "#0071e3",
+  purple: "#007aff",
+  light: "#f5f5f7",
+  line: "#dedee3",
 };
+const motion = window.SyncActionFilmMotion;
 const font = '"Segoe UI", "Microsoft YaHei", sans-serif';
 const chapters = [
   { start: 0, title: "一个人的网页。", sub: "视频在播放，想法在发生。", feature: "solo" },
@@ -109,7 +110,7 @@ function line(x1, y1, x2, y2, color = C.line, width = 1) {
   ctx.lineWidth = width;
   ctx.stroke();
 }
-function pill(value, x, y, w, color = C.teal, fill = "#e5f3f2") {
+function pill(value, x, y, w, color = C.teal, fill = "#eaf2fc") {
   box(x, y, w, 29, fill, 7);
   text(value, x + w / 2, y + 20, 12, color, 600, "center");
 }
@@ -119,65 +120,78 @@ function button(value, x, y, w = 150, primary = true, active = false) {
     y,
     w,
     40,
-    primary ? (active ? "#075a65" : C.teal) : "#fff",
+    primary ? (active ? "#005bb5" : C.teal) : "#fff",
     9,
     primary ? undefined : C.line,
   );
   text(value, x + w / 2, y + 26, 14, primary ? "#fff" : C.ink, 600, "center");
 }
 function avatar(name, x, y, color = C.teal) {
-  box(x, y, 34, 34, color === C.teal ? "#d6ecef" : "#e9e4f7", 10);
+  box(x, y, 34, 34, color === C.teal ? "#e7f0fc" : "#efedf9", 10);
   text(name, x + 17, y + 23, 14, color, 650, "center");
 }
-function cursor(x, y, color, name, scale = 1, opacity = 1, click = false) {
+function cursor(pointer) {
+  const { x, y, id, click, tool } = pointer;
+  const color = id === "you" ? C.ink : "#007aff";
   ctx.save();
-  ctx.globalAlpha *= opacity;
   ctx.translate(x, y);
-  ctx.scale(scale, scale);
-  ctx.shadowColor = "#061b3c35";
-  ctx.shadowBlur = 8;
-  ctx.shadowOffsetY = 2;
+  ctx.shadowColor = "#00000024";
+  ctx.shadowBlur = 3;
+  ctx.shadowOffsetY = 1;
   ctx.beginPath();
-  ctx.moveTo(0, 0);
-  ctx.lineTo(0, 30);
-  ctx.lineTo(8, 22);
-  ctx.lineTo(15, 36);
-  ctx.lineTo(22, 32);
-  ctx.lineTo(15, 19);
-  ctx.lineTo(28, 18);
-  ctx.closePath();
+  if (tool === "pen") {
+    ctx.moveTo(0, 0);
+    ctx.lineTo(4, -11);
+    ctx.lineTo(17, -24);
+    ctx.lineTo(24, -17);
+    ctx.lineTo(11, -4);
+    ctx.closePath();
+  } else {
+    ctx.moveTo(0, 0);
+    ctx.lineTo(0, 24);
+    ctx.lineTo(6, 18);
+    ctx.lineTo(11, 29);
+    ctx.lineTo(16, 27);
+    ctx.lineTo(11, 16);
+    ctx.lineTo(21, 16);
+    ctx.closePath();
+  }
   ctx.fillStyle = color;
   ctx.strokeStyle = "#fff";
-  ctx.lineWidth = 2.5;
+  ctx.lineWidth = 1.6;
   ctx.fill();
   ctx.stroke();
   ctx.shadowColor = "transparent";
-  box(21, 32, Math.max(48, name.length * 13 + 20), 26, color, 6);
-  text(name, 31, 50, 12, "#fff", 600);
+  box(17, 30, id === "you" ? 43 : 55, 23, "#fffffff2", 11, "#dedee3");
+  ctx.beginPath();
+  ctx.arc(26, 41.5, 2.5, 0, Math.PI * 2);
+  ctx.fillStyle = color;
+  ctx.fill();
+  text(id === "you" ? "你" : "小林", 33, 45, 11, C.ink, 500);
   if (click) {
     ctx.beginPath();
-    ctx.arc(4, 5, 28, 0, Math.PI * 2);
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 3;
+    ctx.arc(0, 0, 9, 0, Math.PI * 2);
+    ctx.strokeStyle = id === "you" ? "#1d1d1f55" : "#007aff66";
+    ctx.lineWidth = 1.5;
     ctx.stroke();
   }
   ctx.restore();
 }
-function move(points, time, duration = 4) {
-  const position = clamp(time / duration) * (points.length - 1);
-  const index = Math.min(points.length - 2, Math.floor(position));
-  const amount = ease(position - index);
-  return {
-    x: lerp(points[index][0], points[index + 1][0], amount),
-    y: lerp(points[index][1], points[index + 1][1], amount),
-  };
-}
 function strokePath(points, color, width = 4, progress = 1) {
   ctx.save();
   ctx.beginPath();
-  const segments = Math.max(1, Math.floor((points.length - 1) * clamp(progress)));
+  const position = (points.length - 1) * clamp(progress);
+  const segments = Math.floor(position);
   ctx.moveTo(...points[0]);
   for (let i = 1; i <= segments; i++) ctx.lineTo(...points[i]);
+  if (segments < points.length - 1) {
+    const next = points[segments + 1],
+      previous = points[segments];
+    ctx.lineTo(
+      lerp(previous[0], next[0], position - segments),
+      lerp(previous[1], next[1], position - segments),
+    );
+  }
   ctx.strokeStyle = color;
   ctx.lineWidth = width;
   ctx.lineCap = "round";
@@ -247,13 +261,13 @@ function scenicVideo(t, x = 140, y = 214, w = 854, h = 288) {
 }
 function chrome(title = "周末，留一点时间给彼此") {
   ctx.save();
-  ctx.shadowColor = "#00000025";
-  ctx.shadowBlur = 45;
-  ctx.shadowOffsetY = 16;
+  ctx.shadowColor = "#00000014";
+  ctx.shadowBlur = 30;
+  ctx.shadowOffsetY = 12;
   box(92, 120, 1256, 500, "#fff", 18);
   ctx.restore();
-  box(92, 120, 1256, 50, "#e8eff4", 18);
-  box(92, 151, 1256, 20, "#e8eff4", 0);
+  box(92, 120, 1256, 50, "#eff0f2", 18);
+  box(92, 151, 1256, 20, "#eff0f2", 0);
   ["#e9aaa0", "#d9c480", "#93bfa7"].forEach((color, i) => {
     ctx.beginPath();
     ctx.arc(114 + i * 15, 145, 4, 0, Math.PI * 2);
@@ -272,9 +286,15 @@ function side(joined = true, mode = "watch", solo = false, joining = false) {
   text("房间已同步 · 演示", 1052, 262, 12, C.muted);
   avatar("你", 1052, 286);
   text("你", 1098, 303, 15, C.ink, 600);
-  text(mode === "watch" ? "本设备领播" : "正在查看", 1098, 323, 11, C.muted);
+  text(
+    joining ? "房主设备领播" : mode === "watch" ? "本设备领播" : "正在查看",
+    1098,
+    323,
+    11,
+    C.muted,
+  );
   avatar("林", 1052, 340, C.purple);
-  text(solo ? "等待同伴" : "小林", 1098, 357, 15, C.ink, 600);
+  text(solo ? "等待同伴" : joining ? "本设备 · 小林" : "小林", 1098, 357, 15, C.ink, 600);
   text(
     solo ? "来到同页，再一起开始" : joined ? "已加入跟随 · 演示" : "同页已授权 · 尚未跟随",
     1098,
@@ -283,53 +303,53 @@ function side(joined = true, mode = "watch", solo = false, joining = false) {
     C.muted,
   );
   line(1052, 405, 1322, 405);
-  text("本设备状态", 1052, 434, 11, C.muted);
-  text(mode === "watch" ? "你在领播" : "查看不改变跟随关系", 1052, 461, 16, C.ink, 650);
+  text(joining ? "小林的设备" : "本设备状态", 1052, 434, 11, C.muted);
+  text(
+    joining
+      ? joined
+        ? "已明确加入跟随"
+        : "尚未加入跟随"
+      : mode === "watch"
+        ? "你在领播"
+        : "查看不改变跟随关系",
+    1052,
+    461,
+    16,
+    C.ink,
+    650,
+  );
   if (joining && !joined) {
-    pill("小林的设备 · 示例", 1052, 488, 268, C.purple, "#e9e4f7");
+    pill("本设备操作 · 示例", 1052, 488, 268, C.purple, "#efedf9");
     button("加入播放组", 1052, 532, 268);
   } else {
-    pill("网站协作已授权", 1052, 491, 165);
+    pill(joining ? "小林的设备 · 示例" : "网站协作已授权", 1052, 491, joining ? 268 : 165);
     text(solo ? "等待朋友来到同页" : "小林已明确加入跟随", 1052, 550, 12, C.muted);
   }
 }
-function watch(t, joined = true, local = 0, media = false) {
+function watch(t, joined = true, media = false) {
   chrome();
-  const paused = media && local >= 1.3;
-  scenicVideo(paused ? (local >= 2.25 ? 63 : 8.3) : t);
+  const paused = media && motion.confirmed("pause", t);
+  scenicVideo(paused ? (t >= 9.25 ? lerp(8.4, 63, motion.smooth((t - 9.25) / 0.7)) : 8.4) : t);
   text("周末，留一点时间给彼此", 142, 535, 22, C.ink, 650);
-  const position = media
-    ? local < 1.3
-      ? 0.3
-      : local < 2.25
-        ? 0.3
-        : lerp(0.3, 0.7, ease((local - 2.25) / 0.6))
-    : 0.27 + (t % 5) * 0.014;
+  const position = media ? lerp(0.3, 0.7, motion.smooth((t - 9.25) / 0.7)) : 0.27 + (t % 5) * 0.014;
   box(142, 559, 705, 5, "#e1eaf0", 3);
   box(142, 559, 705 * position, 5, C.teal, 3);
   ctx.beginPath();
   ctx.arc(142 + 705 * position, 561, 6, 0, Math.PI * 2);
   ctx.fillStyle = C.teal;
   ctx.fill();
-  text(paused ? "Ⅱ 已暂停" : "▷ 正在播放", 142, 593, 12, C.muted);
-  text(
-    media && local > 2.25 ? "01:03 / 01:30" : "00:24 / 01:30",
-    994,
-    593,
-    12,
-    C.muted,
-    500,
-    "right",
-  );
+  box(142, 575, 122, 30, "#f5f5f7", 8, C.line);
+  text(paused ? "Ⅱ 已暂停" : "▷ 正在播放", 155, 595, 12, C.muted);
+  text(media && t >= 9.95 ? "01:03 / 01:30" : "00:24 / 01:30", 994, 593, 12, C.muted, 500, "right");
   side(joined, "watch", t < 3, t >= 3 && t < 7);
   if (media) {
     pill(
-      local >= 2.25 ? "暂停中 · 进度已对齐" : local >= 1.3 ? "暂停已同步" : "持续跟随中",
+      t >= 9.95 ? "暂停中 · 进度已对齐" : paused ? "暂停已同步" : "持续跟随中",
       681,
       234,
       290,
       "#fff",
-      "#126c79db",
+      "#1d1d1fc9",
     );
     button("对齐一次", 1052, 551, 124, false);
   }
@@ -343,17 +363,17 @@ function workflowSide(heading, state, lines) {
 }
 function documentPage(t, annotation = false, local = 0, authorized = true) {
   chrome(authorized ? "课程笔记 · 我们的共享页面" : "新网站 · 协作许可示例");
-  box(140, 213, 854, 378, "#f5f2eb", 12);
-  text("一起读 / NOTES", 179, 253, 13, "#58766f", 650);
+  box(140, 213, 854, 378, "#fafafa", 12);
+  text("一起读 / NOTES", 179, 253, 13, "#6e6e73", 650);
   text("好想法，值得一起停留。", 179, 309, 37, C.ink, 650);
-  text("少一点“第三段第二行”，", 179, 363, 24, "#506b71");
-  text("多一点“你看这里”。", 179, 404, 24, "#506b71");
+  text("少一点“第三段第二行”，", 179, 363, 24, "#515157");
+  text("多一点“你看这里”。", 179, 404, 24, "#515157");
   text("把重要的内容看清楚，让讨论自然地继续。", 179, 459, 18, C.muted);
-  text(authorized ? "页面内容兼容 · 协作已授权" : "该网站协作尚未启用", 179, 557, 12, "#3f7d74");
+  text(authorized ? "页面内容兼容 · 协作已授权" : "该网站协作尚未启用", 179, 557, 12, "#6e6e73");
   if (authorized) side(true, "browse");
   else workflowSide("网站协作", "尚未启用", ["按当前网站决定权限", "先了解，再允许"]);
   if (annotation) {
-    const drawn = ease((local - 1.1) / 0.8);
+    const drawn = motion.smooth((t - 16.1) / 0.8);
     const pts = Array.from({ length: 50 }, (_, i) => [179 + i * 6.1, 415 + Math.sin(i * 0.12) * 3]);
     if (drawn > 0) strokePath(pts, C.teal, 4, drawn);
     if (local > 1.9) {
@@ -368,14 +388,14 @@ function documentPage(t, annotation = false, local = 0, authorized = true) {
     }
   }
 }
-function pages(t, local) {
+function pages(t) {
   chrome("共享页面 · 认出彼此的位置");
   text("我们的共享页面", 142, 229, 30, C.ink, 700);
-  const chosen = local > 2;
+  const chosen = motion.confirmed("page", t);
   const rows = ["课程笔记", "周末片单", "灵感收集"];
   rows.forEach((name, i) => {
     const yy = 259 + i * 86;
-    box(142, yy, 852, 70, i === (chosen ? 1 : 0) ? "#e6f3f3" : "#f4f7fa", 10);
+    box(142, yy, 852, 70, i === (chosen ? 1 : 0) ? "#eaf2fc" : "#f5f5f7", 10);
     text("0" + (i + 1), 164, yy + 43, 15, C.muted);
     text(name, 219, yy + 32, 19, C.ink, 650);
     text(
@@ -387,14 +407,20 @@ function pages(t, local) {
     );
     text("↗", 956, yy + 45, 25, C.teal);
   });
-  button(local < 1 ? "分享当前页" : "当前页已分享", 142, 545, 200, local < 1);
+  button(
+    motion.confirmed("share", t) ? "当前页已分享" : t >= 12 ? "正在分享…" : "分享当前页",
+    142,
+    545,
+    200,
+    !motion.confirmed("share", t),
+  );
   text("选择页面只打开目标，不会自动加入播放组。", 371, 571, 14, C.muted);
   side(true, "browse");
 }
-function groups(t, local) {
+function groups(t) {
   chrome("同房多播放组 · 各自的节奏");
   text("同一个房间，两段播放", 142, 232, 29, C.ink, 700);
-  const selecting = local > 1.5;
+  const selecting = motion.confirmed("view", t) && !motion.confirmed("return", t);
   [
     ["播放组 A", "你正在领播 · 我的播放组", "周末短片"],
     ["播放组 B", "仅查看 · 尚未加入", "课程回放"],
@@ -405,11 +431,11 @@ function groups(t, local) {
       263,
       415,
       242,
-      i === 1 && selecting ? "#e9e7f6" : "#f0f6f8",
+      i === 1 && selecting ? "#e9e7f6" : "#f5f5f7",
       13,
       i === 1 && selecting ? "#b8ace6" : C.line,
     );
-    pill(name, x + 20, 283, 95, i ? C.purple : C.teal, i ? "#e0daf3" : "#d9edec");
+    pill(name, x + 20, 283, 95, i ? C.purple : C.teal, i ? "#ecebfa" : "#e7f0fc");
     text(title, x + 20, 363, 29, C.ink, 650);
     text(scope, x + 20, 400, 15, i ? C.purple : C.teal, 600);
     button(i ? "查看这个组" : "返回我的播放组", x + 20, 438, 240, i === 1, selecting && i === 1);
@@ -418,9 +444,9 @@ function groups(t, local) {
   side(true);
 }
 function invitations(t, local) {
-  const request = local >= 2;
+  const request = local >= 2.4;
   chrome(request ? "房主的消息中心 · 独立设备示例" : "小林的消息中心 · 独立设备示例");
-  box(142, 212, 852, 380, "#f1f6f9", 12);
+  box(142, 212, 852, 380, "#f5f5f7", 12);
   text("消息中心", 174, 258, 31, C.ink, 700);
   pill(request ? "房主处理申请" : "接收者处理邀请", 736, 232, 224);
   text(request ? "小周申请加入另一个房间" : "小林收到“周末小聚”的邀请", 176, 337, 28, C.ink, 650);
@@ -433,26 +459,27 @@ function invitations(t, local) {
   );
   button(
     request
-      ? local > 3.1
+      ? motion.confirmed("approve", t)
         ? "房主已同意"
         : "房主同意加入"
-      : local > 1.1
+      : motion.confirmed("invitation", t)
         ? "小林已接受邀请"
         : "接受邀请",
     176,
     432,
     250,
   );
-  if (local > 1.1 && !request) pill("由小林确认，进入目标房间", 453, 437, 440);
-  if (local > 3.1) pill("房主确认后再入房", 453, 437, 440);
+  if (motion.confirmed("invitation", t) && !request)
+    pill("由小林确认，进入目标房间", 453, 437, 440);
+  if (motion.confirmed("approve", t)) pill("房主确认后再入房", 453, 437, 440);
   text("示例账号 / 示例房间 · 未发送真实邀请或申请", 176, 558, 12, C.muted);
   workflowSide(
     request ? "房主处理申请" : "小林处理邀请",
     request
-      ? local > 3.1
+      ? motion.confirmed("approve", t)
         ? "房主已批准"
         : "申请待处理"
-      : local > 1.1
+      : motion.confirmed("invitation", t)
         ? "本人已接受"
         : "邀请待接受",
     [request ? "另一房间的独立申请" : "由接收者本人确认", "不自动接受或批准"],
@@ -463,12 +490,16 @@ function recovery(t, local) {
   const restored = local > 2.8;
   box(347, 297, 470, 182, "#fff", 16, C.line);
   pill(
-    restored ? "房间已同步" : local > 1.6 ? "正在重新读取房间快照" : "房间同步已断开",
+    restored
+      ? "房间已同步"
+      : motion.confirmed("reconnect", t)
+        ? "正在重新读取房间快照"
+        : "房间同步已断开",
     370,
     318,
     424,
     restored ? C.teal : C.ink,
-    restored ? "#e4f3f0" : "#edf2f6",
+    restored ? "#eaf2fc" : "#f5f5f7",
   );
   text(
     restored ? "已提交的房间信息回来了。" : "保留当前页面，就近继续。",
@@ -479,12 +510,12 @@ function recovery(t, local) {
     650,
   );
   button(
-    restored ? "房间信息已恢复" : local > 1.6 ? "正在恢复连接" : "重新连接",
+    restored ? "房间信息已恢复" : motion.confirmed("reconnect", t) ? "正在恢复连接" : "重新连接",
     376,
     414,
     413,
     true,
-    local > 1.6 && !restored,
+    motion.confirmed("reconnect", t) && !restored,
   );
   workflowSide("连接与恢复", restored ? "房间已同步" : "房间状态待更新", [
     "服务连接单独检测",
@@ -493,8 +524,8 @@ function recovery(t, local) {
 }
 function onboarding(t, local) {
   chrome("第一次使用 · 继续原来的入房目标");
-  box(142, 212, 852, 380, "#eff5f8", 12);
-  const phase = local < 1 ? 0 : local < 2.7 ? 1 : 2;
+  box(142, 212, 852, 380, "#f5f5f7", 12);
+  const phase = !motion.confirmed("server", t) ? 0 : !motion.confirmed("login", t) ? 1 : 2;
   ["配置服务器", "登录 / 等待批准", "继续入房"].forEach((name, i) => {
     pill(
       name,
@@ -502,7 +533,7 @@ function onboarding(t, local) {
       235,
       245,
       i === phase ? "#fff" : C.muted,
-      i === phase ? C.teal : "#e0eaf0",
+      i === phase ? C.teal : "#e9e9ed",
     );
   });
   if (phase === 0) {
@@ -532,10 +563,10 @@ function onboarding(t, local) {
     ["审批按服务器规则进行", "本人点击批准后登录"],
   );
 }
-function consent(t, local) {
-  const agreed = local > 1.5,
-    allowed = local > 2.4,
-    revoked = local > 3.35;
+function consent(t) {
+  const agreed = motion.confirmed("consent", t),
+    allowed = motion.confirmed("allow", t),
+    revoked = motion.confirmed("revoke", t);
   documentPage(t, false, 0, allowed && !revoked);
   workflowSide(
     "当前网站的许可",
@@ -551,14 +582,18 @@ function consent(t, local) {
   box(345, 397, 21, 21, agreed ? C.teal : "#fff", 4, C.line);
   if (agreed) text("✓", 355, 413, 14, "#fff", 700, "center");
   text("我已阅读并同意当前网站的协作说明", 379, 413, 15, C.ink, 600);
-  button(
-    revoked ? "该网站协作权限已撤销" : allowed ? "撤销该网站权限" : "允许并继续",
-    345,
-    448,
-    531,
-    !allowed,
-    agreed && !allowed,
-  );
+  if (!agreed) {
+    box(345, 448, 531, 40, "#ededf0", 9);
+    text("允许并继续", 610.5, 474, 14, "#8e8e93", 600, "center");
+  } else
+    button(
+      revoked ? "该网站协作权限已撤销" : allowed ? "撤销该网站权限" : "允许并继续",
+      345,
+      448,
+      531,
+      !allowed,
+      agreed && !allowed,
+    );
   text(
     revoked ? "已分享页面与消息不会因此自动删除。" : "还可能需要浏览器另行允许网站权限。",
     345,
@@ -569,7 +604,7 @@ function consent(t, local) {
 }
 function openSource(t, local) {
   chrome("开源 · Chrome / Edge 桌面扩展");
-  box(142, 213, 852, 378, "#eaf3f5", 12);
+  box(142, 213, 852, 378, "#f5f5f7", 12);
   text("你的浏览器，你的选择。", 180, 291, 38, C.ink, 700);
   [
     ["C", "Chrome 扩展"],
@@ -592,58 +627,36 @@ function ending(t) {
   ctx.save();
   ctx.globalAlpha = p;
   if (logo.complete) ctx.drawImage(logo, 660, 144, 120, 120);
-  text("一起看。", 720, 365, 66, "#eff8fb", 750, "center");
-  text("也一起做点什么。", 720, 455, 66, "#93d8d3", 750, "center");
-  text("syncaction.thomasthzh.top", 720, 540, 31, "#f3f9fc", 550, "center");
-  text(
-    "Chrome / Edge 桌面扩展 · 开源，可自行部署 · v0.9.12",
-    720,
-    593,
-    18,
-    "#b4cedb",
-    400,
-    "center",
-  );
+  text("一起看。", 720, 365, 66, C.ink, 750, "center");
+  text("也一起做点什么。", 720, 455, 66, C.teal, 750, "center");
+  text("syncaction.thomasthzh.top", 720, 540, 31, C.ink, 550, "center");
+  text("Chrome / Edge 桌面扩展 · 开源，可自行部署 · v0.9.12", 720, 620, 18, C.muted, 400, "center");
   ctx.restore();
-  cursor(482, 516, C.teal, "你", 1, p);
-  cursor(971, 518, C.purple, "朋友", 1, p);
 }
 
 function renderFilm(seconds) {
   const t = clamp(Number(seconds) || 0, 0, 47);
-  const chapterIndex = Math.max(
-    0,
-    chapters.findLastIndex((c) => t >= c.start),
-  );
-  const chapter = chapters[chapterIndex],
-    local = t - chapter.start;
+  const chapter =
+    chapters[
+      Math.max(
+        0,
+        chapters.findLastIndex((c) => t >= c.start),
+      )
+    ];
+  const local = t - chapter.start;
+  const state = motion.sample(t);
   ctx.globalAlpha = 1;
-  ctx.clearRect(0, 0, 1440, 810);
-  const bg = ctx.createLinearGradient(0, 0, 1440, 810);
-  bg.addColorStop(0, "#0c263c");
-  bg.addColorStop(1, "#071b2d");
-  ctx.fillStyle = bg;
-  ctx.fillRect(0, 0, 1440, 810);
-  const halo = ctx.createRadialGradient(1080, 260, 20, 1080, 260, 750);
-  halo.addColorStop(0, "#257f8525");
-  halo.addColorStop(1, "#257f8500");
-  ctx.fillStyle = halo;
+  ctx.fillStyle = "#f5f5f7";
   ctx.fillRect(0, 0, 1440, 810);
   if (logo.complete) ctx.drawImage(logo, 55, 37, 38, 38);
-  text("SyncAction", 105, 64, 23, "#eff8fb", 700);
-  text("产品功能演绎 · 本地模拟画面", 1380, 62, 13, "#a4c1d0", 500, "right");
-  let cursorCount = 0;
+  text("SyncAction", 105, 64, 23, C.ink, 650);
+  text("功能演绎 · 本地模拟", 1380, 62, 12, C.muted, 500, "right");
   if (chapter.feature === "end") ending(t);
   else {
-    const effect = ease(local / 0.42);
-    ctx.save();
-    ctx.translate(0, ["solo", "join", "media"].includes(chapter.feature) ? 0 : (1 - effect) * 12);
-    ctx.globalAlpha = 1;
     if (["solo", "join", "media"].includes(chapter.feature))
       watch(
         t,
-        chapter.feature !== "solo" && (chapter.feature !== "join" || local > 1.25),
-        local,
+        chapter.feature !== "solo" && motion.confirmed("join", t),
         chapter.feature === "media",
       );
     else if (chapter.feature === "pages") pages(t, local);
@@ -654,203 +667,26 @@ function renderFilm(seconds) {
     else if (chapter.feature === "onboarding") onboarding(t, local);
     else if (chapter.feature === "consent") consent(t, local);
     else if (chapter.feature === "open") openSource(t, local);
-    ctx.restore();
-    let a = move(
-      [
-        [330, 303],
-        [755, 298],
-        [653, 452],
-        [336, 535],
-      ],
-      local,
-      chapter.feature === "solo" ? 3 : 4,
-    );
-    let b = move(
-      [
-        [1380, 259],
-        [1163, 509],
-        [780, 378],
-        [717, 410],
-      ],
-      local,
-      4,
-    );
-    let clickA = false,
-      clickB = false;
-    if (chapter.feature === "join") {
-      a = move(
-        [
-          [376, 368],
-          [470, 440],
-          [460, 397],
-        ],
-        local,
-      );
-      b = move(
-        [
-          [1400, 300],
-          [1180, 548],
-          [750, 393],
-        ],
-        local,
-        2.2,
-      );
-      clickB = local > 1 && local < 1.4;
-    }
-    if (chapter.feature === "media") {
-      a = move(
-        [
-          [228, 584],
-          [226, 584],
-          [636, 558],
-          [748, 558],
-        ],
-        local,
-      );
-      b = { x: a.x + 48, y: a.y - 60 };
-      clickA = local > 1.2 && local < 1.5;
-    }
-    if (chapter.feature === "pages")
-      a = move(
-        [
-          [260, 566],
-          [280, 300],
-          [904, 383],
-          [853, 393],
-        ],
-        local,
-      );
-    if (chapter.feature === "annotations") {
-      a = move(
-        [
-          [190, 400],
-          [320, 410],
-          [470, 411],
-          [530, 422],
-        ],
-        local,
-      );
-      b = move(
-        [
-          [836, 303],
-          [782, 375],
-          [701, 458],
-        ],
-        local,
-      );
-    }
-    if (chapter.feature === "groups") {
-      a = move(
-        [
-          [300, 458],
-          [745, 461],
-          [737, 462],
-        ],
-        local,
-      );
-      b = { x: 441, y: 385 };
-      clickA = local > 1.45 && local < 1.75;
-    }
-    if (chapter.feature === "invitations") {
-      a = move(
-        [
-          [300, 470],
-          [300, 470],
-          [331, 450],
-          [331, 450],
-        ],
-        local,
-      );
-      b = move(
-        [
-          [761, 390],
-          [292, 450],
-          [768, 384],
-        ],
-        local,
-      );
-      clickB = local > 1 && local < 1.3;
-      if (local > 0.9 && local < 1.4) b = { x: 292, y: 450 };
-      clickA = local > 3 && local < 3.3;
-    }
-    if (chapter.feature === "recovery") {
-      a = { x: 609, y: 436 };
-      b = { x: 840, y: 453 };
-      clickA = local > 1.45 && local < 1.75;
-    }
-    if (chapter.feature === "onboarding") {
-      a = move(
-        [
-          [550, 472],
-          [567, 454],
-          [579, 451],
-          [623, 448],
-        ],
-        local,
-      );
-      b = { x: 948, y: 526 };
-      clickA = local > 2.4 && local < 2.7;
-    }
-    if (chapter.feature === "consent") {
-      a = move(
-        [
-          [510, 362],
-          [357, 408],
-          [630, 470],
-          [634, 469],
-        ],
-        local,
-      );
-      b = { x: 947, y: 512 };
-      clickA =
-        (local > 1.45 && local < 1.7) ||
-        (local > 2.3 && local < 2.6) ||
-        (local > 3.25 && local < 3.5);
-      if (local > 1.4 && local < 1.7) a = { x: 355, y: 408 };
-    }
-    const receiverDevice = chapter.feature === "invitations" && local < 2;
-    if (receiverDevice) cursor(b.x, b.y, C.purple, "小林", 0.95, 1, clickB);
-    else cursor(a.x, a.y, C.teal, "你", 0.95, 1, clickA);
-    cursorCount = 1;
-    const remoteAllowed =
-      chapter.feature !== "onboarding" &&
-      chapter.feature !== "invitations" &&
-      (chapter.feature !== "recovery" || local > 2.8) &&
-      (chapter.feature !== "consent" || (local > 2.4 && local <= 3.35));
-    if (t >= 3 && remoteAllowed) {
-      const opacity = ease((t - 3) / 0.25);
-      cursor(b.x, b.y, C.purple, "小林", 0.95, opacity, clickB);
-      cursorCount = 2;
-    }
-    if (t >= 3 && t < 3.65) {
-      const p = (t - 3) / 0.65;
-      ctx.save();
-      ctx.globalAlpha = (1 - p) * 0.65;
-      ctx.beginPath();
-      ctx.arc(1190, 320, 35 + p * 135, 0, Math.PI * 2);
-      ctx.strokeStyle = "#a4a1ff";
-      ctx.lineWidth = 3;
-      ctx.stroke();
-      ctx.restore();
-    }
     ctx.save();
-    ctx.globalAlpha = effect;
-    text(chapter.title, 62, 695, 39, "#eff8fb", 700);
-    text(chapter.sub, 64, 735, 17, "#adc7d5", 400);
+    ctx.globalAlpha = ease(local / 0.28);
+    text(chapter.title, 720, 695, 39, C.ink, 650, "center");
+    text(chapter.sub, 720, 735, 16, C.muted, 400, "center");
     ctx.restore();
   }
-  if (chapter.feature === "end") cursorCount = 2;
+  // Always draw both people, including offscreen. Canvas clipping is their only visibility gate.
+  state.cursors.forEach(cursor);
   const progress = clamp(t / 47);
-  box(63, 776, 1314, 3, "#ffffff18", 2);
-  box(63, 776, 1314 * progress, 3, "#93d8d3", 2);
+  box(63, 776, 1314, 2, "#dedee3", 1);
+  if (progress > 0) box(63, 776, 1314 * progress, 2, C.teal, 1);
   window.filmState = {
-    time: t,
+    ...state,
     chapter: chapter.feature,
-    cursorCount,
+    cursorCount: state.cursors.filter((pointer) => pointer.visible).length,
     duration: 47,
     simulation: true,
-    friendJoined: chapter.feature === "join" ? local > 1.25 : t >= 7,
-    viewingOtherGroup: chapter.feature === "groups" && local > 1.5,
+    friendJoined: motion.confirmed("join", t),
+    viewingOtherGroup:
+      chapter.feature === "groups" && motion.confirmed("view", t) && !motion.confirmed("return", t),
   };
   return window.filmState;
 }
