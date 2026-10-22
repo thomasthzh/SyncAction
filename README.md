@@ -6,6 +6,9 @@
 
 SyncAction 是面向 Chrome 与 Edge 的多人共享浏览器工作区。成员可以在侧栏中创建房间、共享标签页、查看同伴所在页面、同步播放媒体；获得用户同意和浏览器对当前网站的授权后，还能使用同页光标、弹幕与画笔。
 
+在[产品首页](https://syncaction.thomasthzh.top/)体验本地交互演示，查看首次使用步骤和浏览器下载。首页源码位于
+[site/](site/README.md)，不依赖框架或构建工具。
+
 本仓库提供 MIT 许可源码和独立的 Chrome、Edge 客户端及自托管服务端安装包。此前私有版本的历史和生产运维配置没有迁入。公开版默认服务器
 `https://syncaction.example.com`
 是占位地址，安装后请在扩展顶栏配置实际服务器；服务端必须自行初始化管理员，不含默认账号密码。
@@ -21,7 +24,7 @@ SyncAction 是面向 Chrome 与 Edge 的多人共享浏览器工作区。成员�
 | [服务端](https://github.com/thomasthzh/SyncAction/releases/download/v0.9.12/SyncAction-server-v0.9.12.tar.gz)            | 公共服务、管理员服务、数据库模块和通用部署源码 |
 | [SHA256SUMS.txt](https://github.com/thomasthzh/SyncAction/releases/download/v0.9.12/SHA256SUMS.txt)                      | 三个安装资产的 SHA-256 校验值                  |
 
-安装与升级分别见[客户端指南](https://github.com/thomasthzh/SyncAction/blob/v0.9.12/docs/client.md)、[服务端指南](docs/server.md)，变更见[发布说明](docs/releases/v0.9.12.md)。客户端 ZIP 不是浏览器商店安装包；服务端 tarball 不含客户端。
+安装与升级分别见[客户端指南](docs/client.md)、[服务端指南](docs/server.md)，变更见[发布说明](docs/releases/v0.9.12.md)。客户端 ZIP 不是浏览器商店安装包；服务端 tarball 不含客户端。
 
 ### 本版变化
 
