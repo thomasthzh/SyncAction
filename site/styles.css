@@ -2140,14 +2140,14 @@ p {
   max-height: 92vh;
   margin: auto;
   padding: 20px;
-  border: 1px solid #527081;
+  border: 1px solid #dedee3;
   border-radius: 18px;
-  color: #edf7fa;
-  background: #102c40;
-  box-shadow: 0 24px 100px #0005;
+  color: #1d1d1f;
+  background: #fafafa;
+  box-shadow: 0 24px 100px #0003;
 }
 .film-dialog::backdrop {
-  background: #031727c9;
+  background: #1d1d1f99;
   backdrop-filter: blur(8px);
 }
 .film-dialog-heading {
@@ -2166,9 +2166,9 @@ p {
   flex-shrink: 0;
   min-width: 44px;
   min-height: 44px;
-  background: #ffffff12;
-  color: #edf7fa;
-  border: 1px solid #678595;
+  background: #ededf0;
+  color: #1d1d1f;
+  border: 1px solid #dedee3;
   border-radius: 9px;
   font-size: 26px;
 }
@@ -2177,11 +2177,11 @@ p {
   width: 100%;
   height: auto;
   aspect-ratio: 16 / 9;
-  background: #081c2d;
+  background: #f5f5f7;
   border-radius: 8px;
 }
 .film-dialog > p {
-  color: #b9ceda;
+  color: #6e6e73;
   font-size: 12px;
   margin: 14px 0 0;
 }
@@ -2198,15 +2198,15 @@ p {
   display: inline-flex;
   align-items: center;
   min-height: 44px;
-  color: #a9dedc;
+  color: #0071e3;
   text-underline-offset: 4px;
   font-size: 12px;
 }
 .film-transcript {
-  border-top: 1px solid #476171;
+  border-top: 1px solid #dedee3;
   margin-top: 5px;
   font-size: 12px;
-  color: #bdd0da;
+  color: #515157;
 }
 .film-transcript summary {
   min-height: 44px;
@@ -2218,7 +2218,7 @@ p {
   line-height: 1.95;
 }
 .film-dialog :focus-visible {
-  outline-color: #a9dedc;
+  outline-color: #0071e3;
 }
 @media (max-width: 600px) {
   .film-dialog {
@@ -2240,7 +2240,7 @@ p {
 }
 @media (prefers-reduced-transparency: reduce) {
   .film-dialog::backdrop {
-    background: #031727f2;
+    background: #1d1d1fee;
     backdrop-filter: none;
   }
 }

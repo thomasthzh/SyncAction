@@ -1,8 +1,8 @@
 :root {
-  color-scheme: dark;
+  color-scheme: light;
   font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
-  background: #081c2d;
-  color: #eff7fb;
+  background: #f5f5f7;
+  color: #1d1d1f;
 }
 * {
   box-sizing: border-box;
@@ -29,8 +29,8 @@ canvas {
 }
 button {
   padding: 12px 20px;
-  background: #93dad6;
-  color: #103849;
+  background: #0071e3;
+  color: #fff;
   border: 0;
   border-radius: 10px;
   font: inherit;
@@ -38,11 +38,11 @@ button {
   cursor: pointer;
 }
 a {
-  color: #a9dedf;
+  color: #0071e3;
 }
 button:focus-visible,
 a:focus-visible {
-  outline: 3px solid #a9dedf;
+  outline: 3px solid #0071e3;
   outline-offset: 5px;
 }
 .is-rendering .film-controls {

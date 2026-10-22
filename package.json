@@ -20,7 +20,7 @@
     "lint": "eslint .",
     "typecheck": "pnpm -r --if-present typecheck",
     "test": "pnpm test:tooling && pnpm -r --if-present test",
-    "test:tooling": "node --test scripts/local-integration-runtime.test.mjs scripts/release-contract.test.mjs",
+    "test:tooling": "node --test scripts/local-integration-runtime.test.mjs scripts/release-contract.test.mjs scripts/film-motion.test.mjs",
     "test:integration": "node scripts/run-integration-tests.mjs",
     "db:test:up": "docker compose -f infra/compose.test.yml up -d --wait",
     "db:test:down": "docker compose -f infra/compose.test.yml down -v"

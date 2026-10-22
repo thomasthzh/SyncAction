@@ -31,3 +31,32 @@ The homepage loads no film or caption bytes until the viewer opens it. Native vi
 pause, seeking, volume, captions and fullscreen. Closing the dialog pauses and unloads the media;
 leaving the tab pauses playback. The download link works without JavaScript. This illustration does
 not promise every website/player works or that connection alone means media is following.
+
+## Motion and visual direction (v2)
+
+The film uses a restrained light canvas, neutral surfaces, subtle depth, standard small arrow
+pointers and blue emphasis. These are Apple-inspired visual principles; no Apple font, footage or
+interface asset is bundled. The SyncAction logo and product remain their own identity.
+
+`film-motion.js` owns one full 47-second world-space trajectory for each person (`you` and
+`friend`). Chapters do not create, reposition or hide cursors. Both are rendered on every frame,
+including when outside the canvas; the canvas clips them naturally. The second person enters from
+the right on the 3-second downbeat. Each person exits continuously when the next workflow belongs to
+a different device. The friend returns from the right on the 39-second phrase. Names and colors stay
+stable, including the ending. No ending-only pointers are drawn.
+
+Quintic interpolation gives semantic stops zero velocity and acceleration. Clicks occur during
+stationary holds, inside the drawn controls; the same event timeline confirms the resulting UI. The
+paused seek and continuous pen stroke share their progress with their pointer tracks. There are no
+chapter camera translations. `window.filmState` exposes both tracks, including offscreen positions,
+their target rectangles and the fixed camera offset for independent sampling.
+
+`pnpm test:tooling` includes motion regression coverage across all chapters, offscreen movement,
+click targets and the pen transition. Rendering acceptance also samples every 1/120 second and
+validates all 1,410 rendered frames at 30 fps, fully decodes the encoded video and reviews decoded
+keyframes. Speed limits in those tests are project regression guards, not Apple accessibility or
+design standards.
+
+The homepage selects the versioned `syncaction-film-v2-*` media. Previous media URLs remain
+available for cached pages and existing direct links; they are not preloaded or selected by the new
+player.
