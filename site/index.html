@@ -19,8 +19,8 @@
     <meta property="og:locale" content="zh_CN" />
     <link rel="canonical" href="https://syncaction.thomasthzh.top/" />
     <link rel="icon" type="image/svg+xml" href="/assets/syncaction-symbol.svg" />
-    <link rel="stylesheet" href="/styles.css" />
-    <script src="/app.js" defer></script>
+    <link rel="stylesheet" href="/styles.css?v=film-1" />
+    <script src="/app.js?v=film-1" defer></script>
     <title>SyncAction · 一起看，也一起做点什么</title>
   </head>
   <body>
@@ -283,6 +283,10 @@
               启用 JavaScript 后可操作演示；下载和使用指南仍可直接访问。</noscript
             >
           </p>
+          <a class="film-launch text-link" href="/assets/syncaction-film-47s.mp4" data-film-open>
+            <span aria-hidden="true">▶</span> 观看 47 秒宣传片
+            <span class="film-audio-note">含原创配乐</span>
+          </a>
         </div>
       </section>
 
@@ -492,6 +496,58 @@
         </div>
       </section>
     </main>
+
+    <dialog
+      id="film-dialog"
+      class="film-dialog"
+      aria-labelledby="film-title"
+      aria-describedby="film-description"
+    >
+      <div class="film-dialog-heading">
+        <h2 id="film-title">第二个光标，共同的此刻。</h2>
+        <button id="film-close" type="button" aria-label="关闭宣传片">×</button>
+      </div>
+      <video
+        id="product-film"
+        controls
+        playsinline
+        preload="none"
+        width="1440"
+        height="810"
+        data-src="/assets/syncaction-film-47s.mp4"
+        data-poster="/assets/syncaction-film-poster.png"
+        aria-label="SyncAction 47 秒产品宣传片"
+      >
+        <track
+          kind="captions"
+          srclang="zh-CN"
+          label="中文动作说明"
+          data-src="/assets/syncaction-film.zh-CN.vtt"
+        />
+      </video>
+      <p id="film-description">
+        产品功能演绎，非真实录屏。第 3 秒双光标与鼓点一同进入；配乐原创，无人声。
+      </p>
+      <p id="film-play-status" role="status" aria-live="polite"></p>
+      <div class="film-dialog-links">
+        <a href="/assets/syncaction-film-47s.mp4" download>下载宣传片 MP4</a
+        ><a href="/assets/syncaction-film.zh-CN.vtt" download>下载中文动作字幕</a>
+      </div>
+      <details class="film-transcript">
+        <summary>阅读宣传片文字说明</summary>
+        <p>
+          前 3 秒，一个光标在已授权的视频网页中浏览。第 3
+          秒，第二个光标进入；朋友在自己的设备上明确加入播放组，再跟随领播者的暂停与进度调整。
+        </p>
+        <p>
+          随后展示共享页面、成员位置、同页光标、弹幕与画笔；查看另一播放组不会改变本人参与的组。邀请由接收者接受，加入申请由房主确认。临时断线后可重新连接并读取房间快照，媒体跟随状态单独呈现。
+        </p>
+        <p>
+          首次使用先配置服务器，按规则登录或等待批准；管理员批准后，本人点击“批准后登录”继续原入房目标。新网站先阅读并同意说明，再允许协作；网站权限随时可撤销，已分享信息不会因此自动删除。扩展适用于桌面
+          Chrome / Edge，通过 ZIP 解压加载，MIT 开源，可自行部署服务端。
+        </p>
+      </details>
+    </dialog>
 
     <footer class="site-footer section-wrap">
       <a class="brand" href="#" aria-label="回到 SyncAction 首页"

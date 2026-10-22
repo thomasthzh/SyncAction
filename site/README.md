@@ -23,7 +23,7 @@ configuration file; preserve existing routes and take a rollback snapshot before
 Suggested response headers:
 
 ```text
-Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; media-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
 X-Content-Type-Options: nosniff
 Referrer-Policy: strict-origin-when-cross-origin
 Permissions-Policy: camera=(), microphone=(), geolocation=()
@@ -41,3 +41,13 @@ The two download links and visible version currently target v0.9.12. When updati
 assets against the published GitHub release, update the client guide, and test the final links. The
 server address is a public service address; never put credentials, administrative URLs or private
 configuration in this directory.
+
+## Product film
+
+The homepage opens a 47-second original product illustration on request. It does not preload the
+MP4, poster or Chinese captions before that request. Native controls, an HTML transcript, an MP4
+download and captions are available; closing the dialog unloads its media and returns focus. The
+soundtrack is original synthesis with the first drum/bass at 3 seconds. See
+[film source notes](film-source/README.md) for the scene contract and deterministic Canvas rendering
+surface. Serve MP4 as `video/mp4` with byte range support and VTT as `text/vtt`; keep media allowed
+only from the same origin in the static CSP.
