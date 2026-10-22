@@ -2122,3 +2122,133 @@ p {
     grid-template-columns: 1fr;
   }
 }
+
+.film-launch {
+  color: var(--teal);
+  gap: 9px;
+  font-size: 12px;
+  margin-top: 2px;
+}
+.film-audio-note {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 400;
+  margin-left: 5px;
+}
+.film-dialog {
+  width: min(1080px, calc(100% - 32px));
+  max-height: 92vh;
+  margin: auto;
+  padding: 20px;
+  border: 1px solid #527081;
+  border-radius: 18px;
+  color: #edf7fa;
+  background: #102c40;
+  box-shadow: 0 24px 100px #0005;
+}
+.film-dialog::backdrop {
+  background: #031727c9;
+  backdrop-filter: blur(8px);
+}
+.film-dialog-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 14px;
+}
+.film-dialog-heading h2 {
+  font-size: 20px;
+  letter-spacing: -0.4px;
+  margin: 0;
+}
+.film-dialog-heading button {
+  flex-shrink: 0;
+  min-width: 44px;
+  min-height: 44px;
+  background: #ffffff12;
+  color: #edf7fa;
+  border: 1px solid #678595;
+  border-radius: 9px;
+  font-size: 26px;
+}
+.film-dialog video {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  background: #081c2d;
+  border-radius: 8px;
+}
+.film-dialog > p {
+  color: #b9ceda;
+  font-size: 12px;
+  margin: 14px 0 0;
+}
+.film-dialog #film-play-status:empty {
+  display: none;
+}
+.film-dialog-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  margin-top: 8px;
+}
+.film-dialog-links a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  color: #a9dedc;
+  text-underline-offset: 4px;
+  font-size: 12px;
+}
+.film-transcript {
+  border-top: 1px solid #476171;
+  margin-top: 5px;
+  font-size: 12px;
+  color: #bdd0da;
+}
+.film-transcript summary {
+  min-height: 44px;
+  padding-block: 13px;
+  cursor: pointer;
+}
+.film-transcript p {
+  margin-top: 8px;
+  line-height: 1.95;
+}
+.film-dialog :focus-visible {
+  outline-color: #a9dedc;
+}
+@media (max-width: 600px) {
+  .film-dialog {
+    padding: 12px;
+    width: calc(100% - 20px);
+    max-height: 94vh;
+  }
+  .film-dialog-heading {
+    gap: 10px;
+  }
+  .film-dialog-heading h2 {
+    font-size: 16px;
+    line-height: 1.6;
+  }
+  .film-dialog > p,
+  .film-transcript {
+    font-size: 11px;
+  }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .film-dialog::backdrop {
+    background: #031727f2;
+    backdrop-filter: none;
+  }
+}
+@media (forced-colors: active) {
+  .film-dialog {
+    border: 2px solid CanvasText;
+  }
+  .film-dialog-heading button {
+    border-color: ButtonText;
+  }
+}

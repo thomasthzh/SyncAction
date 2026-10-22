@@ -1,0 +1,50 @@
+:root {
+  color-scheme: dark;
+  font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+  background: #081c2d;
+  color: #eff7fb;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+}
+main {
+  max-width: 1440px;
+  margin: auto;
+}
+canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.film-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 20px;
+  padding: 20px;
+  font-size: 13px;
+}
+button {
+  padding: 12px 20px;
+  background: #93dad6;
+  color: #103849;
+  border: 0;
+  border-radius: 10px;
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+}
+a {
+  color: #a9dedf;
+}
+button:focus-visible,
+a:focus-visible {
+  outline: 3px solid #a9dedf;
+  outline-offset: 5px;
+}
+.is-rendering .film-controls {
+  display: none;
+}

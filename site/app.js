@@ -215,3 +215,57 @@ function revealLinkedQuestion() {
 window.addEventListener("hashchange", revealLinkedQuestion);
 revealLinkedQuestion();
 renderProgress();
+
+const filmDialog = document.querySelector("#film-dialog");
+const productFilm = document.querySelector("#product-film");
+const filmTrack = productFilm?.querySelector("track");
+const filmStatus = document.querySelector("#film-play-status");
+let lastFilmOpener;
+
+if (filmDialog && productFilm && filmTrack && filmStatus) {
+  document.querySelectorAll("[data-film-open]").forEach((opener) => {
+    opener.addEventListener("click", (event) => {
+      if (typeof filmDialog.showModal !== "function") return;
+      event.preventDefault();
+      lastFilmOpener = opener;
+      if (playing) {
+        playing = false;
+        renderPlayback();
+        syncClock();
+      }
+      productFilm.src = productFilm.dataset.src;
+      productFilm.poster = productFilm.dataset.poster;
+      filmTrack.src = filmTrack.dataset.src;
+      filmStatus.textContent = "";
+      filmDialog.showModal();
+      productFilm.play().catch(() => {
+        if (filmDialog.open) filmStatus.textContent = "点击播放器中的播放按钮，继续观看。";
+      });
+    });
+  });
+
+  document.querySelector("#film-close").addEventListener("click", () => filmDialog.close());
+  filmDialog.addEventListener("close", () => {
+    productFilm.pause();
+    productFilm.removeAttribute("src");
+    productFilm.removeAttribute("poster");
+    filmTrack.removeAttribute("src");
+    productFilm.load();
+    lastFilmOpener?.focus();
+  });
+  filmDialog.addEventListener("click", (event) => {
+    if (event.target !== filmDialog) return;
+    const bounds = filmDialog.getBoundingClientRect();
+    if (
+      event.clientX < bounds.left ||
+      event.clientX > bounds.right ||
+      event.clientY < bounds.top ||
+      event.clientY > bounds.bottom
+    )
+      filmDialog.close();
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) productFilm.pause();
+  });
+  window.addEventListener("pagehide", () => productFilm.pause());
+}
