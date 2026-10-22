@@ -20,7 +20,7 @@ export function baseSlices(): UiStateSlices {
       profiles: [
         {
           profileId: "syncaction-production",
-          baseUrl: "https://syncaction.example.com",
+          baseUrl: "https://demo.syncaction.example",
           mode: "VNEXT",
           metadata: {
             serverId: "018f8f8e-4b5c-7d6e-8f90-123456789c32",

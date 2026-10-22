@@ -111,8 +111,8 @@ export function ServiceStatusCard({
   probe,
 }: ServiceStatusCardProps): JSX.Element {
   const health = useServiceProbe(profile.baseUrl, probe);
-  const isDefaultProfile = profile.profileId === DEFAULT_SERVER_PROFILE_ID;
-  const nodeName = isDefaultProfile ? "默认节点" : (profile.metadata?.displayName ?? "自定义节点");
+  const production = profile.profileId === DEFAULT_SERVER_PROFILE_ID;
+  const nodeName = production ? "SyncAction" : (profile.metadata?.displayName ?? "自定义节点");
   const host = serverHost(profile.baseUrl);
   const version = profile.metadata?.softwareVersion;
   const protocolVersion = profile.metadata?.protocolVersion;
@@ -173,9 +173,9 @@ export function ServiceStatusCard({
 
       <details class="service-status-card__details">
         <summary>服务器信息</summary>
-        <p>当前使用服务器 {host}</p>
+        <p>{production ? `当前连接 SyncAction 服务器 ${host}` : `当前使用自定义服务器 ${host}`}</p>
         {health.state.kind === "OFFLINE" ? (
-          <p>重试后仍失败时，请检查服务器地址、网络连接和服务器状态。</p>
+          <p>请检查服务器地址和网络连接，仍失败时联系服务器管理员。</p>
         ) : null}
       </details>
     </section>

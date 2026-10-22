@@ -99,7 +99,7 @@ describe("sidepanel everyday workflows", () => {
       });
       expect((byRole(root, "button", "分享当前页") as HTMLButtonElement).disabled).toBe(false);
       await act(async () => {
-        resolve(success({ kind: "INTENT_RECORDED" }));
+        resolve(success());
         await Promise.resolve();
       });
       expect(root.querySelector('.bottom-action-dock [role="status"]')).toBeNull();
@@ -167,37 +167,6 @@ describe("sidepanel everyday workflows", () => {
     );
   });
 
-  it("recognizes a page that is already shared without claiming a new submission", async () => {
-    const store = denseRoom();
-    store.responder = async () => success({ kind: "IGNORED", reason: "NO_CHANGE" });
-    const root = renderPanel(<App store={store} now={() => FIXTURE_NOW_MS} />);
-    await click(byRole(root, "button", "分享当前页"));
-    expect(root.querySelector('.bottom-action-dock [role="status"]')?.textContent).toBe(
-      "当前页面已在共享列表中",
-    );
-    expect(root.querySelector("#syncaction-live-status")?.textContent).not.toContain("已提交分享");
-  });
-
-  it.each([
-    [{ kind: "BLOCKED", reason: "ROOM_TAB_LIMIT_REACHED" }, "最多共享 20 个标签页"],
-    [{ kind: "BLOCKED", reason: "REPLICA_NOT_ACTUATABLE" }, "房间尚未准备好"],
-    [{ kind: "IGNORED", reason: "LOADING" }, "页面仍在加载"],
-    [{ kind: "IGNORED", reason: "PERSONAL_TAB" }, "当前页面未分享"],
-    [{ kind: "RECOVERY_REQUIRED", reason: "STALE_BROWSER_SESSION" }, "房间的恢复提示"],
-    [undefined, "尚未确认分享结果"],
-    [null, "尚未确认分享结果"],
-    [{ kind: "UNRECOGNIZED" }, "尚未确认分享结果"],
-  ])("does not report a submitted share for %j", async (value, expectedText) => {
-    const store = denseRoom();
-    store.responder = async () => success(value);
-    const root = renderPanel(<App store={store} now={() => FIXTURE_NOW_MS} />);
-    await click(byRole(root, "button", "分享当前页"));
-    expect(root.querySelector(".bottom-action-dock")?.textContent).toContain(expectedText);
-    expect(root.querySelector('.bottom-action-dock [role="status"]')).toBeNull();
-    expect(root.querySelector("#syncaction-live-status")?.textContent).not.toContain("已提交分享");
-    expect((byRole(root, "button", "分享当前页") as HTMLButtonElement).disabled).toBe(false);
-  });
-
   it("filters shared pages by title or domain without issuing commands", () => {
     const store = denseRoom();
     const root = renderPanel(<App store={store} now={() => FIXTURE_NOW_MS} />);
@@ -218,7 +187,7 @@ describe("sidepanel everyday workflows", () => {
         new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
       );
     });
-    expect(document.activeElement?.getAttribute("aria-label")).toBe("界面评审");
+    expect(document.activeElement?.getAttribute("aria-label")).toBe("Tina 视觉评审");
     act(() => {
       document.activeElement?.dispatchEvent(
         new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),

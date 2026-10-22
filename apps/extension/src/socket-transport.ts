@@ -216,6 +216,7 @@ export class SocketReplicaTransport
   #pointerHandler: PointerMessageHandler | undefined;
   #latestPointerLeaseSnapshot: PointerLeaseSnapshot | undefined;
   #mediaHandler: MediaSnapshotHandler | undefined;
+  #latestMediaSnapshot: MediaGroupsSnapshotMessage | undefined;
   #annotationHandler: AnnotationMessageHandler | undefined;
   #danmakuHandler: DanmakuMessageHandler | undefined;
   #strokePreviewHandler: StrokePreviewMessageHandler | undefined;
@@ -372,7 +373,12 @@ export class SocketReplicaTransport
     socket.on("media.groups.snapshot", (message: unknown) => {
       const snapshot = MediaGroupsSnapshotMessageSchema.safeParse(message);
       if (this.#active && snapshot.success) {
-        this.#mediaHandler?.(snapshot.data);
+        if (this.#mediaHandler === undefined) {
+          this.#latestMediaSnapshot = snapshot.data;
+        } else {
+          this.#latestMediaSnapshot = undefined;
+          this.#mediaHandler(snapshot.data);
+        }
         this.#notifyUiRelevantActivity();
       }
     });
@@ -442,6 +448,7 @@ export class SocketReplicaTransport
         this.#presenceMetricsSeq = null;
         this.#disconnectedAtMs = this.#now();
         this.#latestPointerLeaseSnapshot = undefined;
+        this.#latestMediaSnapshot = undefined;
         handlers.onDisconnect();
         this.#notifyUiRelevantActivity();
       }
@@ -585,6 +592,11 @@ export class SocketReplicaTransport
 
   public setMediaHandler(handler: MediaSnapshotHandler | undefined): void {
     this.#mediaHandler = handler;
+    if (handler !== undefined && this.#active && this.#latestMediaSnapshot !== undefined) {
+      const snapshot = this.#latestMediaSnapshot;
+      this.#latestMediaSnapshot = undefined;
+      handler(snapshot);
+    }
   }
 
   public async sendMediaCommand(commandInput: MediaCommand): Promise<MediaCommandAck> {
@@ -720,6 +732,8 @@ export class SocketReplicaTransport
     this.#presenceMetricsSeq = null;
     this.#disconnectedAtMs = null;
     this.#latestPointerLeaseSnapshot = undefined;
+    this.#latestMediaSnapshot = undefined;
+    this.#mediaHandler = undefined;
     this.#annotationHandler = undefined;
     this.#danmakuHandler = undefined;
     this.#strokePreviewHandler = undefined;

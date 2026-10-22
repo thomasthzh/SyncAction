@@ -1,8 +1,9 @@
-import { useState } from "preact/hooks";
+import { useRef, useState } from "preact/hooks";
 import type { JSX } from "preact";
 import type { VerifiedServerCandidate } from "../../server-profile.js";
 import { DEFAULT_SERVER_PROFILE_ID } from "../../server-profile.js";
 import { parsePublicServerOrigin } from "../../server-origin.js";
+import { isPlaceholderServerOrigin } from "../../server-configuration.js";
 import type { UiStore } from "../store.js";
 import { Icon } from "../icons.js";
 import { ActionableStatus } from "./actionable-status.js";
@@ -18,6 +19,7 @@ export interface ServerProfileDialogProps {
   readonly onClose: () => void;
   readonly onSelected: () => void;
   readonly onOpenAuthorizedSites: () => void;
+  readonly initialSetup?: boolean;
 }
 
 function profileLabel(profile: UiStore["shell"]["value"]["profiles"][number]): string {
@@ -43,8 +45,10 @@ export function ServerProfileDialog({
   onClose,
   onSelected,
   onOpenAuthorizedSites,
+  initialSetup = false,
 }: ServerProfileDialogProps): JSX.Element {
-  const [adding, setAdding] = useState(false);
+  const [adding, setAdding] = useState(initialSetup);
+  const inFlight = useRef(false);
   const [baseUrl, setBaseUrl] = useState("");
   const [candidate, setCandidate] = useState<VerifiedServerCandidate | null>(null);
   const [verifying, setVerifying] = useState(false);
@@ -65,11 +69,13 @@ export function ServerProfileDialog({
 
   async function verify(event: SubmitEvent): Promise<void> {
     event.preventDefault();
+    if (inFlight.current) return;
     setCandidate(null);
     setErrorCode(null);
     let normalized: string;
     try {
       normalized = parsePublicServerOrigin(baseUrl);
+      if (isPlaceholderServerOrigin(normalized)) throw new Error("INVALID_SERVER_URL");
     } catch {
       setErrorCode("INVALID_SERVER_URL");
       return;
@@ -85,49 +91,84 @@ export function ServerProfileDialog({
       setErrorCode(errorCodeOf(error));
       return;
     }
+    inFlight.current = true;
     setVerifying(true);
     try {
       setCandidate(await verification);
     } catch (error) {
       setErrorCode(errorCodeOf(error));
     } finally {
+      inFlight.current = false;
       setVerifying(false);
     }
   }
 
   async function save(): Promise<void> {
-    if (candidate === null || identityChanged) {
+    if (candidate === null || identityChanged || inFlight.current) {
       return;
     }
+    inFlight.current = true;
     setSaving(true);
     setErrorCode(null);
-    const result = await store.command({
-      name: "SERVER_ADD",
-      payload: { baseUrl: candidate.baseUrl },
-    });
-    if (!result.ok) {
-      setErrorCode(result.errorCode);
-    } else {
-      setAdding(false);
-      setCandidate(null);
-      setBaseUrl("");
+    try {
+      let profileId = existingProfile?.profileId;
+      if (profileId === undefined) {
+        const result = await store.command({
+          name: "SERVER_ADD",
+          payload: { baseUrl: candidate.baseUrl },
+        });
+        if (!result.ok) {
+          setErrorCode(result.errorCode);
+          return;
+        }
+        profileId =
+          typeof result.value === "string"
+            ? result.value
+            : store.shell.value.profiles.find(({ baseUrl: origin }) => origin === candidate.baseUrl)
+                ?.profileId;
+      }
+      if (initialSetup) {
+        if (profileId === undefined) {
+          setErrorCode("SERVER_PROFILE_NOT_FOUND");
+          return;
+        }
+        const result = await store.command({ name: "SERVER_SELECT", payload: { profileId } });
+        if (!result.ok) {
+          setErrorCode(result.errorCode);
+          return;
+        }
+        onSelected();
+      } else {
+        setAdding(false);
+        setCandidate(null);
+        setBaseUrl("");
+      }
+    } catch {
+      setErrorCode("NETWORK_ERROR");
+    } finally {
+      inFlight.current = false;
+      setSaving(false);
     }
-    setSaving(false);
   }
 
   async function select(profileId: string): Promise<void> {
+    if (inFlight.current) return;
+    inFlight.current = true;
     setSelectingProfileId(profileId);
     setErrorCode(null);
-    const result = await store.command({
-      name: "SERVER_SELECT",
-      payload: { profileId },
-    });
-    if (result.ok) {
-      onSelected();
-    } else {
-      setErrorCode(result.errorCode);
+    try {
+      const result = await store.command({
+        name: "SERVER_SELECT",
+        payload: { profileId },
+      });
+      if (result.ok) onSelected();
+      else setErrorCode(result.errorCode);
+    } catch {
+      setErrorCode("NETWORK_ERROR");
+    } finally {
+      inFlight.current = false;
+      setSelectingProfileId(null);
     }
-    setSelectingProfileId(null);
   }
 
   const titleId = "syncaction-server-profile-title";
@@ -140,7 +181,7 @@ export function ServerProfileDialog({
       <header class="dialog-header">
         <div>
           <p class="eyebrow">账号和房间按服务器隔离</p>
-          <h2 id={titleId}>服务器</h2>
+          <h2 id={titleId}>{initialSetup ? "连接服务器" : "服务器"}</h2>
         </div>
         <button class="icon-button" type="button" aria-label="关闭" title="关闭" onClick={onClose}>
           <Icon name="close" />
@@ -206,6 +247,8 @@ export function ServerProfileDialog({
                 type="url"
                 placeholder="https://team.example"
                 required
+                data-dialog-autofocus
+                disabled={verifying || saving}
                 value={baseUrl}
                 onInput={(event) => {
                   setBaseUrl(event.currentTarget.value);
@@ -221,7 +264,12 @@ export function ServerProfileDialog({
               <button
                 class="secondary-button"
                 type="button"
+                disabled={verifying || saving}
                 onClick={() => {
+                  if (initialSetup) {
+                    onClose();
+                    return;
+                  }
                   setAdding(false);
                   setCandidate(null);
                   setErrorCode(null);
@@ -267,17 +315,17 @@ export function ServerProfileDialog({
               )}
               {identityChanged ? (
                 <p class="identity-warning">服务器身份已变化，已阻止连接</p>
-              ) : existingProfile !== null ? (
+              ) : existingProfile !== null && !initialSetup ? (
                 <p class="subtle-copy">此服务器已在列表中，无需重复保存。</p>
               ) : (
                 <button
                   class="primary-button"
                   type="button"
-                  aria-label="保存服务器"
+                  aria-label={initialSetup ? "保存并连接" : "保存服务器"}
                   disabled={saving}
                   onClick={() => void save()}
                 >
-                  {saving ? "正在保存…" : "保存服务器"}
+                  {saving ? "正在连接…" : initialSetup ? "保存并连接" : "保存服务器"}
                 </button>
               )}
             </section>

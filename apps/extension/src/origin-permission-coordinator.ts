@@ -1,4 +1,4 @@
-import type { DocumentRevision } from "@syncaction/protocol";
+import { RoomIdSchema, type DocumentRevision, type RoomId } from "@syncaction/protocol";
 import type { OriginConsentRecord, OriginConsentIdentity } from "./origin-consent.js";
 import { normalizePageOrigin, pageOriginPattern } from "./origin-consent.js";
 import { ServerProfileIdSchema } from "./server-profile.js";
@@ -29,6 +29,9 @@ export interface OriginPermissionConsentPort {
 }
 
 export interface PermissionIntent {
+  roomId?: RoomId;
+  url?: string;
+  mediaJoinGroupId?: string;
   profileId: string;
   tabId: number;
   origin: string;
@@ -50,9 +53,10 @@ export interface OriginPermissionCoordinatorOptions {
   consents: OriginPermissionConsentPort;
   getCurrentPageAccess(): UiPageAccessSlice;
   getSelectedProfileId(): string;
+  getSelectedRoomId?(): string | null;
   recordPolicyAcceptance(): Promise<boolean>;
   refreshPageAccess(): Promise<unknown>;
-  resumeFeature(feature: PageFeature): Promise<unknown>;
+  resumeFeature(feature: PageFeature, intent: PermissionIntent): Promise<unknown>;
 }
 
 function rejected(errorCode: string): PermissionConfirmation {
@@ -80,52 +84,77 @@ function tabOrigin(tab: OriginPermissionBrowserTab | undefined): string | null {
   }
 }
 
+function matchesTab(
+  intent: PermissionIntent,
+  tab: OriginPermissionBrowserTab | undefined,
+): boolean {
+  return (
+    tab?.id === intent.tabId &&
+    tabOrigin(tab) === intent.origin &&
+    (intent.url === undefined || (tab.pendingUrl ?? tab.url) === intent.url)
+  );
+}
+
 export class OriginPermissionCoordinator {
   readonly #browser: OriginPermissionBrowserPort;
   readonly #consents: OriginPermissionConsentPort;
   readonly #getCurrentPageAccess: () => UiPageAccessSlice;
   readonly #getSelectedProfileId: () => string;
+  readonly #getSelectedRoomId: (() => string | null) | undefined;
   readonly #recordPolicyAcceptance: () => Promise<boolean>;
   readonly #refreshPageAccess: () => Promise<unknown>;
-  readonly #resumeFeature: (feature: PageFeature) => Promise<unknown>;
+  readonly #resumeFeature: (feature: PageFeature, intent: PermissionIntent) => Promise<unknown>;
 
   public constructor(options: OriginPermissionCoordinatorOptions) {
     this.#browser = options.browser;
     this.#consents = options.consents;
     this.#getCurrentPageAccess = options.getCurrentPageAccess;
     this.#getSelectedProfileId = options.getSelectedProfileId;
+    this.#getSelectedRoomId = options.getSelectedRoomId;
     this.#recordPolicyAcceptance = options.recordPolicyAcceptance;
     this.#refreshPageAccess = options.refreshPageAccess;
     this.#resumeFeature = options.resumeFeature;
   }
 
-  public async capture(featureInput: unknown): Promise<PermissionIntent> {
+  public async capture(featureInput: unknown, expectedUrl?: string): Promise<PermissionIntent> {
     const feature = PageFeatureSchema.parse(featureInput);
     const access = this.#getCurrentPageAccess();
     const profileId = ServerProfileIdSchema.parse(this.#getSelectedProfileId());
+    const selectedRoomId = this.#getSelectedRoomId?.();
+    const roomId = selectedRoomId == null ? undefined : RoomIdSchema.parse(selectedRoomId);
     if (
       access.tabId === null ||
       access.origin === null ||
       !access.supported ||
       access.documentRevision === null ||
       access.serverTermsVersion === null ||
-      access.disclosureVersion !== 1
+      access.disclosureVersion !== 1 ||
+      (feature === "MEDIA_CONTROL" && roomId === undefined)
     ) {
       throw new Error("PAGE_PERMISSION_UNAVAILABLE");
     }
-    const permissionPreviouslyGranted = await this.#browser.permissions.contains({
-      origins: [pageOriginPattern(access.origin)],
-    });
-    return {
+    const intent = {
+      ...(roomId === undefined ? {} : { roomId }),
+      ...(expectedUrl === undefined ? {} : { url: expectedUrl }),
       profileId,
       tabId: access.tabId,
       origin: normalizePageOrigin(access.origin),
       documentRevision: structuredClone(access.documentRevision),
       feature,
       serverTermsVersion: access.serverTermsVersion,
-      disclosureVersion: 1,
-      permissionPreviouslyGranted,
+      disclosureVersion: 1 as const,
     };
+    const permissionPreviouslyGranted = await this.#browser.permissions.contains({
+      origins: [pageOriginPattern(intent.origin)],
+    });
+    const captured = { ...intent, permissionPreviouslyGranted };
+    if (expectedUrl !== undefined) {
+      const tab = (await this.#browser.tabs.query({ active: true, lastFocusedWindow: true }))[0];
+      if (!matchesTab(captured, tab) || !this.#matchesCurrent(captured)) {
+        throw new Error("PAGE_PERMISSION_INTENT_STALE");
+      }
+    }
+    return captured;
   }
 
   public confirm(intent: PermissionIntent, agreed: boolean): Promise<PermissionConfirmation> {
@@ -165,6 +194,7 @@ export class OriginPermissionCoordinator {
     const access = this.#getCurrentPageAccess();
     return (
       profileId === intent.profileId &&
+      (intent.roomId === undefined || intent.roomId === this.#getSelectedRoomId?.()) &&
       access.tabId === intent.tabId &&
       access.origin === intent.origin &&
       access.supported &&
@@ -184,11 +214,7 @@ export class OriginPermissionCoordinator {
         lastFocusedWindow: true,
       })
     )[0];
-    if (
-      tab?.id !== intent.tabId ||
-      tabOrigin(tab) !== intent.origin ||
-      !this.#matchesCurrent(intent)
-    ) {
+    if (!matchesTab(intent, tab) || !this.#matchesCurrent(intent)) {
       if (!intent.permissionPreviouslyGranted) {
         await this.#browser.permissions.remove({ origins: [originPattern] }).catch(() => false);
       }
@@ -208,6 +234,12 @@ export class OriginPermissionCoordinator {
       return rejected("PAGE_CONSENT_PERSIST_FAILED");
     }
 
+    // Consent belongs to the captured site/profile. Do not log a different
+    // server's current policy if navigation occurred while local storage waited.
+    if (!this.#matchesCurrent(intent)) {
+      return { granted: true, errorCode: "PAGE_PERMISSION_INTENT_STALE", policySyncPending: true };
+    }
+
     let policySyncPending: boolean;
     try {
       policySyncPending = !(await this.#recordPolicyAcceptance());
@@ -218,7 +250,13 @@ export class OriginPermissionCoordinator {
     let activationError: string | null = null;
     try {
       await this.#refreshPageAccess();
-      await this.#resumeFeature(intent.feature);
+      const currentTab = (
+        await this.#browser.tabs.query({ active: true, lastFocusedWindow: true })
+      )[0];
+      if (!matchesTab(intent, currentTab) || !this.#matchesCurrent(intent)) {
+        return { granted: true, errorCode: "PAGE_PERMISSION_INTENT_STALE", policySyncPending };
+      }
+      await this.#resumeFeature(intent.feature, intent);
     } catch {
       activationError = "PAGE_PERMISSION_ACTIVATION_FAILED";
     }

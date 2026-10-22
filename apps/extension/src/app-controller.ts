@@ -3,12 +3,14 @@ import {
   CanonicalUuidSchema,
   DeviceIdSchema,
   LogicalTabIdSchema,
+  MediaCommandAckSchema,
   RoomIdSchema,
   ServerCapabilitySchema,
   type Notification,
   type NotificationReadEvent,
   type ContentCompatibility,
   type DocumentRevision,
+  type MediaCommandAck,
   type PageCompatibilityReport,
   type PublicRoomSummary,
   type RoomEventMessage,
@@ -49,6 +51,7 @@ import type {
 } from "./page-collaboration/messages.js";
 import type { PublicCatalogTransport } from "./public-catalog-transport.js";
 import { PRODUCTION_PUBLIC_SERVER_ORIGIN, parsePublicServerOrigin } from "./server-origin.js";
+import { isPlaceholderServerOrigin } from "./server-configuration.js";
 import {
   DEFAULT_SERVER_PROFILE_ID,
   ServerProfileIdSchema,
@@ -56,10 +59,15 @@ import {
   type ServerProfileStore,
   type VerifiedServerCandidate,
 } from "./server-profile.js";
-import type { UiSliceHint } from "./ui/ui-protocol.js";
+import {
+  MediaGroupCreateExpectedContextSchema,
+  type MediaGroupCreateExpectedContext,
+  type UiSliceHint,
+} from "./ui/ui-protocol.js";
 
 export const PRODUCT_SELECTION_STORAGE_KEY = "syncaction.product-selections.v2";
 export const LEGACY_PRODUCT_SELECTION_STORAGE_KEY = "syncaction.product-selection.v1";
+const SESSION_LIFECYCLE_RETRY_MS = 1_000;
 
 const LegacyProductSelectionSchema = z
   .object({
@@ -242,8 +250,9 @@ export interface RoomRuntime {
   setDanmakuHidden?(hidden: boolean): Promise<void>;
   togglePagePen(): Promise<void>;
   jumpToMediaMember(userId: string): Promise<void>;
+  createMediaGroup?(tabId: number, expectedRevision?: DocumentRevision): Promise<MediaCommandAck>;
   alignMediaGroupOnce(playbackGroupId: string): Promise<void>;
-  joinMediaGroup(playbackGroupId: string): Promise<void>;
+  joinMediaGroup(playbackGroupId: string): Promise<MediaCommandAck | void>;
   leaveMediaGroup?(playbackGroupId?: string): Promise<void>;
   closeMediaGroup?(playbackGroupId?: string): Promise<void>;
   takeOverMediaDevice?(playbackGroupId: string): Promise<void>;
@@ -255,6 +264,12 @@ export interface RoomRuntime {
   ): Promise<void>;
   shareBrowserTab(tabIdInput: unknown): Promise<BrowserObserverResult | undefined>;
   confirmBrowserRecovery(): Promise<BrowserActuatorResult | undefined>;
+}
+
+interface MediaCommandRuntimeContext {
+  profileId: string;
+  runtime: RoomRuntime | undefined;
+  generation: number;
 }
 
 export interface RoomRuntimeFactoryInput {
@@ -416,6 +431,8 @@ export interface ExtensionPageAccessContext {
   contentCompatibility: ContentCompatibility | null;
 }
 
+type ExtensionAppStatusBase = Omit<ExtensionAppStatus, "room" | "collaboration">;
+
 export interface LegacyExtensionAppControllerOptions {
   profileId?: unknown;
   serverUrl: unknown;
@@ -479,6 +496,17 @@ export class ExtensionAppController {
   #roomDetail: PublicRoomDetail | null = null;
   #runtime: RoomRuntime | undefined;
   #errorCode: string | null = null;
+  #committedStatus: ExtensionAppStatus;
+  #committedRuntime: RoomRuntime | undefined;
+  #statusCommitRevision = 0;
+  #runtimeGeneration = 0;
+  #runtimeRefreshPending = false;
+  #runtimeRefreshRunning = false;
+  #commandRunning = false;
+  #pendingChange = false;
+  #pendingHint: UiSliceHint | undefined;
+  #statusCommitPending = false;
+  #sessionExpiryTimer: ReturnType<typeof setTimeout> | undefined;
 
   public constructor(options: ExtensionAppControllerOptions) {
     this.#deviceId = DeviceIdSchema.parse(options.deviceId);
@@ -509,6 +537,7 @@ export class ExtensionAppController {
       this.#onboarding = undefined;
       this.#api = options.api as ExtensionProductApi;
     }
+    this.#committedStatus = this.#composeStatus(this.#captureStatusBase(), null);
   }
 
   public subscribe(listener: (hint?: UiSliceHint) => void): () => void {
@@ -569,6 +598,26 @@ export class ExtensionAppController {
       await this.#restoreAuthenticated(status);
       this.#emitChanged();
     });
+  }
+
+  public stop(): Promise<void> {
+    return this.#enqueue(
+      async () => {
+        try {
+          await this.#stopRuntime();
+        } finally {
+          try {
+            await this.#stopPublicTransport();
+          } finally {
+            this.#started = false;
+            this.#clearSessionExpiryTimer();
+            this.#resetProductState("SIGNED_OUT");
+            this.#emitChanged();
+          }
+        }
+      },
+      { checkSession: false },
+    );
   }
 
   public register(input: {
@@ -831,11 +880,20 @@ export class ExtensionAppController {
       if (target === null) {
         throw new Error("SERVER_PROFILE_NOT_FOUND");
       }
+      if (profileId === this.#profileId && this.#profile !== null) {
+        if (this.#phase === "ERROR" || this.#errorCode === "SERVER_NOT_CONFIGURED") {
+          if (target.mode === "UNVERIFIED" && !isPlaceholderServerOrigin(target.baseUrl)) {
+            throw new Error("SERVER_PROFILE_UNVERIFIED");
+          }
+          await this.#stopRuntime();
+          this.#resetProductState("SIGNED_OUT");
+          await this.#configureProfile(target);
+          this.#emitChanged();
+        }
+        return;
+      }
       if (target.mode === "UNVERIFIED") {
         throw new Error("SERVER_PROFILE_UNVERIFIED");
-      }
-      if (profileId === this.#profileId && this.#profile !== null) {
-        return;
       }
       await this.#switchProfile(target);
       this.#emitChanged();
@@ -1360,16 +1418,59 @@ export class ExtensionAppController {
     );
   }
 
+  public createMediaGroup(
+    tabIdInput: unknown,
+    expectedContextInput?: MediaGroupCreateExpectedContext,
+  ): Promise<MediaCommandAck> {
+    const tabId = z.number().int().nonnegative().safe().parse(tabIdInput);
+    const expected =
+      expectedContextInput === undefined
+        ? undefined
+        : MediaGroupCreateExpectedContextSchema.parse(expectedContextInput);
+    const captured = this.#captureMediaCommandContext();
+    return this.#enqueue(async () => {
+      const runtime = await this.#requireMediaCommandContext(captured, expected, tabId);
+      if (runtime.createMediaGroup === undefined) {
+        throw new Error("MEDIA_UNAVAILABLE");
+      }
+      const acknowledgement = MediaCommandAckSchema.parse(
+        expected === undefined
+          ? await runtime.createMediaGroup(tabId)
+          : await runtime.createMediaGroup(tabId, expected.documentRevision),
+      );
+      if (!acknowledgement.accepted) {
+        throw new Error(acknowledgement.code);
+      }
+      this.#emitChanged(["room", "collaboration"]);
+      return acknowledgement;
+    });
+  }
+
   public alignMediaGroupOnce(playbackGroupIdInput: unknown): Promise<void> {
     return this.#enqueue(async () =>
       this.#requireRuntime().alignMediaGroupOnce(CanonicalUuidSchema.parse(playbackGroupIdInput)),
     );
   }
 
-  public joinMediaGroup(playbackGroupIdInput: unknown): Promise<void> {
-    return this.#enqueue(async () =>
-      this.#requireRuntime().joinMediaGroup(CanonicalUuidSchema.parse(playbackGroupIdInput)),
-    );
+  public joinMediaGroup(
+    playbackGroupIdInput: unknown,
+    expectedContextInput?: MediaGroupCreateExpectedContext,
+  ): Promise<void> {
+    const playbackGroupId = CanonicalUuidSchema.parse(playbackGroupIdInput);
+    const expected =
+      expectedContextInput === undefined
+        ? undefined
+        : MediaGroupCreateExpectedContextSchema.parse(expectedContextInput);
+    const captured = this.#captureMediaCommandContext();
+    return this.#enqueue(async () => {
+      const runtime = await this.#requireMediaCommandContext(captured, expected);
+      const result = await runtime.joinMediaGroup(playbackGroupId);
+      if (result !== undefined) {
+        const acknowledgement = MediaCommandAckSchema.parse(result);
+        if (!acknowledgement.accepted) throw new Error(acknowledgement.code);
+      }
+      this.#emitChanged(["room", "collaboration"]);
+    });
   }
 
   public decideMediaProposal(
@@ -1391,40 +1492,43 @@ export class ExtensionAppController {
   }
 
   public getStatus(): Promise<ExtensionAppStatus> {
-    return this.#enqueue(async () => {
-      if (
-        this.#account?.status === "ACTIVE" &&
-        (await this.#sessions.getStatus(this.#profileId)).kind === "SIGNED_OUT"
-      ) {
-        await this.#stopRuntime();
-        this.#resetProductState("SESSION_EXPIRED");
-        this.#errorCode = "SESSION_REQUIRED";
-      }
-      const runtime = this.#runtime;
-      const room = runtime === undefined ? null : await runtime.getStatus();
-      return structuredClone({
-        phase: this.#phase,
-        account: this.#account,
-        profiles: this.#profilesList,
-        selectedProfileId: this.#profileId,
-        selectedProfile: this.#profile,
-        serverCapabilities: [...this.#serverCapabilities],
-        publicRooms: this.#publicRooms,
-        publicRoomsUnavailableReason: this.#publicRoomsUnavailableReason(),
-        pointerUnavailableReason: this.#pointerUnavailableReason(),
-        contentCompatibilityUnavailableReason: this.#contentCompatibilityUnavailableReason(),
-        notifications: this.#notifications,
-        notificationCursor: this.#notificationCursor,
-        unreadNotificationCount: this.#unreadNotificationCount,
-        onboardingRequired: this.#onboardingRequired,
-        rooms: this.#rooms,
-        invitations: this.#invitations,
-        selectedRoomId: this.#selection?.roomId ?? null,
-        roomDetail: this.#roomDetail,
-        room,
-        errorCode: this.#errorCode,
-        collaboration: projectCollaborationSummary(this.#roomDetail, room),
-      });
+    return Promise.resolve(structuredClone(this.#committedStatus));
+  }
+
+  /** Compatibility with the public v0.9.11 projection entrypoint. */
+  public getProjectionStatus(): Promise<ExtensionAppStatus> {
+    return this.getStatus();
+  }
+
+  #captureStatusBase(): ExtensionAppStatusBase {
+    return structuredClone({
+      phase: this.#phase,
+      account: this.#account,
+      profiles: this.#profilesList,
+      selectedProfileId: this.#profileId,
+      selectedProfile: this.#profile,
+      serverCapabilities: [...this.#serverCapabilities],
+      publicRooms: this.#publicRooms,
+      publicRoomsUnavailableReason: this.#publicRoomsUnavailableReason(),
+      pointerUnavailableReason: this.#pointerUnavailableReason(),
+      contentCompatibilityUnavailableReason: this.#contentCompatibilityUnavailableReason(),
+      notifications: this.#notifications,
+      notificationCursor: this.#notificationCursor,
+      unreadNotificationCount: this.#unreadNotificationCount,
+      onboardingRequired: this.#onboardingRequired,
+      rooms: this.#rooms,
+      invitations: this.#invitations,
+      selectedRoomId: this.#selection?.roomId ?? null,
+      roomDetail: this.#roomDetail,
+      errorCode: this.#errorCode,
+    });
+  }
+
+  #composeStatus(base: ExtensionAppStatusBase, room: ExtensionStatus | null): ExtensionAppStatus {
+    return structuredClone({
+      ...base,
+      room,
+      collaboration: projectCollaborationSummary(base.roomDetail, room),
     });
   }
 
@@ -1442,6 +1546,15 @@ export class ExtensionAppController {
     this.#notificationCursor = 0;
     this.#unreadNotificationCount = 0;
     this.#errorCode = null;
+
+    if (isPlaceholderServerOrigin(profileInput.baseUrl)) {
+      await this.#stopRuntime();
+      this.#api = null;
+      this.#resetProductState("SIGNED_OUT");
+      this.#errorCode = "SERVER_NOT_CONFIGURED";
+      this.#profilesList = await profiles.list();
+      return;
+    }
 
     try {
       const api = this.#requireApi();
@@ -1565,6 +1678,9 @@ export class ExtensionAppController {
 
   async #probeServer(baseUrlInput: unknown): Promise<VerifiedServerCandidate> {
     const baseUrl = parsePublicServerOrigin(baseUrlInput);
+    if (isPlaceholderServerOrigin(baseUrl)) {
+      throw new Error("SERVER_NOT_CONFIGURED");
+    }
     const api = this.#apiFactory?.(baseUrl);
     if (api === undefined) {
       throw new Error("SERVER_PROFILE_UNAVAILABLE");
@@ -1650,31 +1766,40 @@ export class ExtensionAppController {
             // The next invalidation or explicit refresh can recover public discovery.
           }
         } while (this.#publicRefreshPending && this.#publicTransport !== null);
-      }).finally(() => {
-        this.#publicRefreshRunning = false;
-        if (this.#publicRefreshPending && this.#publicTransport !== null) {
-          this.#schedulePublicRefresh();
-        }
-      });
+      })
+        .catch(() => {
+          // A failed session checkpoint is retried by the lifecycle timer. Do not
+          // spin an invalidation loop or leak a rejected event-handler promise.
+          this.#publicRefreshPending = false;
+        })
+        .finally(() => {
+          this.#publicRefreshRunning = false;
+          if (this.#publicRefreshPending && this.#publicTransport !== null) {
+            this.#schedulePublicRefresh();
+          }
+        });
     });
   }
 
-  #scheduleRoomEvent(event: RoomEventMessage): void {
+  #scheduleRoomEvent(event: RoomEventMessage, generation: number): void {
     void this.#enqueue(async () => {
+      if (generation !== this.#runtimeGeneration) return;
       await this.#applyRoomEvent(event);
       this.#emitChanged();
     }).catch(() => undefined);
   }
 
-  #scheduleNotificationCreated(notification: Notification): void {
+  #scheduleNotificationCreated(notification: Notification, generation: number): void {
     void this.#enqueue(async () => {
+      if (generation !== this.#runtimeGeneration) return;
       this.#applyNotification(notification);
       this.#emitChanged();
     }).catch(() => undefined);
   }
 
-  #scheduleNotificationRead(event: NotificationReadEvent): void {
+  #scheduleNotificationRead(event: NotificationReadEvent, generation: number): void {
     void this.#enqueue(async () => {
+      if (generation !== this.#runtimeGeneration) return;
       this.#applyNotificationRead(event);
       this.#emitChanged();
     }).catch(() => undefined);
@@ -1820,7 +1945,18 @@ export class ExtensionAppController {
     this.#replaceRoom(detail);
   }
 
-  #replaceRoom(room: PublicRoom): void {
+  #replaceRoom(roomInput: PublicRoom): void {
+    const room: PublicRoom = {
+      id: roomInput.id,
+      name: roomInput.name,
+      role: roomInput.role,
+      roomEpoch: roomInput.roomEpoch,
+      visibility: roomInput.visibility,
+      joinPolicy: roomInput.joinPolicy,
+      roomRevision: roomInput.roomRevision,
+      createdAt: roomInput.createdAt,
+      updatedAt: roomInput.updatedAt,
+    };
     const index = this.#rooms.findIndex((candidate) => candidate.id === room.id);
     if (index < 0) {
       this.#rooms = [room, ...this.#rooms];
@@ -1904,12 +2040,7 @@ export class ExtensionAppController {
     if (room === undefined || this.#account === null) {
       throw new Error("ROOM_NOT_FOUND");
     }
-    this.#selection = ProductSelectionSchema.parse({
-      userId: this.#account.id,
-      roomId,
-    });
-    await this.#writeSelection(this.#selection);
-    await this.#activateRoom(roomId, true);
+    await this.#activateRoom(roomId, false);
   }
 
   async #activateRoom(roomId: string, selectionAlreadyPersisted: boolean): Promise<void> {
@@ -1917,24 +2048,41 @@ export class ExtensionAppController {
     if (room === undefined || this.#account === null) {
       throw new Error("ROOM_NOT_FOUND");
     }
-    if (!selectionAlreadyPersisted) {
-      this.#selection = ProductSelectionSchema.parse({
-        userId: this.#account.id,
-        roomId,
-      });
-    }
-    const detail = await this.#sessions.runAuthenticated(this.#profileId, (accessToken) =>
-      this.#requireApi().getRoom(accessToken, roomId),
-    );
-    await this.#stopRuntime();
+    const previousPhase = this.#phase;
     this.#phase = "CONNECTING_ROOM";
     this.#errorCode = null;
+    this.#committedStatus = {
+      ...this.#committedStatus,
+      phase: "CONNECTING_ROOM",
+      errorCode: null,
+    };
+    this.#statusCommitRevision += 1;
+    this.#notifyChanged(["shell"]);
+    let detail: PublicRoomDetail;
+    try {
+      detail = await this.#sessions.runAuthenticated(this.#profileId, (accessToken) =>
+        this.#requireApi().getRoom(accessToken, roomId),
+      );
+    } catch (cause) {
+      this.#phase = previousPhase;
+      throw cause;
+    }
+    await this.#stopRuntime();
+    this.#selection = ProductSelectionSchema.parse({ userId: this.#account.id, roomId });
+    if (!selectionAlreadyPersisted) {
+      await this.#writeSelection(this.#selection);
+    }
+    const generation = this.#runtimeGeneration;
+    const runtimeProfileId = this.#profileId;
     const runtimeInput: RoomRuntimeFactoryInput = {
       serverUrl: this.#serverUrl,
       userId: this.#account.id,
       deviceId: this.#deviceId,
       room,
-      getAccessToken: () => this.#sessions.getAccessToken(this.#profileId),
+      getAccessToken: async () => {
+        if (generation !== this.#runtimeGeneration) throw new ExtensionSessionRequiredError();
+        return this.#sessions.getAccessToken(runtimeProfileId);
+      },
       ...(this.#profiles === undefined
         ? {}
         : {
@@ -1943,12 +2091,12 @@ export class ExtensionAppController {
             serverCapabilities: [...this.#serverCapabilities],
             enableVolatilePointer: this.#serverCapabilities.has("volatile-pointer-v2"),
             enableContentCompatibility: this.#serverCapabilities.has("content-compatibility-v1"),
-            onRoomEvent: (event: RoomEventMessage) => this.#scheduleRoomEvent(event),
+            onRoomEvent: (event: RoomEventMessage) => this.#scheduleRoomEvent(event, generation),
             onNotificationCreated: (notification: Notification) =>
-              this.#scheduleNotificationCreated(notification),
+              this.#scheduleNotificationCreated(notification, generation),
             onNotificationRead: (event: NotificationReadEvent) =>
-              this.#scheduleNotificationRead(event),
-            onStatusChanged: () => this.#emitChanged(["room", "collaboration"]),
+              this.#scheduleNotificationRead(event, generation),
+            onStatusChanged: () => this.#scheduleRuntimeRefresh(generation),
           }),
     };
     const runtime = await this.#runtimeFactory(runtimeInput);
@@ -1972,6 +2120,7 @@ export class ExtensionAppController {
   }
 
   async #stopRuntime(): Promise<void> {
+    this.#runtimeGeneration += 1;
     this.#pendingMediaGestureObservations.clear();
     const runtime = this.#runtime;
     this.#runtime = undefined;
@@ -2108,6 +2257,47 @@ export class ExtensionAppController {
     }
   }
 
+  #captureMediaCommandContext(): MediaCommandRuntimeContext {
+    return {
+      profileId: this.#profileId,
+      runtime: this.#runtime,
+      generation: this.#runtimeGeneration,
+    };
+  }
+
+  async #requireMediaCommandContext(
+    captured: MediaCommandRuntimeContext,
+    expected?: MediaGroupCreateExpectedContext,
+    tabId = expected?.tabId,
+  ): Promise<RoomRuntime> {
+    const runtime = this.#requireRuntime();
+    if (
+      captured.profileId !== this.#profileId ||
+      captured.runtime !== runtime ||
+      captured.generation !== this.#runtimeGeneration
+    )
+      throw new Error("MEDIA_CONTEXT_CHANGED");
+    if (expected !== undefined) {
+      if (
+        expected.profileId !== this.#profileId ||
+        expected.tabId !== tabId ||
+        (expected.roomId !== undefined && expected.roomId !== this.#selection?.roomId)
+      ) {
+        throw new Error("PAGE_PERMISSION_INTENT_STALE");
+      }
+      const revision = await runtime.getPageDocumentRevision?.(expected.tabId);
+      if (
+        revision === undefined ||
+        revision === null ||
+        revision.roomEpoch !== expected.documentRevision.roomEpoch ||
+        revision.tabUpdatedAtSeq !== expected.documentRevision.tabUpdatedAtSeq
+      ) {
+        throw new Error("MEDIA_CONTEXT_CHANGED");
+      }
+    }
+    return runtime;
+  }
+
   #requireRuntime(): RoomRuntime {
     this.#requireAuthenticated();
     if (this.#runtime === undefined || this.#phase !== "ROOM_ACTIVE") {
@@ -2132,6 +2322,21 @@ export class ExtensionAppController {
   }
 
   #emitChanged(hint?: UiSliceHint): void {
+    if (this.#commandRunning) {
+      if (!this.#pendingChange) {
+        this.#pendingHint = hint;
+      } else if (this.#pendingHint !== undefined && hint !== undefined) {
+        this.#pendingHint = [...new Set([...this.#pendingHint, ...hint])];
+      } else {
+        this.#pendingHint = undefined;
+      }
+      this.#pendingChange = true;
+      return;
+    }
+    this.#notifyChanged(hint);
+  }
+
+  #notifyChanged(hint?: UiSliceHint): void {
     for (const listener of [...this.#listeners]) {
       try {
         listener(hint);
@@ -2141,13 +2346,153 @@ export class ExtensionAppController {
     }
   }
 
-  #enqueue<T>(work: () => Promise<T>): Promise<T> {
-    const result = this.#tail.then(work);
+  #enqueue<T>(
+    work: () => Promise<T>,
+    { checkSession = true }: { checkSession?: boolean } = {},
+  ): Promise<T> {
+    const result = this.#tail.then(async () => {
+      this.#commandRunning = true;
+      this.#pendingChange = false;
+      this.#pendingHint = undefined;
+      try {
+        if (checkSession) await this.#checkSessionLifecycle();
+        return await work();
+      } finally {
+        try {
+          let lifecycleChecked = true;
+          try {
+            if (checkSession) await this.#checkSessionLifecycle();
+          } catch {
+            // Keep the last coherent view without changing the business result.
+            // The lifecycle retry publishes this draft after a successful check.
+            this.#statusCommitPending = true;
+            lifecycleChecked = false;
+          }
+          if (lifecycleChecked) {
+            const runtime = this.#runtime;
+            const revision = this.#statusCommitRevision;
+            let room = runtime === this.#committedRuntime ? this.#committedStatus.room : null;
+            if (runtime !== undefined) {
+              try {
+                room = await runtime.getStatus();
+              } catch {
+                // A projection read failure must not turn an accepted business
+                // operation into a reported failure. Keep the previous room view.
+              }
+            }
+            const projectionChanged =
+              runtime === this.#committedRuntime && revision !== this.#statusCommitRevision;
+            this.#committedStatus = this.#composeStatus(
+              this.#captureStatusBase(),
+              projectionChanged ? this.#committedStatus.room : room,
+            );
+            this.#committedRuntime = runtime;
+            this.#statusCommitRevision += 1;
+            if (this.#statusCommitPending) {
+              this.#statusCommitPending = false;
+              this.#emitChanged();
+            }
+            if (runtime !== undefined && projectionChanged) {
+              this.#scheduleRuntimeRefresh(this.#runtimeGeneration);
+            }
+          }
+        } finally {
+          this.#commandRunning = false;
+          if (this.#pendingChange) this.#notifyChanged(this.#pendingHint);
+        }
+      }
+    });
     this.#tail = result.then(
       () => undefined,
       () => undefined,
     );
     return result;
+  }
+
+  #scheduleRuntimeRefresh(generation: number): void {
+    if (generation !== this.#runtimeGeneration) return;
+    this.#runtimeRefreshPending = true;
+    if (this.#commandRunning) this.#emitChanged(["room", "collaboration"]);
+    if (this.#runtimeRefreshRunning) return;
+    this.#runtimeRefreshRunning = true;
+    void (async () => {
+      try {
+        while (this.#runtimeRefreshPending) {
+          this.#runtimeRefreshPending = false;
+          const runtime = this.#runtime;
+          const currentGeneration = this.#runtimeGeneration;
+          const revision = this.#statusCommitRevision;
+          if (runtime === undefined || runtime !== this.#committedRuntime) return;
+          const room = await runtime.getStatus();
+          if (
+            runtime !== this.#runtime ||
+            runtime !== this.#committedRuntime ||
+            currentGeneration !== this.#runtimeGeneration
+          )
+            continue;
+          if (revision !== this.#statusCommitRevision) {
+            this.#runtimeRefreshPending = true;
+            continue;
+          }
+          this.#committedStatus = {
+            ...this.#committedStatus,
+            room: structuredClone(room),
+            collaboration: projectCollaborationSummary(this.#committedStatus.roomDetail, room),
+          };
+          this.#statusCommitRevision += 1;
+          this.#notifyChanged(["room", "collaboration"]);
+        }
+      } catch {
+        // Keep the previous committed snapshot; a later runtime event can retry.
+      } finally {
+        this.#runtimeRefreshRunning = false;
+        if (this.#runtimeRefreshPending) {
+          this.#scheduleRuntimeRefresh(this.#runtimeGeneration);
+        }
+      }
+    })();
+  }
+
+  async #checkSessionLifecycle(): Promise<void> {
+    this.#clearSessionExpiryTimer();
+    if (!this.#started || this.#account?.status !== "ACTIVE") return;
+    try {
+      const status = await this.#sessions.getStatus(this.#profileId);
+      if (
+        status.kind === "SIGNED_OUT" ||
+        status.refreshTokenExpiresAt <= Date.now() ||
+        status.account.status !== "ACTIVE" ||
+        status.account.id !== this.#account.id
+      ) {
+        await this.#sessions.clear(this.#profileId);
+        await this.#stopRuntime();
+        this.#resetProductState("SESSION_EXPIRED");
+        this.#errorCode = "SESSION_REQUIRED";
+        this.#emitChanged();
+        return;
+      }
+      this.#scheduleSessionCheckpoint(
+        Math.min(status.refreshTokenExpiresAt - Date.now(), 2_147_483_647),
+      );
+    } catch (cause) {
+      this.#scheduleSessionCheckpoint(SESSION_LIFECYCLE_RETRY_MS);
+      throw cause;
+    }
+  }
+
+  #scheduleSessionCheckpoint(delayMs: number): void {
+    this.#sessionExpiryTimer = setTimeout(() => {
+      this.#sessionExpiryTimer = undefined;
+      void this.#enqueue(async () => this.#emitChanged()).catch(() => undefined);
+    }, delayMs);
+    (this.#sessionExpiryTimer as ReturnType<typeof setTimeout> & { unref?(): void }).unref?.();
+  }
+
+  #clearSessionExpiryTimer(): void {
+    if (this.#sessionExpiryTimer !== undefined) {
+      clearTimeout(this.#sessionExpiryTimer);
+      this.#sessionExpiryTimer = undefined;
+    }
   }
 }
 

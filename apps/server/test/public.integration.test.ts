@@ -507,7 +507,7 @@ describe("v0.9 product HTTP contracts", () => {
     expect(meta.statusCode).toBe(200);
     expect(meta.json()).toMatchObject({
       displayName: "SyncAction",
-      softwareVersion: "0.9.10",
+      softwareVersion: "0.9.11",
       protocolVersion: "1",
       minimumClientVersion: "0.8.1",
       termsVersion: "2026-07-30",

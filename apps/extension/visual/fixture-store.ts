@@ -24,12 +24,12 @@ const playbackGroupIds = [uuid(400), uuid(401)] as const;
 const profiles = [
   {
     profileId: "syncaction-production",
-    baseUrl: "https://syncaction.example.com",
+    baseUrl: "https://demo.syncaction.example",
     mode: "VNEXT" as const,
     metadata: {
       serverId: uuid(500),
-      displayName: "SyncAction 演示节点",
-      softwareVersion: "0.9.10",
+      displayName: "SyncAction 示例",
+      softwareVersion: "0.9.9",
       protocolVersion: "1",
       minimumClientVersion: "0.8.1",
       termsVersion: "2026-07-30",
@@ -50,8 +50,8 @@ const profiles = [
 
 const account = {
   id: userIds[0]!,
-  username: "demo",
-  displayName: "示例用户",
+  username: "thomas",
+  displayName: "Thomas",
   status: "ACTIVE" as const,
   passwordResetRequired: false,
   createdAt: "2026-08-01T00:00:00.000Z",
@@ -60,7 +60,7 @@ const account = {
 const members = userIds.map((userId, index) => ({
   userId,
   username: `member-${index + 1}`,
-  displayName: index === 0 ? "示例用户" : index === 1 ? "林岚" : `成员 ${index + 1}`,
+  displayName: index === 0 ? "Thomas" : index === 1 ? "林岚" : `成员 ${index + 1}`,
   role: index === 0 ? ("OWNER" as const) : ("MEMBER" as const),
   joinedAt: "2026-08-01T00:00:00.000Z",
 }));
@@ -69,12 +69,11 @@ const pages = pageIds.map((pageId, index) => ({
   pageId,
   title:
     index === 0
-      ? "示例文章：团队协作"
+      ? "Tina 专业文章：退休资金分层"
       : index === 1
         ? "发布会回放 · 产品路线"
         : `协作资料 ${String(index + 1).padStart(2, "0")}`,
-  domain:
-    index === 0 ? "portal.example.com" : index === 1 ? "video.example" : `docs-${index}.example`,
+  domain: index === 0 ? "docs.example" : index === 1 ? "video.example" : `docs-${index}.example`,
   state: "OPEN" as const,
   compatibility: "EXACT" as const,
 }));
@@ -173,7 +172,7 @@ function lobbySlices(): UiStateSlices {
       ],
       rooms: [
         roomSummary(roomId, "联合研究室", "OWNER"),
-        roomSummary(alternateRoomId, "界面评审", "MEMBER"),
+        roomSummary(alternateRoomId, "Tina 视觉评审", "MEMBER"),
       ],
       invitations: [],
     },
@@ -272,7 +271,7 @@ function roomSlices(): UiStateSlices {
       tabId: 42,
       documentRevision: { roomEpoch: 0, tabUpdatedAtSeq: 12 },
       contentCompatibility: "EXACT",
-      origin: "https://portal.example.com",
+      origin: "https://docs.example",
       supported: true,
       browserPermissionGranted: true,
       termsAccepted: true,

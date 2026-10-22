@@ -429,6 +429,101 @@ describe("UiStateHub", () => {
     });
   });
 
+  it.each([
+    { value: undefined, failRead: false },
+    { value: { dismissed: true }, failRead: false },
+    { value: undefined, failRead: true },
+    { value: { dismissed: true }, failRead: true },
+  ])(
+    "preserves successful execution (%j) when a later refresh fails and recovers atomically",
+    async ({ value, failRead }) => {
+      const { source, scheduler, hub } = createHub();
+      const port = new FakePort();
+      await hub.attach(port);
+      const readStatus = source.readStatus.bind(source);
+      source.execute = vi.fn(async () => {
+        source.status.onboardingRequired = false;
+        if (failRead) {
+          source.readStatus = async () => {
+            throw new Error("STATUS_READ_FAILED");
+          };
+        } else {
+          source.pageAccess.policySyncPendingCount = -1;
+        }
+        return value;
+      });
+
+      port.receive({ type: "ui.command", commandId, name: "ONBOARDING_DISMISS" });
+      await vi.waitFor(() => expect(port.messages).toHaveLength(2));
+      expect(port.messages[1]).toEqual({
+        type: "ui.command.result",
+        commandId,
+        ok: true,
+        ...(value === undefined ? {} : { value }),
+      });
+
+      source.readStatus = readStatus;
+      source.pageAccess.policySyncPendingCount = 0;
+      source.emit();
+      await scheduler.flush();
+      expect(port.messages[2]).toMatchObject({
+        type: "ui.state.patch",
+        slice: "shell",
+        fromVersion: 0,
+        toVersion: 1,
+        value: { onboardingRequired: false },
+      });
+      expect(source.execute).toHaveBeenCalledTimes(1);
+      hub.dispose();
+    },
+  );
+
+  it("retains the last complete projection when a later slice fails validation", async () => {
+    const { source, scheduler, hub } = createHub();
+    const port = new FakePort();
+    await hub.attach(port);
+    source.status.onboardingRequired = false;
+    source.pageAccess.policySyncPendingCount = -1;
+    source.emit();
+    await scheduler.flush();
+    expect(port.messages).toHaveLength(1);
+
+    source.pageAccess.policySyncPendingCount = 0;
+    source.emit();
+    await scheduler.flush();
+    expect(port.messages[1]).toMatchObject({
+      type: "ui.state.patch",
+      slice: "shell",
+      fromVersion: 0,
+      toVersion: 1,
+      value: { onboardingRequired: false },
+    });
+    hub.dispose();
+  });
+
+  it("preserves the business rejection when refreshing state also fails", async () => {
+    const { source, hub } = createHub();
+    const port = new FakePort();
+    await hub.attach(port);
+    source.execute = vi.fn(async () => {
+      throw new Error("ROOM_OWNER_REQUIRED");
+    });
+    source.readStatus = vi.fn(async () => {
+      throw new Error("STATUS_READ_FAILED");
+    });
+
+    port.receive({ type: "ui.command", commandId, name: "ROOM_DISSOLVE" });
+    await vi.waitFor(() => expect(port.messages).toHaveLength(2));
+    expect(port.messages[1]).toEqual({
+      type: "ui.command.result",
+      commandId,
+      ok: false,
+      errorCode: "ROOM_OWNER_REQUIRED",
+    });
+    expect(source.execute).toHaveBeenCalledTimes(1);
+    hub.dispose();
+  });
+
   it("answers stale resync and a reconnect with current full snapshots", async () => {
     const { source, scheduler, hub } = createHub();
     const first = new FakePort();

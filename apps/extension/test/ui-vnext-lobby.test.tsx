@@ -64,7 +64,7 @@ afterEach(() => {
 });
 
 describe("vNext guest lobby", () => {
-  it("places the default service status directly after the welcome strip", async () => {
+  it("places live production service status directly after the welcome strip", async () => {
     const store = new TestUiStore();
     const probe = vi.fn().mockResolvedValue({ latencyMs: 42 });
     const root = renderPanel(<App store={store} serviceStatusProbe={{ probe }} />);
@@ -73,10 +73,10 @@ describe("vNext guest lobby", () => {
 
     const card = root.querySelector(".welcome-strip + .service-status-card");
     expect(card).toBeTruthy();
-    expect(card?.textContent).toContain("默认节点 服务在线");
+    expect(card?.textContent).toContain("SyncAction 服务在线");
     expect(card?.textContent).toContain("v0.9.3");
     expect(card?.textContent).toContain("42 ms");
-    expect(card?.textContent).toContain("syncaction.example.com");
+    expect(card?.textContent).toContain("demo.syncaction.example");
     expect(probe).toHaveBeenCalledOnce();
     const publicRooms = root.querySelector('[data-editorial-surface="public-rooms"]')!;
     expect(card!.compareDocumentPosition(publicRooms) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
@@ -84,7 +84,7 @@ describe("vNext guest lobby", () => {
     );
   });
 
-  it("shows connection help while offline and retries in place", async () => {
+  it("shows production help while offline and retries in place", async () => {
     const store = new TestUiStore();
     const probe = vi
       .fn()
@@ -94,16 +94,16 @@ describe("vNext guest lobby", () => {
 
     await flushUi();
     expect(root.textContent).toContain("服务暂不可用");
-    expect(root.textContent).toContain("请检查服务器地址、网络连接和服务器状态");
+    expect(root.textContent).toContain("请检查服务器地址和网络连接");
 
     await click(byRole(root, "button", "重新连接"));
 
     expect(probe).toHaveBeenCalledTimes(2);
-    expect(root.textContent).toContain("默认节点 服务在线");
+    expect(root.textContent).toContain("SyncAction 服务在线");
     expect(root.textContent).toContain("55 ms");
   });
 
-  it("does not label a custom server as 默认节点 or invent its version", async () => {
+  it("does not label a custom server as 126f or invent its version", async () => {
     const store = new TestUiStore();
     store.update({
       shell: {
@@ -137,7 +137,7 @@ describe("vNext guest lobby", () => {
     const card = root.querySelector(".service-status-card");
     expect(card?.textContent).toContain("Team Server 服务在线");
     expect(card?.textContent).toContain("版本未提供");
-    expect(card?.textContent).not.toContain("默认节点");
+    expect(card?.textContent).not.toContain("126f");
   });
 
   it("avoids overlapping or hidden health polling and refreshes when visible again", async () => {

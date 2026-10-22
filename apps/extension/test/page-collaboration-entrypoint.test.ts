@@ -4,16 +4,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PAGE_OVERLAY_HOST_ATTRIBUTE } from "../src/page-collaboration/page-overlay-host.js";
 
 const browserHarness = vi.hoisted(() => {
-  const listeners = new Set<(message: unknown) => unknown | Promise<unknown>>();
+  type Listener = (
+    message: unknown,
+    sender: unknown,
+    sendResponse: (response?: unknown) => void,
+  ) => unknown;
+  const listeners = new Set<Listener>();
   return {
     listeners,
     sendMessage: vi.fn(async (message: unknown) => {
       void message;
     }),
-    addListener: vi.fn((listener: (message: unknown) => unknown | Promise<unknown>) => {
+    addListener: vi.fn((listener: Listener) => {
       listeners.add(listener);
     }),
-    removeListener: vi.fn((listener: (message: unknown) => unknown | Promise<unknown>) => {
+    removeListener: vi.fn((listener: Listener) => {
       listeners.delete(listener);
     }),
   };
@@ -109,6 +114,78 @@ afterEach(() => {
 });
 
 describe("page collaboration media bridge", () => {
+  it("does not claim or respond to another listener's message", () => {
+    (pageCollaborationEntrypoint as unknown as () => void)();
+    const sendResponse = vi.fn();
+    for (const listener of browserHarness.listeners) {
+      expect(listener({ type: "another.extension.message" }, {}, sendResponse)).toBeUndefined();
+    }
+    expect(sendResponse).not.toHaveBeenCalled();
+  });
+
+  it("models Chromium's closed synchronous channel instead of awaiting a returned Promise", async () => {
+    await expect(dispatchToListener(() => Promise.resolve("lost"), {})).resolves.toBeUndefined();
+    await expect(
+      dispatchToListener((_message, _sender, respond) => {
+        queueMicrotask(() => respond("delivered"));
+        return true;
+      }, {}),
+    ).resolves.toBe("delivered");
+  });
+
+  it("returns danmaku availability through the native asynchronous response channel", async () => {
+    renderingDependencies.loadDanmaku.mockResolvedValueOnce(
+      class {
+        emit = vi.fn();
+        clear = vi.fn();
+        resize = vi.fn();
+        show = vi.fn();
+        hide = vi.fn();
+        destroy = vi.fn();
+      },
+    );
+    (pageCollaborationEntrypoint as unknown as () => void)();
+    await expect(
+      dispatchAndWait({
+        type: "syncaction.danmaku.command",
+        controller: "danmaku",
+        context,
+        action: "TOGGLE_INPUT",
+      }),
+    ).resolves.toEqual([
+      {
+        type: "syncaction.page.capability",
+        capability: "DANMAKU",
+        state: "AVAILABLE",
+        errorCode: null,
+      },
+    ]);
+  });
+
+  it("responds synchronously to a recognized message and closes a rejected async response", async () => {
+    (pageCollaborationEntrypoint as unknown as () => void)();
+    const respond = vi.fn();
+    for (const listener of browserHarness.listeners) {
+      expect(listener({ type: "syncaction.page.announce" }, {}, respond)).toBeUndefined();
+    }
+    expect(respond).toHaveBeenCalledWith(undefined);
+    document.body.append(document.createElement("main"));
+    compatibilityReporterHarness.computeElement.mockRejectedValueOnce(
+      new Error("SIGNATURE_UNAVAILABLE"),
+    );
+    await expect(
+      dispatchAndWait({
+        type: "syncaction.annotation.anchor-signature.request",
+        controller: "drawing",
+        context,
+        path: [
+          { tagName: "html", nthOfType: 1 },
+          { tagName: "body", nthOfType: 1 },
+          { tagName: "main", nthOfType: 1 },
+        ],
+      }),
+    ).resolves.toEqual([undefined]);
+  });
   it("binds one top-frame compatibility reporter to page context, media, and cleanup", async () => {
     (pageCollaborationEntrypoint as unknown as () => void)();
 
@@ -458,6 +535,10 @@ describe("page collaboration media bridge", () => {
   it("correlates a programmatic media event with the apply token", async () => {
     const video = document.createElement("video");
     let paused = true;
+    let releasePlay!: () => void;
+    const pendingPlay = new Promise<void>((resolve) => {
+      releasePlay = resolve;
+    });
     Object.defineProperties(video, {
       duration: { configurable: true, get: () => 100 },
       currentTime: { configurable: true, writable: true, value: 10 },
@@ -469,6 +550,7 @@ describe("page collaboration media bridge", () => {
       play: {
         configurable: true,
         value: vi.fn(async () => {
+          await pendingPlay;
           paused = false;
           video.dispatchEvent(new Event("play"));
         }),
@@ -479,7 +561,7 @@ describe("page collaboration media bridge", () => {
     document.body.append(video);
 
     (pageCollaborationEntrypoint as unknown as () => void)();
-    dispatch({
+    await dispatchAndWait({
       type: "syncaction.media.command",
       context,
       operation: { type: "OBSERVE" },
@@ -504,9 +586,10 @@ describe("page collaboration media bridge", () => {
       throw new Error("expected media discovery");
     }
 
-    const applyToken = "00000000-0000-4000-8000-000000000003";
+    const applyToken = "018f8f8e-4b5c-4d6e-8f90-123456789a03";
     browserHarness.sendMessage.mockClear();
-    dispatch({
+    let responseReceived = false;
+    const applying = dispatchAndWait({
       type: "syncaction.media.command",
       context,
       operation: {
@@ -515,7 +598,14 @@ describe("page collaboration media bridge", () => {
         target: discovery.target,
         action: { type: "PLAY" },
       },
+    }).then((response) => {
+      responseReceived = true;
+      return response;
     });
+    await vi.waitFor(() => expect(video.play).toHaveBeenCalledOnce());
+    expect(responseReceived).toBe(false);
+    releasePlay();
+    await expect(applying).resolves.toEqual([undefined]);
 
     await vi.waitFor(() => {
       expect(
@@ -539,12 +629,38 @@ describe("page collaboration media bridge", () => {
 
 function dispatch(message: unknown): void {
   for (const listener of [...browserHarness.listeners]) {
-    void listener(message);
+    void dispatchToListener(listener, message);
   }
 }
 
 async function dispatchAndWait(message: unknown): Promise<unknown[]> {
-  return Promise.all([...browserHarness.listeners].map((listener) => listener(message)));
+  return Promise.all(
+    [...browserHarness.listeners].map((listener) => dispatchToListener(listener, message)),
+  );
+}
+
+function dispatchToListener(
+  listener: (
+    message: unknown,
+    sender: unknown,
+    sendResponse: (response?: unknown) => void,
+  ) => unknown,
+  message: unknown,
+): Promise<unknown> {
+  return new Promise((resolve) => {
+    let open = true;
+    let responded = false;
+    const response = listener(message, {}, (value) => {
+      if (!open || responded) return;
+      responded = true;
+      resolve(value);
+    });
+    // Native Chromium before Promise support does not retain/await this value.
+    if (response !== true) {
+      open = false;
+      if (!responded) resolve(undefined);
+    }
+  });
 }
 
 function domRect(x: number, y: number, width: number, height: number): DOMRect {

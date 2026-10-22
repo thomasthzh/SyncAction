@@ -249,7 +249,7 @@ export default defineBackground(() => {
     const policyRetry = new AuthenticatedOriginPolicyRetry({
       source: {
         readStatus: async () => {
-          const status = await app.getStatus();
+          const status = await app.getProjectionStatus();
           return {
             phase: status.phase,
             accountId: status.account?.id ?? null,
@@ -363,7 +363,7 @@ export default defineBackground(() => {
     });
     const uiStateHub = new UiStateHub({
       source: {
-        readStatus: () => app.getStatus(),
+        readStatus: () => app.getProjectionStatus(),
         readProfiles: () => profiles.list(),
         readPageAccess,
         subscribeChanged: (listener) => app.subscribe(listener),
@@ -411,15 +411,16 @@ export default defineBackground(() => {
     })(),
   );
 
-  browser.runtime.onMessage.addListener((message: unknown, sender) => {
+  browser.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
     let pageMessage;
     try {
       pageMessage = parsePageOutboundMessageFromSender(message, sender);
-    } catch (error) {
-      return Promise.reject(error);
+    } catch {
+      sendResponse();
+      return;
     }
     if (pageMessage !== null) {
-      return (async () => {
+      void (async () => {
         if (!(await pageCollaborationPort.validateOutboundMessage(pageMessage))) {
           return undefined;
         }
@@ -536,7 +537,8 @@ export default defineBackground(() => {
           }
         }
         return undefined;
-      })();
+      })().then(sendResponse, () => sendResponse());
+      return true;
     }
     return undefined;
   });

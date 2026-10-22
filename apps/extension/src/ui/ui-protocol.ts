@@ -11,6 +11,7 @@ import {
   PresenceRecordSchema,
   PublicRoomSummarySchema,
   RoomIdSchema,
+  SupportedUrlSchema,
 } from "@syncaction/protocol";
 import { z } from "zod";
 import {
@@ -700,6 +701,7 @@ export const UiCommandNameSchema = z.enum([
   "DANMAKU_TOGGLE",
   "DANMAKU_VISIBILITY",
   "PEN_TOGGLE",
+  "MEDIA_GROUP_CREATE",
   "MEDIA_MEMBER_JUMP",
   "MEDIA_GROUP_ALIGN_ONCE",
   "MEDIA_GROUP_JOIN",
@@ -710,6 +712,18 @@ export const UiCommandNameSchema = z.enum([
 ]);
 
 export type UiCommandName = z.infer<typeof UiCommandNameSchema>;
+
+export const MediaGroupCreateExpectedContextSchema = z
+  .object({
+    profileId: ServerProfileIdSchema,
+    tabId: NonNegativeIntegerSchema,
+    roomId: RoomIdSchema.optional(),
+    documentRevision: DocumentRevisionSchema,
+    url: SupportedUrlSchema.optional(),
+  })
+  .strict();
+
+export type MediaGroupCreateExpectedContext = z.infer<typeof MediaGroupCreateExpectedContextSchema>;
 
 const CommandBaseFields = {
   type: z.literal("ui.command"),
@@ -890,6 +904,10 @@ export const UiCommandSchema = z.discriminatedUnion("name", [
   commandWithoutPayload("DANMAKU_TOGGLE"),
   commandWithPayload("DANMAKU_VISIBILITY", z.object({ hidden: z.boolean() }).strict()),
   commandWithoutPayload("PEN_TOGGLE"),
+  commandWithPayload(
+    "MEDIA_GROUP_CREATE",
+    z.object({ expectedContext: MediaGroupCreateExpectedContextSchema }).strict().optional(),
+  ),
   commandWithPayload("MEDIA_MEMBER_JUMP", z.object({ userId: CanonicalUuidSchema }).strict()),
   commandWithPayload(
     "MEDIA_GROUP_ALIGN_ONCE",
@@ -897,7 +915,12 @@ export const UiCommandSchema = z.discriminatedUnion("name", [
   ),
   commandWithPayload(
     "MEDIA_GROUP_JOIN",
-    z.object({ playbackGroupId: CanonicalUuidSchema }).strict(),
+    z
+      .object({
+        playbackGroupId: CanonicalUuidSchema,
+        expectedContext: MediaGroupCreateExpectedContextSchema.optional(),
+      })
+      .strict(),
   ),
   commandWithPayload(
     "MEDIA_GROUP_LEAVE",

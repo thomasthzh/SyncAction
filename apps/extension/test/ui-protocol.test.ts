@@ -229,6 +229,7 @@ describe("side-panel UI protocol", () => {
       "DANMAKU_TOGGLE",
       "DANMAKU_VISIBILITY",
       "PEN_TOGGLE",
+      "MEDIA_GROUP_CREATE",
       "MEDIA_MEMBER_JUMP",
       "MEDIA_GROUP_ALIGN_ONCE",
       "MEDIA_GROUP_JOIN",
@@ -324,6 +325,34 @@ describe("side-panel UI protocol", () => {
         },
       }),
     ).toThrow();
+  });
+
+  it("accepts optional media continuation URLs only for safe HTTP(S) pages", () => {
+    const mediaCommand = (url?: string) => ({
+      type: "ui.command",
+      commandId,
+      name: "MEDIA_GROUP_CREATE",
+      payload: {
+        expectedContext: {
+          profileId: "server-a",
+          roomId,
+          tabId: 42,
+          documentRevision: { roomEpoch: 0, tabUpdatedAtSeq: 1 },
+          ...(url === undefined ? {} : { url }),
+        },
+      },
+    });
+    expect(UiCommandSchema.safeParse(mediaCommand()).success).toBe(true);
+    expect(
+      UiCommandSchema.safeParse(mediaCommand("https://news.example/watch?id=1#player")).success,
+    ).toBe(true);
+    for (const url of [
+      "file:///private/video.mp4",
+      "https://user:password@news.example/watch",
+      `https://news.example/${"a".repeat(4_096)}`,
+    ]) {
+      expect(UiCommandSchema.safeParse(mediaCommand(url)).success).toBe(false);
+    }
   });
 
   it("normalizes server origins and accepts only exact page origins", () => {

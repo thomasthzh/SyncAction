@@ -299,16 +299,20 @@ export class UiStateHub {
         ? this.#source.readPageAccess()
         : Promise.resolve(this.#pageAccess),
     ]);
-    this.#status = status;
-    this.#profiles = profiles;
-    this.#pageAccess = pageAccess;
     if (this.#slices === undefined || this.#serialized === undefined) {
       const next = projectUiState(status, profiles, pageAccess);
+      const serialized = serializeSlices(next);
+      this.#status = status;
+      this.#profiles = profiles;
+      this.#pageAccess = pageAccess;
       this.#slices = next;
-      this.#serialized = serializeSlices(next);
+      this.#serialized = serialized;
       return;
     }
 
+    let nextSlices = this.#slices;
+    const nextSerialized = { ...this.#serialized };
+    const nextVersions = { ...this.#versions };
     const patches: UiServerMessage[] = [];
     for (const slice of dirtySlices) {
       const value = projectUiSlice(slice, status, profiles, pageAccess);
@@ -321,9 +325,9 @@ export class UiStateHub {
         throw new Error("UI_SLICE_VERSION_EXHAUSTED");
       }
       const toVersion = fromVersion + 1;
-      this.#versions[slice] = toVersion;
-      this.#serialized[slice] = serialized;
-      this.#slices = { ...this.#slices, [slice]: value } as UiStateSlices;
+      nextVersions[slice] = toVersion;
+      nextSerialized[slice] = serialized;
+      nextSlices = { ...nextSlices, [slice]: value } as UiStateSlices;
       patches.push(
         UiStatePatchSchema.parse({
           type: "ui.state.patch",
@@ -334,6 +338,12 @@ export class UiStateHub {
         }),
       );
     }
+    this.#status = status;
+    this.#profiles = profiles;
+    this.#pageAccess = pageAccess;
+    this.#versions = nextVersions;
+    this.#serialized = nextSerialized;
+    this.#slices = nextSlices;
     for (const patch of patches) {
       this.#broadcast(patch);
     }
@@ -354,23 +364,9 @@ export class UiStateHub {
     }
 
     const command = parsed.data;
+    let value: unknown;
     try {
-      const value = await this.#source.execute(command);
-      await this.#refresh();
-      const result =
-        value === undefined
-          ? {
-              type: "ui.command.result" as const,
-              commandId: command.commandId,
-              ok: true as const,
-            }
-          : {
-              type: "ui.command.result" as const,
-              commandId: command.commandId,
-              ok: true as const,
-              value,
-            };
-      this.#post(port, UiCommandResultSchema.parse(result));
+      value = await this.#source.execute(command);
     } catch (error) {
       await this.#refresh().catch(() => undefined);
       this.#post(
@@ -382,7 +378,23 @@ export class UiStateHub {
           errorCode: stableErrorCode(error),
         }),
       );
+      return;
     }
+    await this.#refresh().catch(() => undefined);
+    const result =
+      value === undefined
+        ? {
+            type: "ui.command.result" as const,
+            commandId: command.commandId,
+            ok: true as const,
+          }
+        : {
+            type: "ui.command.result" as const,
+            commandId: command.commandId,
+            ok: true as const,
+            value,
+          };
+    this.#post(port, UiCommandResultSchema.parse(result));
   }
 
   #snapshot(): UiServerMessage {

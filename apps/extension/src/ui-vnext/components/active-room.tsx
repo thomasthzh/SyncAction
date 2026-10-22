@@ -10,6 +10,7 @@ import { BottomActionDock } from "./bottom-action-dock.js";
 import { PlaybackGroupCard } from "./playback-group-card.js";
 import { SharedTabRow } from "./shared-tab-row.js";
 import { RoomSwitcher } from "./room-switcher.js";
+import { StartWatchingCard } from "./start-watching-card.js";
 import { useCommandFeedback } from "../use-command-feedback.js";
 import type { UiCommandInput } from "../store.js";
 
@@ -20,7 +21,7 @@ export interface ActiveRoomProps {
   readonly onOpenServerProfiles: () => void;
   readonly onOpenInvite: () => void;
   readonly onOpenRoomLifecycle: () => void;
-  readonly onRequestPagePermission: (intentKey: string) => void;
+  readonly onRequestPagePermission: (intentKey: string, expectedUrl?: string) => void;
 }
 
 export function ActiveRoom({
@@ -124,6 +125,14 @@ export function ActiveRoom({
           : "需处理";
 
   function sendMediaIntent(intent: MediaViewIntent): void {
+    const access = store.pageAccess.value;
+    if (
+      intent.type === "JOIN_GROUP" &&
+      (!access.browserPermissionGranted || !access.termsAccepted)
+    ) {
+      onRequestPagePermission(`media-join:${intent.playbackGroupId}`);
+      return;
+    }
     void feedback.run("media", () => store.command(mediaCommand(intent)));
   }
 
@@ -139,11 +148,26 @@ export function ActiveRoom({
           name: "MEDIA_GROUP_ALIGN_ONCE",
           payload: { playbackGroupId: intent.playbackGroupId },
         };
-      case "JOIN_GROUP":
+      case "JOIN_GROUP": {
+        const access = store.pageAccess.value;
+        const roomId = store.room.value.selectedRoomId;
         return {
           name: "MEDIA_GROUP_JOIN",
-          payload: { playbackGroupId: intent.playbackGroupId },
+          payload: {
+            playbackGroupId: intent.playbackGroupId,
+            ...(access.tabId === null || access.documentRevision === null
+              ? {}
+              : {
+                  expectedContext: {
+                    profileId: store.shell.value.selectedProfileId,
+                    tabId: access.tabId,
+                    documentRevision: access.documentRevision,
+                    ...(roomId === null ? {} : { roomId }),
+                  },
+                }),
+          },
         };
+      }
       case "LEAVE_GROUP":
         return {
           name: "MEDIA_GROUP_LEAVE",
@@ -240,6 +264,9 @@ export function ActiveRoom({
         <p class={`media-notice media-notice--${mediaView.notice.tone}`}>{mediaView.notice.text}</p>
       )}
 
+      {mediaView.groups.length === 0 ? (
+        <StartWatchingCard store={store} onRequestPagePermission={onRequestPagePermission} />
+      ) : null}
       {mediaView.groups.length > 0 ? (
         <section
           class="playback-section editorial-surface"
@@ -384,6 +411,12 @@ function roomStatusCode(store: UiStore): string | null {
   }
   if (runtime.browser?.state === "RECOVERY_REQUIRED") {
     return runtime.browser.reason === "CIRCUIT_BREAKER" ? "CIRCUIT_BREAKER" : "RECOVERY_REQUIRED";
+  }
+  if (runtime.browser?.state === "CONFIRMATION_REQUIRED") {
+    return "RECOVERY_REQUIRED";
+  }
+  if (runtime.browser?.state === "BLOCKED") {
+    return "BROWSER_BLOCKED";
   }
   switch (runtime.state) {
     case "DISCONNECTED":

@@ -19,6 +19,7 @@ import {
 import { UiPortClient, type UiPortClientPort } from "../../src/ui/ui-port-client.js";
 import { App } from "../../src/ui-vnext/app.js";
 import { createUiStore } from "../../src/ui-vnext/store.js";
+import { createPendingRoomJoinStorage } from "../../src/pending-room-join.js";
 
 const root = document.getElementById("sidepanel-app");
 if (root === null) {
@@ -43,6 +44,7 @@ const pagePermissionCoordinator = new OriginPermissionCoordinator({
   consents: originConsents,
   getCurrentPageAccess: () => store.pageAccess.value,
   getSelectedProfileId: () => store.shell.value.selectedProfileId,
+  getSelectedRoomId: () => store.room.value.selectedRoomId,
   recordPolicyAcceptance: async () =>
     (await store.command({ name: "POLICY_ACCEPTANCE_RECORD" })).ok,
   refreshPageAccess: async () => {
@@ -51,12 +53,29 @@ const pagePermissionCoordinator = new OriginPermissionCoordinator({
       throw new Error(result.errorCode);
     }
   },
-  resumeFeature: async (feature) => {
+  resumeFeature: async (feature, intent) => {
     let result;
     if (feature === "DANMAKU") {
       result = await store.command({ name: "DANMAKU_TOGGLE" });
     } else if (feature === "DRAWING") {
       result = await store.command({ name: "PEN_TOGGLE" });
+    } else if (feature === "MEDIA_CONTROL") {
+      if (intent.roomId === undefined) throw new Error("PAGE_PERMISSION_INTENT_STALE");
+      const expectedContext = {
+        profileId: intent.profileId,
+        roomId: intent.roomId,
+        tabId: intent.tabId,
+        ...(intent.url === undefined ? {} : { url: intent.url }),
+        documentRevision: intent.documentRevision,
+      };
+      result = await store.command(
+        intent.mediaJoinGroupId === undefined
+          ? { name: "MEDIA_GROUP_CREATE", payload: { expectedContext } }
+          : {
+              name: "MEDIA_GROUP_JOIN",
+              payload: { playbackGroupId: intent.mediaJoinGroupId, expectedContext },
+            },
+      );
     } else {
       return;
     }
@@ -107,6 +126,7 @@ const pagePermissionIntentSource = {
 render(
   h(App, {
     store,
+    pendingRoomJoinStorage: createPendingRoomJoinStorage(browser.storage.local),
     serverVerifier,
     serviceStatusProbe: serverVerifier,
     pagePermissionCoordinator,

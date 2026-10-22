@@ -7,6 +7,7 @@ import { ActionableStatus } from "./actionable-status.js";
 import { PublicRoomFeed } from "./public-room-feed.js";
 import { ServiceStatusCard, type ServiceStatusProbe } from "./service-status-card.js";
 import { useCommandFeedback } from "../use-command-feedback.js";
+import { isPlaceholderServerOrigin } from "../../server-configuration.js";
 
 export interface GuestLobbyProps {
   readonly store: UiStore;
@@ -14,6 +15,7 @@ export interface GuestLobbyProps {
   readonly onJoinPublicRoom: (room: PublicRoomSummary) => Promise<UiCommandResult>;
   readonly onOpenCreateRoom: () => void;
   readonly onOpenAuth: () => void;
+  readonly onOpenServerProfiles?: () => void;
   readonly serviceStatusProbe?: ServiceStatusProbe;
 }
 
@@ -23,15 +25,35 @@ export function GuestLobby({
   onJoinPublicRoom,
   onOpenCreateRoom,
   onOpenAuth,
+  onOpenServerProfiles = onOpenAuth,
   serviceStatusProbe,
 }: GuestLobbyProps): JSX.Element {
   const shell = store.shell.value;
   const discovery = store.discovery.value;
   const feedback = useCommandFeedback();
-  const authenticated = shell.account !== null && shell.phase !== "SESSION_EXPIRED";
+  const authenticated = shell.account?.status === "ACTIVE" && shell.phase !== "SESSION_EXPIRED";
+  const pending = shell.phase === "ACCOUNT_PENDING" || shell.account?.status === "PENDING";
   const selectedProfile =
     shell.profiles.find(({ profileId }) => profileId === shell.selectedProfileId) ??
     shell.profiles[0]!;
+
+  if (isPlaceholderServerOrigin(selectedProfile.baseUrl)) {
+    return (
+      <div class="lobby-surface">
+        <section class="welcome-strip editorial-surface" aria-labelledby="first-server-title">
+          <div>
+            <p class="eyebrow">首次使用</p>
+            <h1 id="first-server-title">先连接你的服务器</h1>
+            <p>请向邀请你的朋友或管理员取得服务器地址。此安装包没有预设共享服务器。</p>
+            <p class="subtle-copy">连接后即可登录、注册或浏览该服务器的公开房间。</p>
+          </div>
+          <button class="primary-button" type="button" onClick={onOpenServerProfiles}>
+            配置服务器
+          </button>
+        </section>
+      </div>
+    );
+  }
 
   return (
     <div class="lobby-surface">
@@ -49,7 +71,7 @@ export function GuestLobby({
           onClick={authenticated ? onOpenCreateRoom : onOpenAuth}
         >
           <Icon name={authenticated ? "invite" : "chevron"} size={18} />
-          {authenticated ? "创建房间" : "登录开始协作"}
+          {authenticated ? "创建房间" : pending ? "批准后登录" : "登录开始协作"}
         </button>
       </section>
 
@@ -63,8 +85,10 @@ export function GuestLobby({
         <p class="getting-started">先选择房间，登录后即可加入。已有账户密钥也可直接登录。</p>
       ) : null}
 
-      {shell.phase === "ACCOUNT_PENDING" ? (
-        <p class="account-pending">账号申请已提交，管理员批准后即可登录</p>
+      {pending ? (
+        <p class="account-pending" role="status">
+          账号申请已提交，管理员批准后即可登录。批准后点击「批准后登录」，使用你的用户名和密码继续；无需退出当前账号申请。
+        </p>
       ) : null}
 
       {store.transport.value === "RECONNECTING" ? (
