@@ -36,6 +36,13 @@ export function GuestLobby({
   const selectedProfile =
     shell.profiles.find(({ profileId }) => profileId === shell.selectedProfileId) ??
     shell.profiles[0]!;
+  const returning = authenticated && discovery.rooms.length > 0;
+  const connectionErrorCode = shell.phase === "ERROR" ? (shell.errorCode ?? "NETWORK_ERROR") : null;
+  const reconnectAllowed =
+    connectionErrorCode !== null &&
+    !["SERVER_IDENTITY_CHANGED", "SERVER_PROTOCOL_UNSUPPORTED", "CLIENT_UPGRADE_REQUIRED"].includes(
+      connectionErrorCode,
+    );
 
   if (isPlaceholderServerOrigin(selectedProfile.baseUrl)) {
     return (
@@ -56,17 +63,23 @@ export function GuestLobby({
   }
 
   return (
-    <div class="lobby-surface">
-      <section class="welcome-strip">
+    <div class={`lobby-surface${returning ? " lobby-surface--returning" : ""}`}>
+      <section class={`welcome-strip${returning ? " welcome-strip--compact" : ""}`}>
         <div>
           <p class="eyebrow">
             {authenticated ? `你好，${shell.account?.displayName}` : "欢迎使用 SyncAction"}
           </p>
-          <h1>一起浏览</h1>
-          <p class="welcome-strip__lede">和朋友共享页面，一起看、一起聊。</p>
+          <h1>{returning ? "继续协作" : pending ? "等待管理员批准" : "一起浏览"}</h1>
+          <p class="welcome-strip__lede">
+            {returning
+              ? "选择房间，回到朋友正在浏览的现场。"
+              : pending
+                ? "账号申请已提交，管理员批准后即可登录。"
+                : "和朋友共享页面，一起看、一起聊。"}
+          </p>
         </div>
         <button
-          class="primary-button welcome-strip__action"
+          class={`${returning ? "secondary-button" : "primary-button"} welcome-strip__action`}
           type="button"
           onClick={authenticated ? onOpenCreateRoom : onOpenAuth}
         >
@@ -75,24 +88,14 @@ export function GuestLobby({
         </button>
       </section>
 
-      <ServiceStatusCard
-        profile={selectedProfile}
-        transport={store.transport.value}
-        {...(serviceStatusProbe === undefined ? {} : { probe: serviceStatusProbe })}
-      />
-
-      {!authenticated && shell.phase !== "ACCOUNT_PENDING" ? (
+      {!authenticated && !pending ? (
         <p class="getting-started">先选择房间，登录后即可加入。已有账户密钥也可直接登录。</p>
       ) : null}
 
       {pending ? (
         <p class="account-pending" role="status">
-          账号申请已提交，管理员批准后即可登录。批准后点击「批准后登录」，使用你的用户名和密码继续；无需退出当前账号申请。
+          管理员批准后点击「批准后登录」继续；此页面不会自动确认批准结果，无需重复注册。
         </p>
-      ) : null}
-
-      {store.transport.value === "RECONNECTING" ? (
-        <p class="connection-strip">连接正在恢复，已显示上次同步内容</p>
       ) : null}
 
       {authenticated ? (
@@ -103,7 +106,7 @@ export function GuestLobby({
         >
           <header class="section-heading">
             <div>
-              <p class="eyebrow">继续协作</p>
+              {returning ? null : <p class="eyebrow">继续协作</p>}
               <h2 id="my-room-heading">我的房间</h2>
             </div>
             <span>{discovery.rooms.length} 个房间</span>
@@ -176,6 +179,23 @@ export function GuestLobby({
           ) : null}
         </section>
       ) : null}
+
+      <ServiceStatusCard
+        profile={selectedProfile}
+        transport={store.transport.value}
+        connectionErrorCode={connectionErrorCode}
+        onOpenServerProfiles={onOpenServerProfiles}
+        {...(reconnectAllowed
+          ? {
+              onReconnect: () =>
+                store.command({
+                  name: "SERVER_SELECT",
+                  payload: { profileId: selectedProfile.profileId },
+                }),
+            }
+          : {})}
+        {...(serviceStatusProbe === undefined ? {} : { probe: serviceStatusProbe })}
+      />
 
       <ActionableStatus errorCode={actionError} />
       <ActionableStatus errorCode={feedback.errorCode} />

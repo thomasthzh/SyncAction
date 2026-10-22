@@ -33,12 +33,14 @@ describe("vNext dense UI performance acceptance", () => {
     const root = renderPanel(<App store={store} now={() => nowMs} />);
     const stableFirstRow = root.querySelector(`[data-page-id="${pageIds[0]}"]`);
     const stableLastRow = root.querySelector(`[data-page-id="${pageIds.at(-1)}"]`);
-    const stablePlaybackGroup = root.querySelector(`[data-group-id="${groupIds[0]}"]`);
+    const stablePlaybackGroup = root.querySelector<HTMLElement>("[data-group-id]");
+    const stableGroupId = stablePlaybackGroup?.dataset.groupId;
     expect(stableFirstRow).not.toBeNull();
     expect(stableLastRow).not.toBeNull();
     expect(stablePlaybackGroup).not.toBeNull();
     expect(root.querySelectorAll("[data-page-id]")).toHaveLength(20);
-    expect(root.querySelectorAll("[data-group-id]")).toHaveLength(5);
+    expect(root.querySelectorAll("[data-group-id]")).toHaveLength(1);
+    expect(root.querySelectorAll('[aria-label="查看播放组"] option')).toHaveLength(5);
     expect(store.notifications.value.items).toHaveLength(60);
 
     const durations: number[] = [];
@@ -58,7 +60,27 @@ describe("vNext dense UI performance acceptance", () => {
       mutationCount = 0;
       const start = performance.now();
       act(() => {
+        const runtime = store.room.value.runtime!;
+        const media = runtime.media!;
         store.update({
+          room: {
+            ...store.room.value,
+            runtime: {
+              ...runtime,
+              serverSeq: index + 2,
+              media: {
+                ...media,
+                playbackGroups: media.playbackGroups.map((group) => ({
+                  ...group,
+                  groupRevision: group.groupRevision + 1,
+                  observed:
+                    group.observed === null
+                      ? null
+                      : { ...group.observed, positionMs: index * 1_000 },
+                })),
+              },
+            },
+          },
           notifications: {
             ...store.notifications.value,
             unreadCount: index + 1,
@@ -70,7 +92,7 @@ describe("vNext dense UI performance acceptance", () => {
       mutationBatches.push(mutationCount);
       expect(root.querySelector(`[data-page-id="${pageIds[0]}"]`)).toBe(stableFirstRow);
       expect(root.querySelector(`[data-page-id="${pageIds.at(-1)}"]`)).toBe(stableLastRow);
-      expect(root.querySelector(`[data-group-id="${groupIds[0]}"]`)).toBe(stablePlaybackGroup);
+      expect(root.querySelector(`[data-group-id="${stableGroupId}"]`)).toBe(stablePlaybackGroup);
     }
     observer.disconnect();
 

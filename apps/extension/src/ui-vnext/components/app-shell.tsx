@@ -3,6 +3,7 @@ import type { ComponentChildren, JSX } from "preact";
 import type { UiStore } from "../store.js";
 import { Icon } from "../icons.js";
 import { GlassMaterial } from "./glass-material.js";
+import { isPlaceholderServerOrigin } from "../../server-configuration.js";
 
 export interface AppShellProps {
   readonly store: UiStore;
@@ -28,6 +29,17 @@ export function AppShell({
   const [loggingOut, setLoggingOut] = useState(false);
   const shell = store.shell.value;
   const account = shell.account;
+  const selectedProfile = shell.profiles.find(
+    ({ profileId }) => profileId === shell.selectedProfileId,
+  );
+  const configurationRequired = isPlaceholderServerOrigin(selectedProfile?.baseUrl ?? "");
+  const authLabel = configurationRequired
+    ? "配置服务器"
+    : shell.phase === "ACCOUNT_PENDING" || account?.status === "PENDING"
+      ? "批准后登录"
+      : shell.phase === "SESSION_EXPIRED"
+        ? "重新登录"
+        : "登录 | 注册";
 
   async function logout(): Promise<void> {
     setLoggingOut(true);
@@ -74,8 +86,12 @@ export function AppShell({
             ) : null}
           </button>
           {account?.status !== "ACTIVE" || shell.phase === "SESSION_EXPIRED" ? (
-            <button class="auth-button" type="button" onClick={onOpenAuth}>
-              登录 | 注册
+            <button
+              class="auth-button"
+              type="button"
+              onClick={configurationRequired ? onOpenServerProfiles : onOpenAuth}
+            >
+              {authLabel}
             </button>
           ) : (
             <div class="account-chip">

@@ -8,8 +8,21 @@ export function createGlassRefractionMap(
   const corner = Math.min(radius, width / 2, height / 2);
   const bezel = Math.min(12, corner);
 
+  // The content plane is neutral. Only the rounded rim needs the distance/normal
+  // calculation; opening a tall dialog should not run it for every interior pixel.
+  for (let index = 0; index < pixels.length; index += 4) {
+    pixels[index] = 128;
+    pixels[index + 1] = 128;
+    pixels[index + 2] = 128;
+    pixels[index + 3] = 255;
+  }
+  if (bezel <= 0) return pixels;
+  const edge = Math.ceil(corner);
+
   for (let y = 0; y < height; y++) {
+    const middleRow = y >= edge && y < height - edge;
     for (let x = 0; x < width; x++) {
+      if (middleRow && x === edge && width - edge > edge) x = width - edge;
       const dx = x + 0.5 - width / 2;
       const dy = y + 0.5 - height / 2;
       const qx = Math.abs(dx) - (width / 2 - corner);
@@ -28,8 +41,6 @@ export function createGlassRefractionMap(
       const index = (y * width + x) * 4;
       pixels[index] = 128 + normalX * 127;
       pixels[index + 1] = 128 + normalY * 127;
-      pixels[index + 2] = 128;
-      pixels[index + 3] = 255;
     }
   }
   return pixels;

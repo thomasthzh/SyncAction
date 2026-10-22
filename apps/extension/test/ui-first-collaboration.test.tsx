@@ -33,6 +33,30 @@ function roomStore(): TestUiStore {
 }
 
 describe("first collaboration recovery and truthful results", () => {
+  it("keeps one prominent first-watch instruction while independent page sharing remains available", () => {
+    const store = roomStore();
+    store.update({
+      room: {
+        ...store.room.value,
+        runtime: {
+          ...store.room.value.runtime!,
+          media: { ...store.room.value.runtime!.media!, playbackGroups: [], localMembership: null },
+        },
+      },
+      collaboration: {
+        ...store.collaboration.value,
+        pages: [],
+        playbackGroups: [],
+      },
+    });
+    const root = renderPanel(<App store={store} now={() => FIXTURE_NOW_MS} />);
+    expect(byRole(root, "button", "开始一起看")).toBeTruthy();
+    expect(byRole(root, "button", "分享当前页")).toBeTruthy();
+    expect(root.textContent).toContain("还没有共享页面");
+    expect(root.textContent).not.toContain("把第一张页面分享给朋友");
+    expect(root.textContent).not.toContain("再点击底部");
+  });
+
   it.each([
     [{ kind: "BLOCKED", reason: "ROOM_TAB_LIMIT_REACHED" }, "最多共享 20"],
     [{ kind: "IGNORED", reason: "LOADING" }, "页面仍在加载"],
@@ -205,6 +229,15 @@ describe("first collaboration recovery and truthful results", () => {
     });
     const request = vi.fn();
     const root = renderPanel(<StartWatchingCard store={store} onRequestPagePermission={request} />);
+    expect(root.querySelector("[data-watch-stage]")?.getAttribute("data-watch-stage")).toBe(
+      "NEEDS_PERMISSION",
+    );
+    expect(root.querySelector('[aria-label="开始观看的步骤"]')?.textContent).toContain(
+      "需要本人同意",
+    );
+    expect(root.querySelector('[aria-label="开始观看的步骤"]')?.textContent).not.toContain(
+      "已加入",
+    );
     await click(byRole(root, "button", "开始一起看"));
     expect(request).toHaveBeenCalledWith("media-create");
     expect(store.commandCalls).toHaveLength(0);
@@ -290,12 +323,21 @@ describe("first collaboration recovery and truthful results", () => {
           : { accepted: true },
       );
     const root = renderPanel(<StartWatchingCard store={store} onRequestPagePermission={vi.fn()} />);
+    expect(root.querySelector("[data-watch-stage]")?.getAttribute("data-watch-stage")).toBe(
+      "NEEDS_PAGE",
+    );
     await click(byRole(root, "button", "开始一起看"));
     expect(store.commandCalls.map(({ name }) => name)).toEqual([
       "CURRENT_TAB_SHARE",
       "PAGE_PERMISSION_REFRESH",
     ]);
     await vi.waitFor(() => expect(root.textContent).toContain("正在准备共享页面"));
+    expect(root.querySelector("[data-watch-stage]")?.getAttribute("data-watch-stage")).toBe(
+      "WAITING_PAGE",
+    );
+    expect(root.querySelector('[aria-label="开始观看的步骤"]')?.textContent).toContain(
+      "等待房间确认",
+    );
     await act(async () => {
       store.update({ pageAccess: { ...store.pageAccess.value, documentRevision: revision } });
     });

@@ -64,19 +64,26 @@ afterEach(() => {
 });
 
 describe("vNext guest lobby", () => {
-  it("places live production service status directly after the welcome strip", async () => {
+  it("keeps healthy service details collapsed and public rooms directly available", async () => {
     const store = new TestUiStore();
     const probe = vi.fn().mockResolvedValue({ latencyMs: 42 });
     const root = renderPanel(<App store={store} serviceStatusProbe={{ probe }} />);
 
     await flushUi();
 
-    const card = root.querySelector(".welcome-strip + .service-status-card");
+    const card = root.querySelector(".service-status-card");
     expect(card).toBeTruthy();
     expect(card?.textContent).toContain("SyncAction 服务在线");
     expect(card?.textContent).toContain("v0.9.3");
     expect(card?.textContent).toContain("42 ms");
     expect(card?.textContent).toContain("demo.syncaction.example");
+    const details = card!.querySelector<HTMLDetailsElement>("details")!;
+    expect(details.open).toBe(false);
+    const summary = details.querySelector("summary")!;
+    expect(summary.textContent).toContain("服务在线");
+    expect(summary.textContent).not.toContain("v0.9.3");
+    expect(summary.textContent).not.toContain("42 ms");
+    expect(summary.textContent).not.toContain("协议 v1");
     expect(probe).toHaveBeenCalledOnce();
     const publicRooms = root.querySelector('[data-editorial-surface="public-rooms"]')!;
     expect(card!.compareDocumentPosition(publicRooms) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
@@ -96,11 +103,12 @@ describe("vNext guest lobby", () => {
     expect(root.textContent).toContain("服务暂不可用");
     expect(root.textContent).toContain("请检查服务器地址和网络连接");
 
-    await click(byRole(root, "button", "重新连接"));
+    await click(byRole(root, "button", "重新检测服务"));
 
     expect(probe).toHaveBeenCalledTimes(2);
     expect(root.textContent).toContain("SyncAction 服务在线");
     expect(root.textContent).toContain("55 ms");
+    expect(store.commandCalls).toEqual([]);
   });
 
   it("does not label a custom server as 126f or invent its version", async () => {
