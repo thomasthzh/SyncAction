@@ -17,19 +17,22 @@ export async function renderExtensionIcons(options = {}) {
     repositoryRoot,
     "design/brand/syncaction-symbol-monochrome.svg",
   );
+  const lightSourcePath = resolve(repositoryRoot, "design/brand/syncaction-symbol-light.svg");
   const extensionPublicPath = resolve(repositoryRoot, "apps/extension/public");
   const superadminPublicPath = resolve(repositoryRoot, "apps/superadmin/public");
   const siteAssetsPath = resolve(repositoryRoot, "site/assets");
-  const [fullSource, smallSource, monochromeSource] = await Promise.all([
+  const [fullSource, smallSource, monochromeSource, lightSource] = await Promise.all([
     readFile(fullSourcePath),
     readFile(smallSourcePath),
     readFile(monochromeSourcePath),
+    readFile(lightSourcePath),
   ]);
 
   await Promise.all([
     assertSvgSource(fullSourcePath, fullSource),
     assertSvgSource(smallSourcePath, smallSource),
     assertSvgSource(monochromeSourcePath, monochromeSource),
+    assertSvgSource(lightSourcePath, lightSource),
   ]);
 
   let stagingPath;
@@ -75,10 +78,14 @@ export async function renderExtensionIcons(options = {}) {
 
     const stagedSuperadminSvg = resolve(stagedSuperadminPath, "syncaction-symbol.svg");
     await writeFile(stagedSuperadminSvg, fullSource);
-    const stagedSiteSvg = resolve(stagedSitePath, "syncaction-symbol-v3.svg");
-    const stagedMonoSvg = resolve(stagedSitePath, "syncaction-symbol-monochrome-v3.svg");
+    const stagedSiteSvg = resolve(stagedSitePath, "syncaction-symbol-v4.svg");
+    const stagedSmallSvg = resolve(stagedSitePath, "syncaction-symbol-small-v4.svg");
+    const stagedMonoSvg = resolve(stagedSitePath, "syncaction-symbol-monochrome-v4.svg");
+    const stagedLightSvg = resolve(stagedSitePath, "syncaction-symbol-light-v4.svg");
     await writeFile(stagedSiteSvg, fullSource);
+    await writeFile(stagedSmallSvg, smallSource);
     await writeFile(stagedMonoSvg, monochromeSource);
+    await writeFile(stagedLightSvg, lightSource);
 
     const socialCoverPath = resolve(siteAssetsPath, "social-cover.svg");
     let socialCover;
@@ -123,8 +130,10 @@ export async function renderExtensionIcons(options = {}) {
       await rename(stagedPath, resolve(extensionPublicPath, `icon-${String(size)}.png`));
     }
     await rename(stagedSuperadminSvg, resolve(superadminPublicPath, "syncaction-symbol.svg"));
-    await rename(stagedSiteSvg, resolve(siteAssetsPath, "syncaction-symbol-v3.svg"));
-    await rename(stagedMonoSvg, resolve(siteAssetsPath, "syncaction-symbol-monochrome-v3.svg"));
+    await rename(stagedSiteSvg, resolve(siteAssetsPath, "syncaction-symbol-v4.svg"));
+    await rename(stagedSmallSvg, resolve(siteAssetsPath, "syncaction-symbol-small-v4.svg"));
+    await rename(stagedMonoSvg, resolve(siteAssetsPath, "syncaction-symbol-monochrome-v4.svg"));
+    await rename(stagedLightSvg, resolve(siteAssetsPath, "syncaction-symbol-light-v4.svg"));
     if (socialCover !== undefined) {
       await rename(resolve(stagedSitePath, "social-cover.svg"), socialCoverPath);
       await rename(

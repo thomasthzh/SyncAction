@@ -37,17 +37,19 @@ without restarting the application or database.
 
 ## Release updates
 
-The two download links and visible version currently target v0.9.13. When updating them, verify both
+The two download links and visible version currently target v0.9.14. When updating them, verify both
 assets against the published GitHub release, update the client guide, and test the final links. The
 server address is a public service address; never put credentials, administrative URLs or private
 configuration in this directory.
 
 ## Product film
 
-The homepage opens a 47-second original product illustration on request. It does not preload the
-MP4, poster or Chinese captions before that request. Native controls, an HTML transcript, an MP4
-download and captions are available; closing the dialog unloads its media and returns focus. The
-soundtrack is original synthesis with the first drum/bass at 3 seconds. See
+The homepage opens a 32-second original product illustration on request. Four cursors enter
+progressively at0/3/8.5/14seconds and stay through the ending. It does not preload the MP4, poster
+or Chinese captions before that request. Native controls, an HTML transcript, an MP4 download and
+captions are available; closing the dialog unloads its media and returns focus. The soundtrack is
+original synthesis with impact beats at3/8.5/14/28seconds. Its landscape is an original AI-generated
+still with animated framing; UI and pointers remain code-drawn. See
 [film source notes](film-source/README.md) for the scene contract and deterministic Canvas rendering
 surface. Serve MP4 as `video/mp4` with byte range support and VTT as `text/vtt`; keep media allowed
 only from the same origin in the static CSP.

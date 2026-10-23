@@ -15,7 +15,7 @@
 ## 本地启动
 
 需要 Node.js 22.13+、pnpm 10.12.1 和 Docker。下载并解压
-[v0.9.13 服务端包](https://github.com/thomasthzh/SyncAction/releases/tag/v0.9.13)，在包根目录执行：
+[v0.9.14 服务端包](https://github.com/thomasthzh/SyncAction/releases/tag/v0.9.14)，在包根目录执行：
 
 ```sh
 pnpm install --frozen-lockfile

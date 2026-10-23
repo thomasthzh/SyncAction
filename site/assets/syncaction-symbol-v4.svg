@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title">
+  <title id="title">SyncAction</title>
+  <defs>
+    <linearGradient id="sa-duet-ink" x1="18" y1="18" x2="110" y2="112" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#454C58" />
+      <stop offset="1" stop-color="#181C25" />
+    </linearGradient>
+    <linearGradient id="sa-duet-blue" x1="20" y1="20" x2="110" y2="104" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#97DBFF" />
+      <stop offset="0.55" stop-color="#438FFF" />
+      <stop offset="1" stop-color="#4264E8" />
+    </linearGradient>
+  </defs>
+  <g fill="none" stroke-width="21" stroke-linecap="round">
+    <path d="M84 27H59C40 27 27 40 27 59V77" stroke="url(#sa-duet-ink)" />
+    <path d="M44 101H69C88 101 101 88 101 69V51" stroke="url(#sa-duet-blue)" />
+  </g>
+</svg>

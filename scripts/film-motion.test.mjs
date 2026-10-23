@@ -8,10 +8,10 @@ const source = await readFile(new URL("../site/film-motion.js", import.meta.url)
 const window = {};
 runInNewContext(source, { window });
 const motion = window.SyncActionFilmMotion;
-const duration = 36;
+const duration = 32;
 const rate = 120;
 const ids = ["you", "friend", "mei", "zhou"];
-// Project regression guards; these do not establish human-likeness or a platform standard.
+// Film-specific jump guards, not measured human behavior or platform standards.
 const maxSpeed = 1200;
 const maxAcceleration = 18000;
 const cursor = (time, id) => motion.sample(time).cursors.find((value) => value.id === id);
@@ -27,9 +27,9 @@ const inside = (point, target) =>
   point.x <= target.x + target.width &&
   point.y >= target.y &&
   point.y <= target.y + target.height;
-const nearEdge = (point) => point.x < 0 || point.x > 1436 || point.y < 0 || point.y > 806;
+const nearEdge = (point) => point.x <= 1 || point.x >= 1439 || point.y <= 1 || point.y >= 809;
 
-test("all four identities retain finite continuous positions, including their offscreen travel", () => {
+test("four persistent identities keep continuous positions, including before each entrance", () => {
   assert.equal(motion.duration, duration);
   let previous;
   let previousVelocity;
@@ -40,20 +40,18 @@ test("all four identities retain finite continuous positions, including their of
     const currentVelocity = [];
     sample.cursors.forEach((point, index) => {
       assert.ok(Number.isFinite(point.x) && Number.isFinite(point.y));
-      assert.equal(point.opacity, 1, `pointer disappears in place at ${sample.time}`);
+      assert.equal(point.opacity, 1, `pointer vanishes at ${sample.time}`);
       assert.equal(point.name, motion.people[point.id].name);
       assert.equal(point.color, motion.people[point.id].color);
+      assert.ok(point.nameOpacity >= 0 && point.nameOpacity <= 1);
       if (!point.visible) assert.ok(nearEdge(point), `hidden inside frame at ${sample.time}`);
       if (!previous) return;
       const before = previous.cursors[index];
       const value = { x: (point.x - before.x) * rate, y: (point.y - before.y) * rate };
       currentVelocity.push(value);
-      assert.ok(
-        Math.hypot(value.x, value.y) <= maxSpeed,
-        `${point.id} position jump at ${sample.time}`,
-      );
+      assert.ok(Math.hypot(value.x, value.y) <= maxSpeed, `${point.id} jumps at ${sample.time}`);
       if (point.visible !== before.visible)
-        assert.ok(nearEdge(point) && nearEdge(before), `interior reappearance at ${sample.time}`);
+        assert.ok(nearEdge(point) || nearEdge(before), `interior reappearance at ${sample.time}`);
       if (previousVelocity)
         assert.ok(
           distance(value, previousVelocity[index]) * rate <= maxAcceleration,
@@ -65,8 +63,8 @@ test("all four identities retain finite continuous positions, including their of
   }
 });
 
-test("chapter transitions and every authored knot keep position and velocity continuous", () => {
-  for (const time of [3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33]) {
+test("hero camera and chapter changes do not reset a pointer's position or velocity", () => {
+  for (const time of [3, 5.8, 8.5, 11.6, 14, 18.5, 21, 24, 28]) {
     for (const id of ids)
       assert.ok(distance(cursor(time - 0.000001, id), cursor(time + 0.000001, id)) < 0.003);
   }
@@ -81,76 +79,84 @@ test("chapter transitions and every authored knot keep position and velocity con
   }
 });
 
-test("browsing routes curve and pass through waypoints instead of stopping at each one", () => {
-  for (const [id, time] of [
-    ["you", 0.56],
-    ["you", 1.12],
-    ["you", 10.38],
-    ["friend", 3.52],
-    ["friend", 7.42],
-    ["mei", 31.15],
-    ["zhou", 31.43],
-  ]) {
-    const speed = velocity(time, id);
-    assert.ok(Math.hypot(speed.x, speed.y) > 25, `${id} mechanically stops at ${time}`);
+test("people progressively enter on their beats, then remain in the picture through the ending", () => {
+  const entrances = [
+    ["friend", 3],
+    ["mei", 8.5],
+    ["zhou", 14],
+  ];
+  for (const [id, time] of entrances) {
+    assert.equal(cursor(time - 1 / rate, id).visible, false, `${id} enters too early`);
+    const first = cursor(time, id);
+    assert.ok(first.visible && nearEdge(first), `${id} must enter with their tip at an edge`);
+    assert.equal(cursor(time - 1 / rate, id).nameOpacity, 0);
+    for (let sample = time; sample <= duration; sample += 1 / rate)
+      assert.ok(cursor(sample, id).visible, `${id} leaves again at ${sample}`);
   }
-  // The midpoint of each selected travel segment must leave its straight chord.
-  for (const [id, start, end] of [
-    ["you", 0.56, 1.12],
-    ["you", 9.88, 10.38],
-    ["friend", 4.3, 4.8],
-    ["mei", 30.5, 31.15],
-  ]) {
-    const a = cursor(start, id);
-    const b = cursor(end, id);
-    const p = cursor((start + end) / 2, id);
-    const chordDistance =
-      Math.abs((b.x - a.x) * (a.y - p.y) - (a.x - p.x) * (b.y - a.y)) / distance(a, b);
-    assert.ok(chordDistance > 1.5, `${id} remains a straight-line tween`);
-  }
-});
-
-test("beat entrances use edges, and the final quartet stays distinct and present", () => {
-  assert.equal(cursor(2.75, "friend").visible, false);
-  assert.ok(cursor(3, "friend").visible && cursor(3, "friend").x >= 1440);
-  for (const time of [0, 3, 12, 21, 27, 29.7]) {
-    assert.equal(cursor(time, "mei").visible, false);
-    assert.equal(cursor(time, "zhou").visible, false);
-  }
-  assert.equal(cursor(21.5, "friend").visible, false);
-  assert.equal(cursor(29.7, "friend").visible, false);
-  assert.ok(cursor(30, "friend").visible && cursor(30, "friend").x >= 1440);
-  assert.ok(cursor(30.5, "mei").x <= 0);
-  assert.ok(cursor(31, "zhou").y >= 810);
-  for (let time = 31.7; time <= 36; time += 1 / rate) {
+  for (const [time, count] of [
+    [0, 1],
+    [3.2, 2],
+    [8.7, 3],
+    [14.8, 4],
+    [28, 4],
+    [32, 4],
+  ])
+    assert.equal(motion.sample(time).cursors.filter(({ visible }) => visible).length, count);
+  for (let time = 14.8; time <= duration; time += 1 / rate) {
     const points = motion.sample(time).cursors;
     assert.equal(points.filter(({ visible }) => visible).length, 4);
     for (let a = 0; a < points.length; a++)
       for (let b = a + 1; b < points.length; b++)
         assert.ok(distance(points[a], points[b]) > 60, `quartet overlaps at ${time}`);
   }
-  for (const id of ids) {
-    assert.ok(distance(cursor(33.2, id), cursor(35.9, id)) > 15, `${id} freezes during the ending`);
-    assert.equal(cursor(19, "friend").role, "recipient-device");
-  }
 });
 
-test("each semantic click settles on its actual control before the UI confirms", () => {
+test("travel has shallow curves and momentum, while reading holds are staggered", () => {
+  for (const [id, time] of [
+    ["you", 0.45],
+    ["you", 5.7],
+    ["friend", 3.46],
+    ["friend", 9.98],
+    ["mei", 8.91],
+    ["zhou", 14.43],
+  ]) {
+    const speed = velocity(time, id);
+    assert.ok(Math.hypot(speed.x, speed.y) > 25, `${id} mechanically stops at ${time}`);
+  }
+  for (const [id, start, end] of [
+    ["you", 0.16, 0.45],
+    ["friend", 4.19, 4.65],
+    ["mei", 10.02, 10.61],
+  ]) {
+    const a = cursor(start, id);
+    const b = cursor(end, id);
+    const p = cursor((start + end) / 2, id);
+    const offset = Math.abs((b.x - a.x) * (a.y - p.y) - (a.x - p.x) * (b.y - a.y)) / distance(a, b);
+    assert.ok(offset > 1, `${id} remains a straight-line tween`);
+  }
+  // One person's reading hold must not freeze everyone or force a shared idle loop.
+  assert.ok(distance(cursor(15.04, "you"), cursor(15.3, "you")) < 0.01);
+  assert.ok(distance(cursor(15.04, "friend"), cursor(15.3, "friend")) > 20);
+  assert.ok(distance(cursor(15.8, "mei"), cursor(16.4, "mei")) < 0.01);
+  assert.ok(distance(cursor(15.8, "zhou"), cursor(16.4, "zhou")) > 20);
+});
+
+test("semantic clicks settle on the actual control, and confirmation follows the click", () => {
   const actions = [
-    ["friend", 4.15, "join"],
-    ["you", 6.75, "pause"],
-    ["you", 9.75, "share"],
-    ["you", 11, "page"],
-    ["you", 15.85, "view"],
-    ["you", 17.1, "return"],
-    ["friend", 19, "invitation"],
-    ["you", 20.25, "approve"],
-    ["you", 22.1, "reconnect"],
-    ["you", 24.7, "server"],
-    ["you", 26.1, "login"],
-    ["you", 27.8, "consent"],
-    ["you", 28.55, "allow"],
-    ["you", 29.3, "revoke"],
+    ["friend", 4.05, "join"],
+    ["you", 6.25, "pause"],
+    ["you", 9.15, "share"],
+    ["friend", 10.5, "page"],
+    ["friend", 13.1, "danmaku"],
+    ["you", 19, "view"],
+    ["you", 20.1, "return"],
+    ["friend", 21.8, "invitation"],
+    ["you", 22.85, "approve"],
+    ["you", 24.65, "server"],
+    ["you", 25.65, "login"],
+    ["you", 26.25, "consent"],
+    ["you", 26.7, "allow"],
+    ["you", 27.5, "revoke"],
   ];
   assert.equal(motion.clicks.length, actions.length);
   for (const [id, time, targetId] of actions) {
@@ -161,36 +167,76 @@ test("each semantic click settles on its actual control before the UI confirms",
     for (const offset of [-0.07, 0.07])
       assert.ok(
         distance(point, cursor(time + offset, id)) < 0.1,
-        `${targetId} clicks while still travelling`,
+        `${targetId} clicks while travelling`,
       );
     const event = motion.clicks.find(({ target }) => target === targetId);
     assert.ok(event.confirmed > time);
     assert.equal(motion.confirmed(targetId, event.confirmed - 1 / rate), false);
     assert.equal(motion.confirmed(targetId, event.confirmed), true);
   }
+  const pointing = cursor(16.1, "zhou");
+  assert.deepEqual({ x: pointing.x, y: pointing.y }, { x: 1080, y: 460 });
+  assert.equal(pointing.click, false);
+  assert.equal(pointing.targetId, null);
+  assert.equal(motion.targets.marker, undefined);
 });
 
-test("paused seeking and pen strokes share the renderer's exact progress and tip", () => {
+test("seeking stays paused and drawing uses the renderer's exact pen tip progress", () => {
   for (let step = 0; step <= 84; step++) {
-    const seekTime = 7.35 + step / rate;
-    const seek = cursor(seekTime, "you");
-    assert.ok(Math.abs(seek.x - 353.5 - 282 * motion.seekProgress(seekTime)) < 0.0001);
-    assert.equal(seek.y, 561);
-    assert.ok(inside(seek, motion.targets.seek));
-    assert.equal(motion.confirmed("pause", seekTime), true);
-    const penTime = 12.9 + step / rate;
-    const pen = cursor(penTime, "you");
-    const progress = motion.penProgress(penTime);
-    assert.ok(Math.abs(pen.x - 179 - 298.9 * progress) < 0.0001);
-    assert.ok(Math.abs(pen.y - 415 - Math.sin(49 * 0.12 * progress) * 3) < 0.0001);
-    assert.equal(pen.tool, "pen");
+    const time = 7 + step / rate;
+    const point = cursor(time, "you");
+    assert.ok(Math.abs(point.x - 520 - 392 * motion.seekProgress(time)) < 0.0001);
+    assert.equal(point.y, 570);
+    assert.ok(inside(point, motion.targets.seek));
+    assert.equal(motion.confirmed("pause", time), true);
   }
-  for (const time of [7.35, 8.05, 12.9, 13.6])
+  for (let step = 0; step <= 114; step++) {
+    const time = 12.15 + step / rate;
+    const point = cursor(time, "you");
+    const progress = motion.penProgress(time);
+    assert.ok(Math.abs(point.x - 270 - 370 * progress) < 0.0001);
+    assert.ok(Math.abs(point.y - 505 - Math.sin(Math.PI * progress) * 18) < 0.0001);
+  }
+  for (const time of [7, 7.7, 12.15, 13.1])
     assert.ok(distance(cursor(time - 0.0001, "you"), cursor(time + 0.0001, "you")) < 0.001);
 });
 
+test("private setup actions keep the three observers over the separate shared content", () => {
+  for (let time = 24; time < 28; time += 1 / rate) {
+    for (const id of ["friend", "mei", "zhou"]) {
+      const point = cursor(time, id);
+      assert.equal(point.role, "shared-page-observer");
+      assert.ok(point.x < 850, `${id} crosses into another person's private controls`);
+      assert.equal(point.click, false);
+    }
+  }
+  assert.equal(cursor(21.8, "friend").role, "recipient-device");
+  assert.equal(cursor(22.85, "you").role, "owner");
+});
+
+test("the ending leaves the central brand area clear and retains independent motion", () => {
+  const brand = { x: 350, y: 230, width: 750, height: 390 };
+  for (let time = 28; time <= duration; time += 1 / rate) {
+    for (const point of motion.sample(time).cursors) {
+      assert.equal(inside(point, brand), false, `pointer covers the brand at ${time}`);
+      // The right/down name badge must also remain outside the central text area.
+      assert.equal(
+        inside({ x: point.x + 76, y: point.y + 57 }, brand),
+        false,
+        `name badge covers the brand at ${time}`,
+      );
+    }
+  }
+  for (const id of ids) {
+    let travelled = 0;
+    for (let frame = 28 * rate + 1; frame <= duration * rate; frame++)
+      travelled += distance(cursor((frame - 1) / rate, id), cursor(frame / rate, id));
+    assert.ok(travelled > 60, `${id} freezes for the ending`);
+  }
+});
+
 test("out-of-order rendering and seeking remain deterministic", () => {
-  const times = [0, 3, 4.15, 13.2, 18, 21, 27, 30, 31.7, 33, 36];
+  const times = [0, 3, 6.25, 8.5, 12.6, 14, 18.5, 24, 28, 30, 32];
   const first = times.map((time) => plain(motion.sample(time)));
   for (const time of [...times].reverse()) motion.sample(time);
   assert.deepEqual(
@@ -198,5 +244,5 @@ test("out-of-order rendering and seeking remain deterministic", () => {
     first,
   );
   assert.deepEqual(plain(motion.sample(-1)), plain(motion.sample(0)));
-  assert.deepEqual(plain(motion.sample(37)), plain(motion.sample(36)));
+  assert.deepEqual(plain(motion.sample(33)), plain(motion.sample(32)));
 });
