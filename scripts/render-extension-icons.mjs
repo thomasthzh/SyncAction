@@ -13,16 +13,23 @@ export async function renderExtensionIcons(options = {}) {
   const repositoryRoot = resolve(options.repositoryRoot ?? defaultRepositoryRoot);
   const fullSourcePath = resolve(repositoryRoot, "design/brand/syncaction-symbol.svg");
   const smallSourcePath = resolve(repositoryRoot, "design/brand/syncaction-symbol-small.svg");
+  const monochromeSourcePath = resolve(
+    repositoryRoot,
+    "design/brand/syncaction-symbol-monochrome.svg",
+  );
   const extensionPublicPath = resolve(repositoryRoot, "apps/extension/public");
   const superadminPublicPath = resolve(repositoryRoot, "apps/superadmin/public");
-  const [fullSource, smallSource] = await Promise.all([
+  const siteAssetsPath = resolve(repositoryRoot, "site/assets");
+  const [fullSource, smallSource, monochromeSource] = await Promise.all([
     readFile(fullSourcePath),
     readFile(smallSourcePath),
+    readFile(monochromeSourcePath),
   ]);
 
   await Promise.all([
     assertSvgSource(fullSourcePath, fullSource),
     assertSvgSource(smallSourcePath, smallSource),
+    assertSvgSource(monochromeSourcePath, monochromeSource),
   ]);
 
   let stagingPath;
@@ -30,9 +37,11 @@ export async function renderExtensionIcons(options = {}) {
     stagingPath = await mkdtemp(resolve(repositoryRoot, ".syncaction-icons-"));
     const stagedExtensionPath = resolve(stagingPath, "extension");
     const stagedSuperadminPath = resolve(stagingPath, "superadmin");
+    const stagedSitePath = resolve(stagingPath, "site");
     await Promise.all([
       mkdir(stagedExtensionPath, { recursive: true }),
       mkdir(stagedSuperadminPath, { recursive: true }),
+      mkdir(stagedSitePath, { recursive: true }),
     ]);
 
     const stagedIcons = [];
@@ -66,6 +75,36 @@ export async function renderExtensionIcons(options = {}) {
 
     const stagedSuperadminSvg = resolve(stagedSuperadminPath, "syncaction-symbol.svg");
     await writeFile(stagedSuperadminSvg, fullSource);
+    const stagedSiteSvg = resolve(stagedSitePath, "syncaction-symbol-v3.svg");
+    const stagedMonoSvg = resolve(stagedSitePath, "syncaction-symbol-monochrome-v3.svg");
+    await writeFile(stagedSiteSvg, fullSource);
+    await writeFile(stagedMonoSvg, monochromeSource);
+
+    const socialCoverPath = resolve(siteAssetsPath, "social-cover.svg");
+    let socialCover;
+    try {
+      socialCover = await readFile(socialCoverPath, "utf8");
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+    if (socialCover !== undefined) {
+      const slot = /<!-- brand:start -->[\s\S]*?<!-- brand:end -->/u;
+      if (!slot.test(socialCover)) throw new Error("ICON_SOCIAL_COVER_SLOT_MISSING");
+      const embedded = fullSource
+        .toString("utf8")
+        .replace(
+          /<svg\b[^>]*>/u,
+          '<svg x="64" y="56" width="48" height="48" viewBox="0 0 128 128">',
+        );
+      socialCover = socialCover.replace(
+        slot,
+        `<!-- brand:start -->\n${embedded}  <!-- brand:end -->`,
+      );
+      await writeFile(resolve(stagedSitePath, "social-cover.svg"), socialCover);
+      await sharp(Buffer.from(socialCover))
+        .png({ compressionLevel: 9 })
+        .toFile(resolve(stagedSitePath, "social-cover.png"));
+    }
 
     await Promise.all(
       stagedIcons.map(({ size, stagedPath }) => assertRenderedPng(stagedPath, size)),
@@ -78,11 +117,21 @@ export async function renderExtensionIcons(options = {}) {
     await Promise.all([
       mkdir(extensionPublicPath, { recursive: true }),
       mkdir(superadminPublicPath, { recursive: true }),
+      mkdir(siteAssetsPath, { recursive: true }),
     ]);
     for (const { size, stagedPath } of stagedIcons) {
       await rename(stagedPath, resolve(extensionPublicPath, `icon-${String(size)}.png`));
     }
     await rename(stagedSuperadminSvg, resolve(superadminPublicPath, "syncaction-symbol.svg"));
+    await rename(stagedSiteSvg, resolve(siteAssetsPath, "syncaction-symbol-v3.svg"));
+    await rename(stagedMonoSvg, resolve(siteAssetsPath, "syncaction-symbol-monochrome-v3.svg"));
+    if (socialCover !== undefined) {
+      await rename(resolve(stagedSitePath, "social-cover.svg"), socialCoverPath);
+      await rename(
+        resolve(stagedSitePath, "social-cover.png"),
+        resolve(siteAssetsPath, "social-cover.png"),
+      );
+    }
   } finally {
     if (stagingPath !== undefined) {
       await rm(stagingPath, { force: true, recursive: true });

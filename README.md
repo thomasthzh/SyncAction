@@ -13,18 +13,18 @@ SyncAction 是面向 Chrome 与 Edge 的多人共享浏览器工作区。成员�
 `https://syncaction.example.com`
 是占位地址，安装后请在扩展顶栏配置实际服务器；服务端必须自行初始化管理员，不含默认账号密码。
 
-## v0.9.12 下载
+## v0.9.13 下载
 
-从 [v0.9.12 Release](https://github.com/thomasthzh/SyncAction/releases/tag/v0.9.12) 下载：
+从 [v0.9.13 Release](https://github.com/thomasthzh/SyncAction/releases/tag/v0.9.13) 下载：
 
 | 资产                                                                                                                     | 用途                                           |
 | ------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------- |
-| [Chrome 客户端](https://github.com/thomasthzh/SyncAction/releases/download/v0.9.12/SyncAction-client-chrome-v0.9.12.zip) | 解压后在 Chrome 加载扩展                       |
-| [Edge 客户端](https://github.com/thomasthzh/SyncAction/releases/download/v0.9.12/SyncAction-client-edge-v0.9.12.zip)     | 解压后在 Edge 加载扩展                         |
-| [服务端](https://github.com/thomasthzh/SyncAction/releases/download/v0.9.12/SyncAction-server-v0.9.12.tar.gz)            | 公共服务、管理员服务、数据库模块和通用部署源码 |
-| [SHA256SUMS.txt](https://github.com/thomasthzh/SyncAction/releases/download/v0.9.12/SHA256SUMS.txt)                      | 三个安装资产的 SHA-256 校验值                  |
+| [Chrome 客户端](https://github.com/thomasthzh/SyncAction/releases/download/v0.9.13/SyncAction-client-chrome-v0.9.13.zip) | 解压后在 Chrome 加载扩展                       |
+| [Edge 客户端](https://github.com/thomasthzh/SyncAction/releases/download/v0.9.13/SyncAction-client-edge-v0.9.13.zip)     | 解压后在 Edge 加载扩展                         |
+| [服务端](https://github.com/thomasthzh/SyncAction/releases/download/v0.9.13/SyncAction-server-v0.9.13.tar.gz)            | 公共服务、管理员服务、数据库模块和通用部署源码 |
+| [SHA256SUMS.txt](https://github.com/thomasthzh/SyncAction/releases/download/v0.9.13/SHA256SUMS.txt)                      | 三个安装资产的 SHA-256 校验值                  |
 
-安装与升级分别见[客户端指南](docs/client.md)、[服务端指南](docs/server.md)，变更见[发布说明](docs/releases/v0.9.12.md)。客户端 ZIP 不是浏览器商店安装包；服务端 tarball 不含客户端。
+安装与升级分别见[客户端指南](docs/client.md)、[服务端指南](docs/server.md)，变更见[发布说明](docs/releases/v0.9.13.md)。客户端 ZIP 不是浏览器商店安装包；服务端 tarball 不含客户端。
 
 ### 本版变化
 

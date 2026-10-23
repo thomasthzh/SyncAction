@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title">
+  <title id="title">SyncAction</title>
+  <defs>
+    <linearGradient id="sa-tile" x1="28" y1="8" x2="100" y2="128" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2495FF" />
+      <stop offset="1" stop-color="#0063D8" />
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="120" height="120" rx="30" fill="url(#sa-tile)" />
+  <g fill="#FFFFFF">
+    <path d="M45 28C41 28 39 33 42 36L59 53C62 56 67 56 70 53L87 36C90 33 88 28 84 28Z" />
+    <path transform="rotate(90 64 64)" d="M45 28C41 28 39 33 42 36L59 53C62 56 67 56 70 53L87 36C90 33 88 28 84 28Z" />
+    <path transform="rotate(180 64 64)" d="M45 28C41 28 39 33 42 36L59 53C62 56 67 56 70 53L87 36C90 33 88 28 84 28Z" />
+    <path transform="rotate(270 64 64)" d="M45 28C41 28 39 33 42 36L59 53C62 56 67 56 70 53L87 36C90 33 88 28 84 28Z" />
+  </g>
+</svg>
