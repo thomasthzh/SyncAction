@@ -1,10 +1,15 @@
 /* global document, window, Image, URLSearchParams, performance */
 const canvas = document.querySelector("#film");
-const ctx = canvas.getContext("2d", { alpha: false });
+let ctx = canvas.getContext("2d", { alpha: false });
+const transitionCanvas = document.createElement("canvas");
+transitionCanvas.width = 1440;
+transitionCanvas.height = 810;
+const transitionContext = transitionCanvas.getContext("2d", { alpha: false });
+let transitionChapter = -1;
 const logo = new Image(),
   landscape = new Image();
 const motion = window.SyncActionFilmMotion;
-const duration = 32;
+const duration = 30;
 const C = { ink: "#1d1d1f", muted: "#85858b", blue: "#377dff", line: "#dedee3" };
 const font = '"Segoe UI", "Microsoft YaHei", sans-serif';
 const clamp = (v, a = 0, b = 1) => Math.min(b, Math.max(a, v));
@@ -14,17 +19,17 @@ const ease = (v) => {
 };
 const lerp = (a, b, p) => a + (b - a) * p;
 const chapters = [
-  [0, "solo", "一个人的网页。"],
-  [3, "join", "让另一个人，走进此刻。"],
-  [5.8, "media", "一停。都停。"],
-  [8.5, "pages", "把好东西，带过来。"],
-  [11.6, "annotations", "不用说「左边一点」。"],
-  [14, "quartet", "同一刻。我们，都在。"],
-  [18.5, "groups", "在一起，也各有节奏。"],
-  [21, "invitations", "每一次加入，都由本人决定。"],
-  [24, "consent", "开始清楚。边界也清楚。"],
-  [28, "end", "一起看。也一起做点什么。"],
-].map(([start, feature, title]) => ({ start, feature, title }));
+  [0, "solo"],
+  [3, "join"],
+  [5.8, "media"],
+  [7.5, "pages"],
+  [9.6, "annotations"],
+  [11.5, "quartet"],
+  [16.5, "groups"],
+  [19, "invitations"],
+  [22, "consent"],
+  [26, "end"],
+].map(([start, feature]) => ({ start, feature }));
 function box(x, y, w, h, fill, radius = 12, stroke) {
   ctx.beginPath();
   ctx.roundRect(x, y, w, h, radius);
@@ -162,82 +167,81 @@ function shade(x, y, w, h, top = "#03080b00", bottom = "#03080bd9") {
   ctx.fillStyle = g;
   ctx.fillRect(x, y, w, h);
 }
-function chrome(x, y, w, title = "周末，留一点时间给彼此") {
-  box(x, y, w, 43, "#f1f1f4", [18, 18, 0, 0]);
-  ["#e6aaa2", "#e4d09a", "#9dc6a8"].forEach((c, i) => dot(x + 22 + i * 15, y + 22, c, 4));
-  box(x + w * 0.25, y + 9, w * 0.5, 26, "#fff", 7);
-  text(title, x + w / 2, y + 27, 11, "#7c7c83", 400, "center");
-}
-function pageTitle(title, subtitle, dark = false, size = 62) {
-  text(title, 80, 144, size, dark ? "#f5f5f7" : C.ink, 700);
-  if (subtitle) text(subtitle, 84, 184, 18, dark ? "#a9abb3" : "#78787e", 400);
-}
-function footer(value, dark = false) {
-  text(value, 80, 748, 16, dark ? "#adafb8" : "#71717a", 400);
-}
 function mediaClock(progress) {
   const seconds = lerp((340 / 1080) * 90, (732 / 1080) * 90, progress);
   const whole = Math.floor(seconds);
   return `${String(Math.floor(whole / 60)).padStart(2, "0")}:${String(whole % 60).padStart(2, "0")}.${String(Math.floor((seconds - whole) * 100)).padStart(2, "0")}`;
 }
-function solo(t) {
-  ctx.fillStyle = "#f5f5f7";
+
+function backdrop() {
+  ctx.fillStyle = "#08090c";
   ctx.fillRect(0, 0, 1440, 810);
-  const p = ease(t / 2.8);
+}
+function label(value, x, y, light = true) {
+  text(value, x, y, 16, light ? "#b0b4be" : "#747982", 400);
+}
+function headline(value, x = 78, y = 151, size = 100) {
+  text(value, x, y, size, "#f5f5f7", 650);
+}
+function browserFrame(t, x, y, w, h, zoom = 1.05) {
   ctx.save();
-  ctx.translate(720, 421);
-  ctx.scale(lerp(0.98, 1.015, p), lerp(0.98, 1.015, p));
-  ctx.translate(-720, -421);
-  paper(130, 127, 1180, 566);
-  chrome(130, 127, 1180);
-  sceneImage(t, 147, 186, 1146, 422, 7, 1.05 + t * 0.003);
-  shade(147, 406, 1146, 202);
-  text("THE SHARED MOMENT", 185, 552, 13, "#ffffffcc", 500);
-  text("周末，留一点时间给彼此", 185, 585, 24, "#fff", 600);
-  line(166, 637, 1190, 637, "#d9d9de", 3);
-  line(166, 637, 550 + t * 15, 637, "#55555b", 3);
-  text("Ⅱ", 166, 672, 20);
-  text("正在播放", 204, 670, 13, "#77777e");
-  text("01:30", 1273, 670, 13, "#77777e", 400, "right");
+  ctx.shadowColor = "#00000080";
+  ctx.shadowBlur = 54;
+  ctx.shadowOffsetY = 28;
+  box(x, y, w, h, "#16181d", 24, "#ffffff33");
   ctx.restore();
-  text("一个人的网页。", 80, 88, 28, C.ink, 600);
+  sceneImage(t, x + 2, y + 38, w - 4, h - 40, 21, zoom);
+  box(x + 2, y + 2, w - 4, 37, "#17191d", [22, 22, 0, 0]);
+  ["#d6afaa", "#cfc49c", "#a4c1b4"].forEach((color, i) => dot(x + 24 + i * 13, y + 20, color, 3));
+  text("一个属于我们的房间", x + w / 2, y + 24, 11, "#b0b4be", 400, "center");
+}
+function solo(t) {
+  backdrop();
+  headline("一个网页。", 78, 149, 104);
+  const p = ease(t / 3);
+  browserFrame(
+    t,
+    lerp(68, 42, p),
+    lerp(214, 195, p),
+    lerp(1304, 1356, p),
+    lerp(540, 542, p),
+    1.05 + t * 0.006,
+  );
+  shade(70, 460, 1300, 250, "#00000000", "#06101db8");
+  text("值得看的风景。", 108, 627, 37, "#fff", 600);
+  label("想和你一起。", 110, 663);
+  line(110, 694, 1310, 694, "#ffffff40", 3);
+  line(110, 694, 400 + t * 30, 694, "#e2e8f4", 3);
+  text("Ⅱ", 110, 724, 18, "#fff");
 }
 function joinHero(t) {
-  const p = ease((t - 3) / 0.64);
-  ctx.fillStyle = "#07090e";
-  ctx.fillRect(0, 0, 1440, 810);
+  backdrop();
+  const p = ease((t - 3) / 0.54);
   sceneImage(
     t,
-    lerp(147, 0, p),
-    lerp(186, 0, p),
-    lerp(1146, 1440, p),
-    lerp(422, 810, p),
-    lerp(7, 0, p),
-    1.06,
+    lerp(44, 0, p),
+    lerp(233, 0, p),
+    lerp(1352, 1440, p),
+    lerp(502, 810, p),
+    lerp(21, 0, p),
+    1.08 + (t - 3) * 0.007,
   );
   shade(0, 0, 1440, 810, "#00000018", "#02060bcc");
-  alpha(ease((t - 3.1) / 0.34), () => {
-    text("此刻。", 78, 328, 136, "#fff", 700);
-    text("不止你一个。", 82, 447, 100, "#fff", 700);
+  alpha(ease((t - 3.04) / 0.38), () => {
+    headline("一起。", 76, 374, 212);
+    text("让同伴，走进此刻。", 88, 438, 32, "#e4e8ef", 500);
   });
   paper(1032, 398, 320, 230, true, 24);
-  text("小林自己的设备", 1060, 434, 15, "#aeb2bd", 400);
+  label("小林自己的设备", 1060, 434);
   text(
-    motion.confirmed("join", t) ? "一起看，已加入。" : "加入你的播放组",
+    motion.confirmed("join", t) ? "我们，开始一起看。" : "加入你的播放组",
     1060,
-    480,
-    23,
+    483,
+    25,
     "#fff",
     600,
   );
-  text(
-    motion.confirmed("join", t) ? "媒体跟随已确认" : "由小林本人确认",
-    1060,
-    514,
-    14,
-    "#aeb2bd",
-    400,
-  );
+  label(motion.confirmed("join", t) ? "媒体跟随已确认" : "由小林本人确认", 1060, 519);
   button(
     motion.confirmed("join", t) ? "已加入 · 跟随播放" : "加入播放组",
     1060,
@@ -246,67 +250,50 @@ function joinHero(t) {
     true,
     motion.confirmed("join", t),
   );
-  footer("各自打开内容，在同一个房间相遇。", true);
+  label("各自的设备。同一刻的目光。", 84, 748);
 }
 function media(t) {
-  ctx.fillStyle = "#08090d";
-  ctx.fillRect(0, 0, 1440, 810);
-  const p = motion.seekProgress(t);
-  pageTitle("一停。都停。", "暂停、调整进度。同伴跟随对齐，暂停状态保持。", true, 76);
-  const stopped = motion.confirmed("pause", t);
-  text(stopped ? "PAUSED TOGETHER" : "PLAYING TOGETHER", 88, 280, 13, "#7d94c7", 600);
-  text(mediaClock(p), 78, 432, 145, "#f5f5f7", 600);
-  box(1020, 270, 310, 160, "#17191f", 22, "#333640");
-  dot(1050, 306, "#4384ff", 6);
-  text("小林 · 跟随者", 1068, 312, 17, "#d4d6dd", 500);
-  text(mediaClock(p), 1047, 367, 35, "#fff", 600);
-  text(stopped ? "已对齐 · 保持暂停" : "正在跟随播放", 1048, 400, 14, "#9094a0", 400);
+  backdrop();
+  const p = motion.seekProgress(t),
+    stopped = motion.confirmed("pause", t);
+  headline("一停。都停。", 78, 151, 101);
+  label("跟随领播，同步播放状态。", 84, 197);
+  text(mediaClock(p), 78, 433, 155, "#f5f5f7", 600);
+  text(stopped ? "PAUSED TOGETHER" : "PLAYING TOGETHER", 88, 269, 13, "#9baecb", 500);
+  box(1020, 270, 310, 160, "#191c22", 22, "#ffffff20");
+  dot(1050, 306, "#9bc1ff", 5);
+  text("小林 · 跟随者", 1067, 312, 17, "#d4d6dd", 500);
+  text(mediaClock(p), 1047, 368, 36, "#fff", 600);
+  label(stopped ? "已对齐 · 保持暂停" : "正在跟随播放", 1048, 403);
   button(stopped ? "Ⅱ 已暂停" : "Ⅱ 暂停", 88, 505, 124, true, stopped);
-  line(180, 570, 1260, 570, "#373940", 6);
-  line(180, 570, lerp(520, 912, p), 570, "#5c95ff", 6);
+  line(180, 570, 1260, 570, "#3a3e47", 6);
+  line(180, 570, lerp(520, 912, p), 570, "#97bcff", 6);
   dot(lerp(520, 912, p), 570, "#fff", 8);
-  for (let i = 0; i <= 12; i++)
-    line(180 + i * 90, 600, 180 + i * 90, i % 3 ? 610 : 620, "#55575f", 1);
-  text("00:00", 180, 652, 14, "#8e919b");
-  text("01:30", 1260, 652, 14, "#8e919b", 400, "right");
-  footer("连接房间与跟随媒体，是两个明确的状态。", true);
-}
-function article(t, x = 80, y = 226, w = 865, h = 440) {
-  paper(x, y, w, h);
-  sceneImage(t, x + w * 0.54, y + 18, w * 0.44, h - 36, 14, 1.3);
-  text("OUTSIDE / 一起探索", x + 28, y + 44, 12, "#888891", 600);
-  text("下一站。", x + 28, y + 110, 47, C.ink, 700);
-  text("去看更大的世界。", x + 28, y + 164, 33, C.ink, 600);
-  ["把值得一看的页面，", "带到朋友面前。", "想法也有了落点。"].forEach((v, i) =>
-    text(v, x + 30, y + 239 + i * 35, 20, "#7a7a82", 400),
-  );
-  text("一段旅程，几个人的期待。", x + 30, y + h - 39, 13, "#9898a0", 400);
+  for (let i = 0; i <= 24; i++) line(180 + i * 45, 599, 180 + i * 45, i % 4 ? 609 : 625, "#555b66");
+  label("00:00", 180, 657);
+  text("01:30", 1260, 657, 16, "#b0b4be", 400, "right");
 }
 function pages(t) {
-  ctx.fillStyle = "#f5f5f7";
-  ctx.fillRect(0, 0, 1440, 810);
-  pageTitle("把好东西，带过来。", "第三个光标加入。共享页面，也找到同伴所在的位置。");
-  article(t);
-  paper(988, 226, 344, 440);
-  text(t < 10 ? "你的设备" : "小林自己的设备", 1020, 257, 13, "#85858e", 400);
-  text("房间的共享页面", 1020, 293, 22, C.ink, 600);
-  text("周末的目的地", 1020, 322, 17, C.ink, 600);
-  text("小梅在这个页面", 1020, 352, 14, "#85858e", 400);
-  line(1020, 379, 1300, 379);
-  text(
-    motion.confirmed("page", t) ? "已在本设备打开" : "打开后，自己决定是否跟随",
-    1020,
-    415,
-    14,
-    "#7a7a84",
-    400,
+  backdrop();
+  headline("把好东西，带过来。", 78, 150, 84);
+  paper(80, 226, 865, 440);
+  sceneImage(t, 520, 244, 407, 404, 14, 1.2);
+  text("下一站。", 112, 333, 59, C.ink, 650);
+  text("去看更大的世界。", 114, 385, 34, C.ink, 600);
+  ["分享一个页面，", "也分享一个想法。"].forEach((value, index) =>
+    text(value, 114, 472 + index * 37, 23, "#777c87", 400),
   );
+  paper(988, 226, 344, 440, true);
+  label(t < 8.5 ? "你的设备" : "小林自己的设备", 1020, 265);
+  text("房间的共享页面", 1020, 313, 25, "#fff", 600);
+  label("周末的目的地", 1020, 349);
+  label(motion.confirmed("page", t) ? "已在本设备打开" : "打开后，自行决定是否跟随", 1020, 415);
   button(
     motion.confirmed("page", t) ? "页面已打开" : "打开同伴页面",
     1020,
     443,
     280,
-    false,
+    true,
     motion.confirmed("page", t),
   );
   button(
@@ -314,17 +301,15 @@ function pages(t) {
     1020,
     551,
     280,
-    false,
+    true,
     motion.confirmed("share", t),
   );
-  footer("打开页面与加入播放组分别确认，不替你做决定。");
 }
 function annotations(t) {
-  ctx.fillStyle = "#fff";
-  ctx.fillRect(0, 0, 1440, 810);
-  pageTitle("不用说「左边一点」。", "光标指过去。弹幕说出来。画笔把重点留下。");
-  sceneImage(t, 75, 229, 900, 438, 18, 1.17);
-  shade(75, 229, 900, 438, "#00000000", "#020916ae");
+  backdrop();
+  headline("想法，直接落在内容上。", 78, 150, 77);
+  sceneImage(t, 75, 229, 900, 438, 20, 1.17);
+  shade(75, 229, 900, 438, "#00000008", "#020916bc");
   text("就从这里，出发。", 266, 476, 42, "#fff", 650);
   const p = motion.penProgress(t);
   if (p > 0) {
@@ -339,87 +324,73 @@ function annotations(t) {
     ctx.lineCap = "round";
     ctx.stroke();
   }
-  paper(1010, 318, 326, 323);
-  text("小林自己的设备", 1040, 354, 13, "#85858e", 400);
-  text("小林的想法", 1040, 386, 20, C.ink, 600);
-  text("这个风景，值得一起看。", 1040, 414, 17, "#6f6f78", 400);
-  text("主动发送到当前页面", 1040, 451, 13, "#8b8b93", 400);
+  paper(1010, 318, 326, 323, true);
+  label("小林自己的设备", 1040, 354);
+  text("说出来。", 1040, 408, 31, "#fff", 600);
+  label("这个风景，值得一起看。", 1040, 450);
   button(
     motion.confirmed("danmaku", t) ? "弹幕已发送" : "发送弹幕",
     1040,
     555,
     260,
-    false,
+    true,
     motion.confirmed("danmaku", t),
   );
   if (motion.confirmed("danmaku", t)) {
-    box(500 - (t - 13.22) * 95, 298, 318, 45, "#ffffffed", 22);
-    text("小林：这个风景，值得一起看。", 520 - (t - 13.22) * 95, 327, 17, C.ink, 500);
+    const x = 500 - (t - 11.07) * 95;
+    box(x, 298, 318, 45, "#fffffff0", 22);
+    text("小林：这个风景，值得一起看。", x + 20, 327, 17, C.ink, 500);
   }
-  footer("在已授权的兼容页面，讨论直接落在内容上。");
+  label("光标 · 弹幕 · 画笔 / 已授权的兼容页面", 80, 748);
 }
 function quartet(t) {
-  ctx.fillStyle = "#06070b";
-  ctx.fillRect(0, 0, 1440, 810);
-  const p = ease((t - 14) / 0.88);
-  const x = lerp(0, 68, p),
-    y = lerp(0, 200, p),
-    w = lerp(1440, 1304, p),
+  backdrop();
+  const p = 1 - Math.pow(1 - clamp((t - 11.5) / 0.8), 3);
+  const breathe = Math.sin((t - 12.3) * 0.5) * 4;
+  const x = lerp(0, 66, p),
+    y = lerp(0, 205 + breathe, p),
+    w = lerp(1440, 1308, p),
     h = lerp(810, 506, p);
-  text("同一刻。", 72, 172, 118, "#f5f5f7", 700);
   ctx.save();
-  ctx.shadowColor = "#4477ff35";
-  ctx.shadowBlur = 80;
-  box(x, y, w, h, "#16191e", 24, "#b6ccff55");
+  ctx.shadowColor = "#7faaff30";
+  ctx.shadowBlur = 100;
+  ctx.shadowOffsetY = 10;
+  box(x, y, w, h, "#15181d", 25, "#bdd2f352");
   ctx.restore();
-  sceneImage(t, x + 3, y + 3, w - 6, h - 6, 21, 1.06 + p * 0.025);
-  shade(x + 3, y + 3, w - 6, h - 6, "#00000008", "#020914c9");
+  sceneImage(t, x + 3, y + 3, w - 6, h - 6, 22, 1.075 + p * 0.025);
+  shade(x + 3, y + 3, w - 6, h - 6, "#00000008", "#031022b0");
   alpha(p, () => {
-    box(91, 220, 270, 37, "#15181ddd", 18, "#ffffff28");
-    text("周末小聚 / 已授权的兼容页面", 109, 245, 13, "#d4d9e2", 500);
-    ["#1d1d1f", "#007aff", "#8056c4", "#b56828"].forEach((c, i) => {
-      dot(1190 + i * 35, 238, "#fff", 12);
-      dot(1190 + i * 35, 238, c, 8);
-    });
-    text("我们，都在。", 112, 622, 100, "#fff", 700);
-    text("四个光标。各自的设备。共同的目光。", 118, 665, 22, "#d6dce7", 400);
+    headline("我们，都在。", 72, 158, 123);
+    text("四个光标。一个共同的此刻。", 111, 649, 42, "#fff", 600);
+    label("各自的设备 / 已授权的兼容页面", 115, 687);
     line(1020, 460, 1160, 460, "#e5b75a", 3);
-    text("就看这里", 1040, 434, 15, "#f7deab", 500);
+    text("就看这里", 1035, 437, 18, "#f6dfb3", 500);
   });
-  if (t >= 16.4)
-    alpha(ease((t - 16.4) / 0.3), () => {
-      box(975, 310, 300, 62, "#ffffffec", 17);
-      text("小梅：标出来，就更清楚。", 995, 348, 17, C.ink, 500);
-    });
-  footer("同页光标 · 弹幕 · 画笔 · 跟随播放", true);
+  // One large subject replaces the previous collection of badges and floating cards.
 }
 function groups(t) {
-  ctx.fillStyle = "#f5f5f7";
-  ctx.fillRect(0, 0, 1440, 810);
+  backdrop();
   const viewB = motion.confirmed("view", t) && !motion.confirmed("return", t);
-  pageTitle("在一起，也各有节奏。", "同一房间可以有多个播放组。查看别组，不会改变自己的参与状态。");
-  const lift = ease((t - 18.5) / 0.4) * 8;
-  paper(80, 260 - lift, 708, 397);
-  sceneImage(t, 99, 280 - lift, 670, 234, 12, 1.05);
-  text("A 组 / 你正在这里参与", 108, 561 - lift, 25, C.ink, 600);
-  text("周末小聚 · 本设备参与状态保留", 108, 601 - lift, 16, "#7b7b84", 400);
-  paper(882, 260, 450, 397);
-  text(viewB ? "正在查看 B 组" : "回到 A 组", 920, 321, 28, C.ink, 600);
-  text(viewB ? "浏览另一组的信息" : "继续自己的协作", 920, 368, 18, "#7c7c85", 400);
-  text("你的播放参与：仍在 A 组", 920, 412, 16, "#28724d", 500);
-  button(viewB ? "返回 A 组" : "查看 B 组", 940, 445, 320);
-  text("查看 ≠ 加入", 920, 583, 17, "#8b8b93", 400);
-  footer("四人在房间里。每个人都能选择自己的节奏。");
+  headline("同房间。各有节奏。", 78, 152, 90);
+  browserFrame(t, 80, 260, 708, 397, 1.06);
+  shade(82, 500, 704, 155, "#00000000", "#020814c9");
+  text("A 组 / 你正在参与", 108, 561, 27, "#fff", 600);
+  label("本设备的播放参与保留", 108, 603);
+  paper(882, 260, 450, 397, true);
+  text(viewB ? "正在查看 B 组" : "你的播放组", 920, 329, 30, "#fff", 600);
+  label("查看另一组，不会自动加入。", 920, 375);
+  text("你的参与：仍在 A 组", 920, 414, 17, "#b7c8e3", 500);
+  button(viewB ? "返回 A 组" : "查看 B 组", 940, 445, 320, true);
+  label("查看 ≠ 加入", 920, 588);
 }
 function invitations(t) {
-  ctx.fillStyle = "#08090e";
-  ctx.fillRect(0, 0, 1440, 810);
-  pageTitle("靠近，由自己决定。", "邀请与加入申请，各自有清楚的确认人。", true);
+  backdrop();
+  headline("靠近，由自己决定。", 78, 150, 89);
   paper(150, 274, 490, 380, true);
   paper(810, 274, 490, 380, true);
-  text("小林的设备", 190, 323, 14, "#9095a2", 400);
-  text("有人邀请你", 190, 398, 40, "#fff", 650);
-  text("邀请由接收者接受", 190, 447, 18, "#a5a9b5", 400);
+  label("小林的设备", 190, 323);
+  text("有人邀请你", 190, 399, 43, "#fff", 600);
+  label("接收者本人接受", 190, 447);
   button(
     motion.confirmed("invitation", t) ? "已接受邀请" : "接受房间邀请",
     210,
@@ -428,9 +399,9 @@ function invitations(t) {
     true,
     motion.confirmed("invitation", t),
   );
-  text("另一个房间 / 房主设备", 850, 323, 14, "#9095a2", 400);
-  text("有人申请加入", 850, 398, 40, "#fff", 650);
-  text("加入申请由房主批准", 850, 447, 18, "#a5a9b5", 400);
+  label("另一房间 / 房主设备", 850, 323);
+  text("有人申请加入", 850, 399, 43, "#fff", 600);
+  label("由房主批准", 850, 447);
   button(
     motion.confirmed("approve", t) ? "已批准申请" : "批准加入申请",
     920,
@@ -439,46 +410,42 @@ function invitations(t) {
     true,
     motion.confirmed("approve", t),
   );
-  if (t > 23.3)
-    alpha(ease((t - 23.3) / 0.2), () => {
-      box(400, 673, 640, 44, "#1c2638", 22, "#3d4d67");
-      text("重新连接，读取已提交的房间状态。继续刚才。", 720, 702, 18, "#d0ddf1", 500, "center");
+  if (t >= 21.1)
+    alpha(ease((t - 21.1) / 0.25), () => {
+      label("重新连接，读取已提交的状态。继续刚才。", 400, 714);
     });
-  footer("独立功能演绎；媒体是否跟随，仍由本人明确确认。", true);
 }
 function consent(t) {
-  ctx.fillStyle = "#f5f5f7";
-  ctx.fillRect(0, 0, 1440, 810);
-  pageTitle("开始清楚。边界也清楚。", "首次使用有指引。允许哪些网站，也由你掌握。", false, 58);
-  paper(80, 229, 780, 450);
-  sceneImage(t, 98, 247, 744, 414, 15, 1.12);
-  shade(98, 247, 744, 414, "#00000000", "#031022ba");
-  text("继续一起看。", 128, 596, 48, "#fff", 650);
-  text("另一个已授权页面 / 同伴继续交流", 132, 631, 15, "#d5dbe5", 400);
-  paper(956, 229, 362, 450);
+  backdrop();
+  headline("共享此刻。保留边界。", 78, 150, 85);
+  browserFrame(t, 80, 229, 780, 450, 1.08);
+  shade(98, 420, 744, 241, "#00000000", "#031022bd");
+  text("继续，一起看。", 128, 596, 47, "#fff", 600);
+  label("另一个已授权页面 / 同伴继续交流", 132, 636);
+  paper(956, 229, 362, 450, true);
   const logged = motion.confirmed("login", t),
     allowed = motion.confirmed("allow", t),
     revoked = motion.confirmed("revoke", t);
-  text("另一台新设备 / 首次使用演示", 990, 271, 14, "#898993", 400);
-  text(logged ? "网站协作许可" : "第一次使用", 990, 315, 27, C.ink, 650);
+  label("另一台新设备 / 首次使用", 990, 271);
+  text(logged ? "网站协作许可" : "从这里开始", 990, 315, 28, "#fff", 600);
   text(
     logged
       ? "新网站 example.org"
-      : t >= 25.1
+      : t >= 22.95
         ? "管理员已批准 · 等待本人登录"
         : motion.confirmed("server", t)
-          ? "服务器已验证 · 等待管理员批准"
-          : "验证服务器，再登录或等待批准",
+          ? "服务器已验证 · 等待批准"
+          : "验证服务器，再登录",
     990,
-    351,
-    13,
-    "#7b7b85",
+    353,
+    14,
+    "#a7aebb",
     400,
   );
   button(
     logged
-      ? "已登录 · 保留原入房目标"
-      : t >= 25.1
+      ? "已登录 · 保留入房目标"
+      : t >= 22.95
         ? "登录并继续"
         : motion.confirmed("server", t)
           ? "服务器已验证"
@@ -486,52 +453,50 @@ function consent(t) {
     990,
     385,
     280,
-    false,
+    true,
     logged || motion.confirmed("server", t),
   );
   if (logged) {
-    text("仅授权这个网站的协作能力", 990, 466, 15, C.ink, 500);
+    label("仅授权这个网站", 990, 465);
     box(990, 485, 22, 22, motion.confirmed("consent", t) ? "#337bfa" : "#fff", 5, "#a4a4ae");
     if (motion.confirmed("consent", t)) text("✓", 1001, 502, 17, "#fff", 600, "center");
-    text("我已阅读并同意", 1022, 502, 14, "#6c6c76", 400);
+    text("我已阅读并同意", 1022, 502, 14, "#c1c6d0", 400);
     button(
       revoked ? "已撤销网站协作" : allowed ? "撤销网站协作" : "允许网站协作",
       990,
       545,
       280,
-      false,
+      true,
       revoked,
       motion.confirmed("consent", t),
     );
     text(
-      revoked ? "后续协作已停止，历史数据保留" : "浏览器网站权限仍需本人确认",
+      revoked
+        ? "停止后续协作，保留历史数据"
+        : allowed
+          ? "网站协作已允许 · 可随时撤销"
+          : "浏览器权限由本人确认",
       990,
       635,
-      13,
-      "#84848e",
+      14,
+      "#a7aebb",
       400,
     );
-  } else {
-    text("登录后继续原来的入房目标", 990, 499, 15, "#92929b", 400);
-  }
-  footer("各自播放自己的内容；不传输视频流，也不读取密码或表单正文。");
+  } else label("登录后继续原来的入房目标", 990, 503);
 }
 function ending(t) {
-  ctx.fillStyle = "#06070a";
-  ctx.fillRect(0, 0, 1440, 810);
-  const p = ease((t - 28) / 0.55);
+  backdrop();
+  const p = ease((t - 26) / 0.6);
   ctx.save();
-  ctx.translate(720, 346);
-  ctx.scale(lerp(1.18, 1, p), lerp(1.18, 1, p));
-  ctx.shadowColor = "#4080ff48";
-  ctx.shadowBlur = 80;
-  ctx.drawImage(logo, -73, -166, 146, 146);
+  ctx.translate(720, 330);
+  ctx.scale(lerp(1.12, 1, p), lerp(1.12, 1, p));
+  ctx.drawImage(logo, -61, -120, 122, 122);
   ctx.restore();
   alpha(p, () => {
-    text("SyncAction", 720, 408, 88, "#f5f5f7", 650, "center");
-    text("一起看。也一起做点什么。", 720, 485, 40, "#d7d9e0", 500, "center");
-    text("syncaction.thomasthzh.top", 720, 563, 25, "#669dff", 500, "center");
-    text("Chrome / Edge 桌面扩展 · MIT 开源 · 可自行部署", 720, 649, 15, "#9195a1", 400, "center");
+    text("SyncAction", 720, 427, 88, "#f5f5f7", 600, "center");
+    text("一个网页。我们，都在。", 720, 493, 39, "#c2c9d5", 500, "center");
+    text("syncaction.thomasthzh.top", 720, 569, 26, "#9abfff", 500, "center");
+    text("Chrome / Edge 桌面扩展 · 开源 · 可自行部署", 720, 658, 15, "#9a9fac", 400, "center");
   });
 }
 const scenes = {
@@ -547,23 +512,36 @@ const scenes = {
   end: ending,
 };
 function renderFilm(seconds) {
-  const t = clamp(Number(seconds) || 0, 0, duration),
-    index = Math.max(
-      0,
-      chapters.findLastIndex((c) => t >= c.start),
-    );
+  const t = clamp(Number(seconds) || 0, 0, duration);
+  const index = Math.max(
+    0,
+    chapters.findLastIndex((chapter) => t >= chapter.start),
+  );
   const chapter = chapters[index],
-    local = t - chapter.start,
     state = motion.sample(t);
   ctx.globalAlpha = 1;
-  const cut = ["solo", "join", "pages", "quartet", "end"].includes(chapter.feature),
-    blend = cut ? 1 : ease(local / 0.18);
   scenes[chapter.feature](t);
-  if (index > 0 && blend < 1)
-    alpha(1 - blend, () => scenes[chapters[index - 1].feature](chapter.start - 0.001));
-  const dark = ["join", "media", "quartet", "invitations", "end"].includes(chapter.feature);
-  text("SyncAction", 80, 45, 17, dark ? "#f1f1f3" : C.ink, 600);
-  text("功能演绎 / 本地模拟", 1360, 45, 12, dark ? "#a5a9b4" : "#83838c", 400, "right");
+  // Shared dark field and matching object scales carry transitions. The pointer
+  // overlay is drawn exactly once afterwards in its continuous global space.
+  const transitionLength =
+    chapter.feature === "quartet" || chapter.feature === "join" ? 0.24 : 0.32;
+  const blend = index ? ease((t - chapter.start) / transitionLength) : 1;
+  if (index && blend < 1) {
+    if (transitionChapter !== index) {
+      const mainContext = ctx;
+      try {
+        ctx = transitionContext;
+        ctx.globalAlpha = 1;
+        scenes[chapters[index - 1].feature](chapter.start - 0.001);
+        transitionChapter = index;
+      } finally {
+        ctx = mainContext;
+      }
+    }
+    alpha(1 - blend, () => ctx.drawImage(transitionCanvas, 0, 0));
+  }
+  text("SyncAction", 80, 43, 16, "#d7dbe4", 600);
+  text("产品功能演绎", 1360, 43, 12, "#a5a9b4", 400, "right");
   state.cursors.forEach((pointer) => cursor(pointer, true));
   state.cursors.forEach((pointer) => cursor(pointer));
   window.filmState = {
@@ -571,13 +549,14 @@ function renderFilm(seconds) {
     time: t,
     duration,
     chapter: chapter.feature,
-    cursorCount: state.cursors.filter((p) => p.visible).length,
+    cursorCount: state.cursors.filter((pointer) => pointer.visible).length,
     simulation: true,
     transition: blend,
     cameraOffset: { x: 0, y: 0 },
   };
   return window.filmState;
 }
+
 window.renderFilm = renderFilm;
 window.filmReady = false;
 Promise.all([

@@ -19,7 +19,7 @@
     <meta property="og:locale" content="zh_CN" />
     <link rel="canonical" href="https://syncaction.thomasthzh.top/" />
     <link rel="icon" type="image/svg+xml" href="/assets/syncaction-symbol-small-v4.svg" />
-    <link rel="stylesheet" href="/hero.css?v=hero-1" />
+    <link rel="stylesheet" href="/hero.css?v=refined-1" />
     <script src="/hero.js?v=hero-1" defer></script>
     <script src="/app.js?v=hero-1" defer></script>
     <title>SyncAction · 一起看，也一起做点什么</title>
@@ -44,8 +44,8 @@
         ></a
       >
       <nav aria-label="主要导航">
-        <a href="#features">产品体验</a><a href="#experience">动手试试</a
-        ><a href="#start">如何开始</a><a class="nav-faq" href="#questions">常见问题</a>
+        <a href="#experience">产品体验</a><a href="#start">如何开始</a
+        ><a class="nav-faq" href="#questions">常见问题</a>
       </nav>
       <a class="button button-small button-white" href="#download"
         >获取扩展 <span aria-hidden="true">↗</span></a
@@ -61,10 +61,10 @@
               >开始一起用 <span aria-hidden="true">↗</span></a
             ><a
               class="film-launch text-link"
-              href="/assets/syncaction-film-v4-32s.mp4"
+              href="/assets/syncaction-film-v5-30s.mp4"
               data-film-open
               >观看宣传片 <span aria-hidden="true">▷</span
-              ><span class="sr-only">32 秒，含原创配乐</span></a
+              ><span class="sr-only">30 秒，含原创配乐</span></a
             >
           </div>
           <p class="hero-footnote">Chrome / Edge 桌面扩展 · 开源 · 可自行部署</p>
@@ -134,142 +134,13 @@
         </figure>
       </section>
 
-      <section class="manifesto section-wrap" id="features" aria-labelledby="manifesto-title">
-        <h2 id="manifesto-title">不止一起看。<br /><span>是一起，在场。</span></h2>
-        <p>
-          保留熟悉的网页，把同伴放在身边。<br />从同一段进度，到同一个重点。<br />每个动作，都有回应。
-        </p>
-        <a class="text-link" href="#experience">先试一试 <span aria-hidden="true">↓</span></a>
-      </section>
-
-      <section class="watch-story story-dark" aria-labelledby="watch-title">
-        <div class="watch-layout section-wrap">
-          <div class="story-copy">
-            <p class="chapter-label">一起看</p>
-            <h2 id="watch-title">你停下。<br />我们也在<br /><em>这一秒。</em></h2>
-            <p>暂停、播放、调整进度。<br />加入播放组的同伴，跟随领播者对齐。</p>
-            <a class="text-link" href="#experience" data-demo-scene="watch"
-              >体验同步播放 <span aria-hidden="true">↗</span></a
-            >
-          </div>
-          <figure class="sync-macro" aria-label="同步播放功能示意：领播者和跟随者都在42.08秒暂停">
-            <div class="macro-state"><span class="status-dot"></span> 领播已暂停</div>
-            <div class="macro-clock">00:42<span>.08</span></div>
-            <div class="macro-track"><i></i><b></b></div>
-            <div class="macro-ticks" aria-hidden="true"></div>
-            <div class="macro-follow">
-              <span class="mini-person">林</span
-              ><span>小林 · 跟随者<small>已对齐 · 保持暂停</small></span
-              ><strong>00:42.08</strong>
-            </div>
-            <figcaption>各自播放内容，同步的是播放状态。</figcaption>
-          </figure>
-        </div>
-      </section>
-
-      <section class="mark-story section-wrap" aria-labelledby="mark-title">
-        <figure class="annotation-art" aria-label="已授权兼容页面上的光标、画笔和弹幕功能示意">
-          <div class="article-kicker">OUR NEXT CHAPTER</div>
-          <p class="article-title">下一站。<br />去看更大的世界。</p>
-          <p class="article-body">
-            把值得一看的页面，带到朋友面前。<br />让同伴看见你指向的重点，<br /><span
-              class="article-underline"
-              >讨论就能自然地继续。<svg viewBox="0 0 480 24" aria-hidden="true">
-                <path d="M4 16Q135 1 240 13T476 9" /></svg
-            ></span>
-          </p>
-          <div class="annotation-pointer ap-one" aria-hidden="true">
-            <svg viewBox="0 0 32 42"><use href="#pointer-shape" /></svg><span>小梅</span>
-          </div>
-          <div class="annotation-pointer ap-two" aria-hidden="true">
-            <svg viewBox="0 0 32 42"><use href="#pointer-shape" /></svg><span>你</span>
-          </div>
-          <div class="annotation-comment">小林：就是这一句。</div>
-          <figcaption>光标 · 弹幕 · 画笔 / 功能示意</figcaption>
-        </figure>
-        <div class="story-copy">
-          <p class="chapter-label">一起发现</p>
-          <h2 id="mark-title">不用说<br /><em>「左边一点」。</em></h2>
-          <p>
-            分享页面，找到同伴所在的位置。<br />指过去、说出来、画重点，<br />让讨论直接落在内容上。
-          </p>
-          <a class="text-link" href="#experience" data-demo-scene="mark"
-            >体验同页交流 <span aria-hidden="true">↗</span></a
-          >
-          <p class="story-boundary">页面协作需本人授权，且页面内容兼容。</p>
-        </div>
-      </section>
-
-      <section class="groups-story story-dark" aria-labelledby="groups-title">
-        <div class="groups-heading section-wrap">
-          <p class="chapter-label">也可以，各有节奏</p>
-          <h2 id="groups-title">同一个房间。<br /><span>不必同一个进度。</span></h2>
-          <p>
-            同房支持多个播放组。先查看，再决定加入。<br />打开页面、查看另一组，都不会替你改变跟随关系。
-          </p>
-        </div>
-        <figure
-          class="group-space section-wrap"
-          aria-label="多播放组功能示意：你参与A组，同时可以仅查看B组"
-        >
-          <div class="group-window group-a">
-            <div class="group-window-top"><span>A 组</span><span>本设备正在参与</span></div>
-            <img
-              src="/assets/hero-landscape-960.webp"
-              width="960"
-              height="540"
-              loading="lazy"
-              decoding="async"
-              alt=""
-            />
-            <div class="group-window-bottom">
-              <strong>周末小聚</strong><span>你与小林 · 一起看</span>
-            </div>
-          </div>
-          <div class="group-window group-b">
-            <div class="group-window-top"><span>B 组</span><span>仅查看</span></div>
-            <div class="group-b-content">
-              <span>另一段内容。</span><strong>另一种节奏。</strong
-              ><span class="group-b-line"></span>
-            </div>
-            <div class="group-window-bottom">
-              <strong>课程讨论</strong><span>你的参与仍保留在 A 组</span>
-            </div>
-          </div>
-          <figcaption>
-            查看与加入，是不同动作。<a href="#experience" data-demo-scene="browse"
-              >试试共享页面 <span aria-hidden="true">↗</span></a
-            >
-          </figcaption>
-        </figure>
-      </section>
-
-      <section class="privacy-story section-wrap" aria-labelledby="principle-title">
-        <div class="privacy-symbol">
-          <img
-            src="/assets/syncaction-symbol-v4.svg"
-            width="420"
-            height="420"
-            loading="lazy"
-            alt=""
-          />
-        </div>
-        <div class="story-copy">
-          <p class="chapter-label">靠近一点，保留自己的空间</p>
-          <h2 id="principle-title">共享此刻。<br /><em>保留边界。</em></h2>
-          <p>
-            按网站开启协作，由本人确认，随时撤销。<br />页面协作通道不发送密码、表单文字、<br />网页正文或视频流。
-          </p>
-          <a class="text-link" href="#privacy-question"
-            >了解共享的数据 <span aria-hidden="true">↗</span></a
-          >
-        </div>
-      </section>
-
-      <section class="experience-section section-wrap" aria-labelledby="demo-title">
+      <section class="experience-section section-wrap" id="features" aria-labelledby="demo-title">
         <div class="experience" id="experience" aria-labelledby="demo-title">
           <div class="demo-heading">
-            <h2 id="demo-title">先动手。<br />就会了。</h2>
+            <div>
+              <h2 id="demo-title"><span>在一个工作面，</span><span>一起完成。</span></h2>
+              <p>播放、浏览、标记，切换一下就能试。</p>
+            </div>
             <span class="demo-label">本地交互演示</span>
           </div>
           <div class="browser-frame">
@@ -486,21 +357,16 @@
             </div>
           </div>
           <p class="demo-disclaimer">
-            这是可操作的产品示意，不连接真实房间，也不会读取你的页面。<noscript>
+            每个人使用自己的设备，在已授权的兼容页面协作。这里仅作本地演示，不连接真实房间。<noscript>
               启用 JavaScript 后可操作演示；下载和使用指南仍可直接访问。</noscript
             >
           </p>
-          <a class="film-launch text-link" href="/assets/syncaction-film-v4-32s.mp4" data-film-open>
-            <span aria-hidden="true">▶</span> 观看 32 秒宣传片
-            <span class="film-audio-note">含原创配乐</span>
-          </a>
         </div>
       </section>
       <section class="getting-started section-wrap" id="start" aria-labelledby="start-title">
         <div class="section-title-row">
           <div>
-            <p class="eyebrow">把第一次，走得更清楚</p>
-            <h2 id="start-title">三步。<br />到朋友身边。</h2>
+            <h2 id="start-title">三步，开始一起用。</h2>
           </div>
           <a
             class="text-link"
@@ -552,71 +418,71 @@
             <p class="step-note">房间可能需要邀请或审批，以服务器与房间规则为准。</p>
           </li>
         </ol>
-      </section>
 
-      <section class="faq-section section-wrap" id="questions" aria-labelledby="questions-title">
-        <div>
-          <p class="eyebrow">开始之前，你可能还想知道</p>
-          <h2 id="questions-title">把边界也说清楚。</h2>
-        </div>
-        <div class="faq-list">
-          <details>
-            <summary>需要每个人都安装吗？</summary>
-            <p>
-              参与网页协作的朋友需要在各自的 Chrome 或 Edge
-              安装扩展，连接同一台公共服务器，进入同一个房间。视频仍由各自的网页播放，需要各自具备对应内容的访问权限。
-            </p>
-          </details>
-          <details>
-            <summary>所有网站和视频都支持吗？</summary>
-            <p>
-              不能保证。媒体需要能被扩展识别并控制；DRM
-              保护、没有有限时间轴的直播，或特殊播放器可能不适用。页面内容不一致时，位置型协作会保护性暂停。遇到问题可先在网页播放一次，再按侧栏提示重试。
-            </p>
-          </details>
-          <details id="privacy-question">
-            <summary>网站授权后，会共享什么数据？</summary>
-            <p>
-              分享到房间的页面地址和标题会成为房间信息。按网站开启页面协作后，会发送内容兼容性摘要、量化位置、媒体状态，以及你主动发送的弹幕和绘制内容；该通道不发送
-              Cookie、密码、表单文字、网页正文、完整 DOM、截图或视频流。
-            </p>
-            <p>
-              网站权限可在侧栏管理并撤销。撤销权限会停止后续对应协作，已分享的页面与消息不会因此自动删除。登录会话保存在扩展本地；服务器仍处理账号、房间和消息等业务数据。
-            </p>
-          </details>
-          <details>
-            <summary>服务在线，为什么还没有一起播放？</summary>
-            <p>
-              服务在线表示能连接服务器；房间已同步表示房间信息已经同步。要跟随视频，还需打开对应页面、完成网站授权，并明确加入播放组。观看工作面会单独显示本设备是否参与，按就近提示继续即可。
-            </p>
-          </details>
-          <details>
-            <summary>可以自己部署服务器吗？</summary>
-            <p>
-              可以。客户端与服务端代码均在公开仓库中，服务器可自行部署。客户端填写你实际的 HTTPS
-              公共服务地址，不要填管理员后台地址。<a
-                href="https://github.com/thomasthzh/SyncAction/blob/main/docs/server.md"
-                >阅读服务器部署指南</a
-              >。
-            </p>
-          </details>
-        </div>
+        <section class="faq-section" id="questions" aria-labelledby="questions-title">
+          <div>
+            <h3 id="questions-title">常见问题</h3>
+          </div>
+          <div class="faq-list">
+            <details>
+              <summary>需要每个人都安装吗？</summary>
+              <p>
+                参与网页协作的朋友需要在各自的 Chrome 或 Edge
+                安装扩展，连接同一台公共服务器，进入同一个房间。视频仍由各自的网页播放，需要各自具备对应内容的访问权限。
+              </p>
+            </details>
+            <details>
+              <summary>所有网站和视频都支持吗？</summary>
+              <p>
+                不能保证。媒体需要能被扩展识别并控制；DRM
+                保护、没有有限时间轴的直播，或特殊播放器可能不适用。页面内容不一致时，位置型协作会保护性暂停。遇到问题可先在网页播放一次，再按侧栏提示重试。
+              </p>
+            </details>
+            <details>
+              <summary>查看另一播放组，会改变我正在跟随的组吗？</summary>
+              <p>
+                不会。查看和加入是不同动作；打开页面或查看另一组，不会自动改变本设备正在参与的播放组。需要本人明确加入后才开始跟随。
+              </p>
+            </details>
+            <details id="privacy-question">
+              <summary>网站授权后，会共享什么数据？</summary>
+              <p>
+                分享到房间的页面地址和标题会成为房间信息。按网站开启页面协作后，会发送内容兼容性摘要、量化位置、媒体状态，以及你主动发送的弹幕和绘制内容；该通道不发送
+                Cookie、密码、表单文字、网页正文、完整 DOM、截图或视频流。
+              </p>
+              <p>
+                网站权限可在侧栏管理并撤销。撤销权限会停止后续对应协作，已分享的页面与消息不会因此自动删除。登录会话保存在扩展本地；服务器仍处理账号、房间和消息等业务数据。
+              </p>
+            </details>
+            <details>
+              <summary>服务在线，为什么还没有一起播放？</summary>
+              <p>
+                服务在线表示能连接服务器；房间已同步表示房间信息已经同步。要跟随视频，还需打开对应页面、完成网站授权，并明确加入播放组。观看工作面会单独显示本设备是否参与，按就近提示继续即可。
+              </p>
+            </details>
+            <details>
+              <summary>可以自己部署服务器吗？</summary>
+              <p>
+                可以。客户端与服务端代码均在公开仓库中，服务器可自行部署。客户端填写你实际的 HTTPS
+                公共服务地址，不要填管理员后台地址。<a
+                  href="https://github.com/thomasthzh/SyncAction/blob/main/docs/server.md"
+                  >阅读服务器部署指南</a
+                >。
+              </p>
+            </details>
+          </div>
+        </section>
       </section>
       <section class="download-section" id="download" aria-labelledby="download-title">
         <div class="download-inner section-wrap">
           <div class="download-copy">
-            <img
-              class="download-mark"
-              src="/assets/syncaction-symbol-light-v4.svg"
-              width="112"
-              height="112"
-              alt=""
-            />
-            <p class="eyebrow">下一次相聚，从一个房间开始</p>
-            <h2 id="download-title">把同伴，<br />带进浏览器。</h2>
+            <div class="download-heading">
+              <img src="/assets/syncaction-symbol-v4.svg" width="40" height="40" alt="" />
+              <h2 id="download-title">下载 SyncAction</h2>
+            </div>
             <p>
-              SyncAction <span class="version">v0.9.14</span><br />适用于桌面版 Chrome /
-              Edge，当前通过 ZIP 安装。
+              <span class="version">v0.9.14</span> · 桌面版 Chrome / Edge<br />下载
+              ZIP，解压后加载扩展。
             </p>
             <a
               class="text-link"
@@ -665,25 +531,25 @@
         preload="none"
         width="1440"
         height="810"
-        data-src="/assets/syncaction-film-v4-32s.mp4"
-        data-poster="/assets/syncaction-film-v4-poster.png"
-        aria-label="SyncAction 32 秒产品宣传片"
+        data-src="/assets/syncaction-film-v5-30s.mp4"
+        data-poster="/assets/syncaction-film-v5-poster.png"
+        aria-label="SyncAction 30 秒产品宣传片"
       >
         <track
           kind="captions"
           srclang="zh-CN"
           label="中文动作说明"
-          data-src="/assets/syncaction-film-v4.zh-CN.vtt"
+          data-src="/assets/syncaction-film-v5.zh-CN.vtt"
         />
       </video>
       <p id="film-description">
-        产品功能演绎，非真实录屏。第 3、8.5、14
-        秒伙伴陆续进入，四人协作贯穿后半段；配乐原创，无人声。
+        产品功能演绎，非真实录屏。第 3、7.5、11.5
+        秒伙伴陆续进入；四个光标始终连续移动，关键操作与镜头合拍。配乐原创，无人声。
       </p>
       <p id="film-play-status" role="status" aria-live="polite"></p>
       <div class="film-dialog-links">
-        <a href="/assets/syncaction-film-v4-32s.mp4" download>下载宣传片 MP4</a
-        ><a href="/assets/syncaction-film-v4.zh-CN.vtt" download>下载中文动作字幕</a>
+        <a href="/assets/syncaction-film-v5-30s.mp4" download>下载宣传片 MP4</a
+        ><a href="/assets/syncaction-film-v5.zh-CN.vtt" download>下载中文动作字幕</a>
       </div>
       <details class="film-transcript">
         <summary>阅读宣传片文字说明</summary>
@@ -692,19 +558,19 @@
           秒，第二个光标进入；朋友在自己的设备上明确加入播放组，再跟随领播者的暂停与进度调整。
         </p>
         <p>
-          第 8.5 秒第三人加入，第 14
-          秒第四人加入。四人一起指向内容、发弹幕、画重点；随后展示共享页面、成员位置；查看另一播放组不会改变本人参与的组。邀请由接收者接受，加入申请由房主确认。临时断线后可重新连接并读取房间快照，媒体跟随状态单独呈现。
+          第 7.5 秒第三人进入，随后展示共享页面、指向内容、画笔标记和主动发送弹幕。第 11.5
+          秒第四人进入，浏览器拉远形成四人英雄镜头。查看另一播放组不会改变本人参与的组；邀请由接收者接受，加入申请由房主确认。临时断线后可重新连接并读取已提交的房间状态，媒体跟随状态单独呈现。
         </p>
         <p>
-          首次使用先配置服务器，按规则登录或等待批准；管理员批准后，本人点击登录继续原入房目标。新网站先阅读并同意说明，再允许协作；网站权限随时可撤销，已分享信息不会因此自动删除。旁边是独立的已授权页面示例，同伴继续观看与讨论。四个光标从进场后持续留在画面中。扩展适用于桌面
+          首次使用先配置服务器，按规则登录或等待批准；管理员批准后，本人点击登录继续原入房目标。新网站先阅读并同意说明，再允许协作；网站权限随时可撤销，已分享信息不会因此自动删除。旁边是独立的已授权页面示例，同伴继续观看与讨论。四个光标从进场后持续留在画面中，沿各自路线连续移动，缓行经过关键操作。扩展适用于桌面
           Chrome / Edge，通过 ZIP 解压加载，MIT 开源，可自行部署服务端。
         </p>
       </details>
     </dialog>
 
-    <footer class="site-footer section-wrap">
+    <footer class="site-footer">
       <a class="brand" href="#" aria-label="回到 SyncAction 首页"
-        ><img src="/assets/syncaction-symbol-light-v4.svg" width="28" height="28" alt="" /><span
+        ><img src="/assets/syncaction-symbol-v4.svg" width="28" height="28" alt="" /><span
           >SyncAction</span
         ></a
       >
