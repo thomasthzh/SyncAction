@@ -5,7 +5,7 @@ V3 扩展，负责侧栏、浏览器标签执行、登录会话，以及获得�
 
 ## 安装和升级
 
-1. 从 [v0.9.12 Release](https://github.com/thomasthzh/SyncAction/releases/tag/v0.9.12)
+1. 从 [v0.9.13 Release](https://github.com/thomasthzh/SyncAction/releases/tag/v0.9.13)
    下载对应浏览器的 `SyncAction-client-*.zip`。
 2. 解压至固定目录，确认目录根部直接包含 `manifest.json`。
 3. 打开 `chrome://extensions` 或 `edge://extensions`，启用开发者模式，选择“加载已解压的扩展程序”。

@@ -4,10 +4,24 @@
     <linearGradient id="sky" x2="0" y2="1"><stop stop-color="#a1c7c7"/><stop offset=".65" stop-color="#d9d5ae"/><stop offset="1" stop-color="#486f85"/></linearGradient>
   </defs>
   <rect width="1200" height="630" fill="#f0f6f8"/>
-  <rect x="64" y="56" width="48" height="48" rx="13" fill="url(#brand)"/>
-  <rect x="74" y="66" width="26" height="21" rx="5" fill="#f8fafc"/>
-  <rect x="79" y="76" width="26" height="21" rx="5" fill="#f8fafc"/>
-  <path d="M88 80v13l11-6.5Z" fill="#4f46e5"/>
+  <!-- brand:start -->
+<svg x="64" y="56" width="48" height="48" viewBox="0 0 128 128">
+  <title id="title">SyncAction</title>
+  <defs>
+    <linearGradient id="sa-tile" x1="28" y1="8" x2="100" y2="128" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2495FF" />
+      <stop offset="1" stop-color="#0063D8" />
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="120" height="120" rx="30" fill="url(#sa-tile)" />
+  <g fill="#FFFFFF">
+    <path d="M45 28C41 28 39 33 42 36L59 53C62 56 67 56 70 53L87 36C90 33 88 28 84 28Z" />
+    <path transform="rotate(90 64 64)" d="M45 28C41 28 39 33 42 36L59 53C62 56 67 56 70 53L87 36C90 33 88 28 84 28Z" />
+    <path transform="rotate(180 64 64)" d="M45 28C41 28 39 33 42 36L59 53C62 56 67 56 70 53L87 36C90 33 88 28 84 28Z" />
+    <path transform="rotate(270 64 64)" d="M45 28C41 28 39 33 42 36L59 53C62 56 67 56 70 53L87 36C90 33 88 28 84 28Z" />
+  </g>
+</svg>
+  <!-- brand:end -->
   <g font-family="Segoe UI,Microsoft YaHei,PingFang SC,sans-serif">
     <text x="128" y="89" font-size="28" font-weight="700" fill="#102b43">SyncAction</text>
     <text x="65" y="255" font-size="65" font-weight="700" fill="#102b43">一起看。</text>

@@ -16,45 +16,15 @@ const superadminSvgPath = resolve(repositoryRoot, "apps/superadmin/public/syncac
 const vnextIconSourcePath = resolve(repositoryRoot, "apps/extension/src/ui-vnext/icons.tsx");
 const iconSizes = [16, 32, 48, 128] as const;
 
-const expectedFullSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title">
-  <title id="title">SyncAction</title>
-  <defs>
-    <linearGradient
-      id="background"
-      x1="20"
-      y1="16"
-      x2="108"
-      y2="112"
-      gradientUnits="userSpaceOnUse"
-    >
-      <stop stop-color="#3B82F6" />
-      <stop offset="1" stop-color="#4F46E5" />
-    </linearGradient>
-    <mask id="tabs">
-      <rect width="128" height="128" fill="black" />
-      <rect x="24" y="27" width="68" height="52" rx="15" fill="white" />
-      <rect x="36" y="49" width="68" height="52" rx="15" fill="white" />
-      <path d="M58 59.5V89.5L84 74.5Z" fill="black" />
-    </mask>
-  </defs>
-  <rect x="6" y="6" width="116" height="116" rx="29" fill="url(#background)" />
-  <rect x="18" y="21" width="92" height="86" fill="#F8FAFC" mask="url(#tabs)" />
-</svg>
-`;
-
-const expectedSmallSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
-  <defs>
-    <mask id="tabs">
-      <rect width="128" height="128" fill="black" />
-      <rect x="24" y="27" width="68" height="52" rx="15" fill="white" />
-      <rect x="36" y="49" width="68" height="52" rx="15" fill="white" />
-      <path d="M58 60V90L84 75Z" fill="black" />
-    </mask>
-  </defs>
-  <rect x="6" y="6" width="116" height="116" rx="29" fill="#356FE8" />
-  <rect x="18" y="21" width="92" height="86" fill="#F8FAFC" mask="url(#tabs)" />
-</svg>
-`;
+const monochromeSvgPath = resolve(repositoryRoot, "design/brand/syncaction-symbol-monochrome.svg");
+const siteSvgPath = resolve(repositoryRoot, "site/assets/syncaction-symbol-v3.svg");
+const siteMonochromeSvgPath = resolve(
+  repositoryRoot,
+  "site/assets/syncaction-symbol-monochrome-v3.svg",
+);
+const expectedFullSvg = readFileSync(fullSvgPath, "utf8");
+const expectedSmallSvg = readFileSync(smallSvgPath, "utf8");
+const expectedMonochromeSvg = readFileSync(monochromeSvgPath, "utf8");
 
 describe("SyncAction brand icon sources", () => {
   it("keeps the vNext logo bound to the generated brand master instead of copied JSX geometry", () => {
@@ -64,49 +34,57 @@ describe("SyncAction brand icon sources", () => {
     expect(source).toContain('src="/icon-32.png"');
   });
 
-  it("keeps the approved full and small masters byte-for-byte deterministic", () => {
-    expect(readFileSync(fullSvgPath, "utf8")).toBe(expectedFullSvg);
-    expect(readFileSync(smallSvgPath, "utf8")).toBe(expectedSmallSvg);
+  it("pins the reviewed full, optical small and monochrome artwork", () => {
+    expect(createHash("sha256").update(expectedFullSvg).digest("hex")).toBe(
+      "937e7ecf2aef33f2d6889a723975b09378eab9abb989c6922169f01acf6d21b2",
+    );
+    expect(createHash("sha256").update(expectedSmallSvg).digest("hex")).toBe(
+      "60f58bfb5f5881a99ce9f13c2f0ccb2fb4d55c20c44f9345a4b845fc531f5436",
+    );
+    expect(createHash("sha256").update(expectedMonochromeSvg).digest("hex")).toBe(
+      "943ad7923fefafac96ad5cb98ad2aa5cbfe6d9c0709e223833b4459036272342",
+    );
     expect(readFileSync(superadminSvgPath, "utf8")).toBe(expectedFullSvg);
+    expect(readFileSync(siteSvgPath, "utf8")).toBe(expectedFullSvg);
+    expect(readFileSync(siteMonochromeSvgPath, "utf8")).toBe(expectedMonochromeSvg);
     expect(readFileSync(rendererPath, "utf8").length).toBeGreaterThan(0);
   });
 
   it.each([
-    ["full", fullSvgPath, true, "M58 59.5V89.5L84 74.5Z"],
-    ["small", smallSvgPath, false, "M58 60V90L84 75Z"],
-  ] as const)(
-    "%s master has the approved safe two-tab and negative-triangle construction",
-    (_variant, path, usesGradient, trianglePath) => {
-      const source = readFileSync(path, "utf8");
+    ["full", fullSvgPath, true],
+    ["small", smallSvgPath, false],
+    ["monochrome", monochromeSvgPath, false],
+  ] as const)("%s master uses four safe local vector pointers", (_variant, path, usesGradient) => {
+    const source = readFileSync(path, "utf8");
+    expect(source).toContain('viewBox="0 0 128 128"');
+    expect(source).not.toMatch(
+      /<(?:text|image|script|foreignObject|metadata|font|use)\b|@font-face|(?:data:|javascript:|file:)/iu,
+    );
+    expect(source.match(/https?:\/\/[^\s"')]+/gu)).toEqual(["http://www.w3.org/2000/svg"]);
+    expect(source.match(/<path\b/gu)).toHaveLength(4);
+    for (const angle of [90, 180, 270]) {
+      expect(source).toContain(`transform="rotate(${String(angle)} 64 64)"`);
+    }
+    expect(source.includes("<linearGradient")).toBe(usesGradient);
+    if (_variant === "monochrome") {
+      expect(source).toContain('fill="currentColor"');
+      expect(source).not.toContain("<rect");
+    } else {
+      expect(source).toContain('width="120" height="120" rx="30"');
+      expect(source).toContain('fill="#FFFFFF"');
+    }
+  });
 
-      expect(source).toContain('viewBox="0 0 128 128"');
-      expect(source).not.toMatch(
-        /<(?:text|image|script|foreignObject|metadata|font|use)\b|@font-face|(?:data:|javascript:|file:)/iu,
-      );
-      expect(source.match(/https?:\/\/[^\s"')]+/gu)).toEqual(["http://www.w3.org/2000/svg"]);
-      expect(
-        source.match(/<rect x="24" y="27" width="68" height="52" rx="15" fill="white" \/>/gu),
-      ).toHaveLength(1);
-      expect(
-        source.match(/<rect x="36" y="49" width="68" height="52" rx="15" fill="white" \/>/gu),
-      ).toHaveLength(1);
-      expect(source).toContain(`<path d="${trianglePath}" fill="black" />`);
-      if (usesGradient) {
-        expect(source).toContain("<linearGradient");
-        expect(source).toContain('id="background"');
-        expect(source).toContain('x1="20"');
-        expect(source).toContain('y1="16"');
-        expect(source).toContain('x2="108"');
-        expect(source).toContain('y2="112"');
-        expect(source).toContain('gradientUnits="userSpaceOnUse"');
-        expect(source).toContain('<stop stop-color="#3B82F6" />');
-        expect(source).toContain('<stop offset="1" stop-color="#4F46E5" />');
-      } else {
-        expect(source).not.toContain("<linearGradient");
-        expect(source).toContain('fill="#356FE8"');
-      }
-    },
-  );
+  it("embeds the same current mark in the social cover", () => {
+    const source = readFileSync(resolve(repositoryRoot, "site/assets/social-cover.svg"), "utf8");
+    expect(source).toContain(
+      expectedFullSvg.replace(
+        /<svg\b[^>]*>/u,
+        '<svg x="64" y="56" width="48" height="48" viewBox="0 0 128 128">',
+      ),
+    );
+    expect(source).not.toContain('d="M88 80v13l11-6.5Z"');
+  });
 });
 
 describe("rendered extension icon assets", () => {
@@ -155,6 +133,10 @@ describe("rendered extension icon assets", () => {
       await Promise.all([
         writeFile(resolve(brandDirectory, "syncaction-symbol.svg"), expectedFullSvg),
         writeFile(resolve(brandDirectory, "syncaction-symbol-small.svg"), expectedSmallSvg),
+        writeFile(
+          resolve(brandDirectory, "syncaction-symbol-monochrome.svg"),
+          expectedMonochromeSvg,
+        ),
       ]);
 
       const rendererModule = (await import(pathToFileURL(rendererPath).href)) as {
@@ -197,6 +179,15 @@ describe("rendered extension icon assets", () => {
           "utf8",
         ),
       ).toBe(expectedFullSvg);
+      expect(
+        await readFile(resolve(temporaryRoot, "site/assets/syncaction-symbol-v3.svg"), "utf8"),
+      ).toBe(expectedFullSvg);
+      expect(
+        await readFile(
+          resolve(temporaryRoot, "site/assets/syncaction-symbol-monochrome-v3.svg"),
+          "utf8",
+        ),
+      ).toBe(expectedMonochromeSvg);
 
       const firstHashes = await hashRenderedAssets(temporaryRoot);
       await rendererModule.renderExtensionIcons({ repositoryRoot: temporaryRoot });
@@ -354,6 +345,8 @@ async function hashRenderedAssets(root: string): Promise<Readonly<Record<string,
   const relativePaths = [
     ...iconSizes.map((size) => `apps/extension/public/icon-${String(size)}.png`),
     "apps/superadmin/public/syncaction-symbol.svg",
+    "site/assets/syncaction-symbol-v3.svg",
+    "site/assets/syncaction-symbol-monochrome-v3.svg",
   ];
   const entries = await Promise.all(
     relativePaths.map(async (relativePath) => [

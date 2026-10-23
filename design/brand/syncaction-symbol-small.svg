@@ -1,12 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
-  <defs>
-    <mask id="tabs">
-      <rect width="128" height="128" fill="black" />
-      <rect x="24" y="27" width="68" height="52" rx="15" fill="white" />
-      <rect x="36" y="49" width="68" height="52" rx="15" fill="white" />
-      <path d="M58 60V90L84 75Z" fill="black" />
-    </mask>
-  </defs>
-  <rect x="6" y="6" width="116" height="116" rx="29" fill="#356FE8" />
-  <rect x="18" y="21" width="92" height="86" fill="#F8FAFC" mask="url(#tabs)" />
+  <rect x="4" y="4" width="120" height="120" rx="30" fill="#007AFF" />
+  <g fill="#FFFFFF">
+    <path d="M42 24C38 24 36 29 39 32L59 54C62 57 66 57 69 54L89 32C92 29 90 24 86 24Z" />
+    <path transform="rotate(90 64 64)" d="M42 24C38 24 36 29 39 32L59 54C62 57 66 57 69 54L89 32C92 29 90 24 86 24Z" />
+    <path transform="rotate(180 64 64)" d="M42 24C38 24 36 29 39 32L59 54C62 57 66 57 69 54L89 32C92 29 90 24 86 24Z" />
+    <path transform="rotate(270 64 64)" d="M42 24C38 24 36 29 39 32L59 54C62 57 66 57 69 54L89 32C92 29 90 24 86 24Z" />
+  </g>
 </svg>

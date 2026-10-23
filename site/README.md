@@ -37,7 +37,7 @@ without restarting the application or database.
 
 ## Release updates
 
-The two download links and visible version currently target v0.9.12. When updating them, verify both
+The two download links and visible version currently target v0.9.13. When updating them, verify both
 assets against the published GitHub release, update the client guide, and test the final links. The
 server address is a public service address; never put credentials, administrative URLs or private
 configuration in this directory.
