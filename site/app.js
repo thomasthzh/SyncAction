@@ -126,6 +126,22 @@ tabs.forEach((tab, index) => {
   });
 });
 
+document.querySelectorAll("[data-demo-scene]").forEach((link) => {
+  link.addEventListener("click", (event) => {
+    if (
+      event.defaultPrevented ||
+      event.button !== 0 ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.shiftKey ||
+      event.altKey
+    )
+      return;
+    const tab = tabs.find((item) => item.dataset.scene === link.dataset.demoScene);
+    if (tab) selectScene(tab);
+  });
+});
+
 playButton.addEventListener("click", () => {
   if (seconds >= 90) seconds = 0;
   playing = !playing;
