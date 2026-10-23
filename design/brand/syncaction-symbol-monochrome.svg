@@ -1,9 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title">
   <title id="title">SyncAction</title>
-  <g fill="currentColor">
-    <path d="M45 28C41 28 39 33 42 36L59 53C62 56 67 56 70 53L87 36C90 33 88 28 84 28Z" />
-    <path transform="rotate(90 64 64)" d="M45 28C41 28 39 33 42 36L59 53C62 56 67 56 70 53L87 36C90 33 88 28 84 28Z" />
-    <path transform="rotate(180 64 64)" d="M45 28C41 28 39 33 42 36L59 53C62 56 67 56 70 53L87 36C90 33 88 28 84 28Z" />
-    <path transform="rotate(270 64 64)" d="M45 28C41 28 39 33 42 36L59 53C62 56 67 56 70 53L87 36C90 33 88 28 84 28Z" />
+  <g fill="none" stroke-width="21" stroke-linecap="round">
+    <path d="M84 27H59C40 27 27 40 27 59V77" stroke="currentColor" />
+    <path d="M44 101H69C88 101 101 88 101 69V51" stroke="currentColor" />
   </g>
 </svg>

@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title">
+  <title id="title">SyncAction</title>
+  <g fill="none" stroke-width="21" stroke-linecap="round">
+    <path d="M84 27H59C40 27 27 40 27 59V77" stroke="#F5F7FB" />
+    <path d="M44 101H69C88 101 101 88 101 69V51" stroke="#91C4FF" />
+  </g>
+</svg>
