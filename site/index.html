@@ -3,15 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#08090c" />
+    <meta name="theme-color" content="#050506" />
     <meta
       name="description"
-      content="SyncAction 是开源的 Chrome / Edge 协作扩展。和朋友共享网页、一起观看，在授权的网站上用光标、弹幕和画笔交流。"
+      content="SyncAction，天涯共此时。和朋友一起看、一起浏览，在授权的网页上用光标与画笔交流。开源 Chrome / Edge 桌面扩展。"
     />
-    <meta property="og:title" content="SyncAction · 一起看，也一起做点什么" />
+    <meta property="og:title" content="SyncAction · 天涯共此时" />
     <meta
       property="og:description"
-      content="把同伴带进你的浏览器。共享页面、跟随播放、标出重点，从一个房间开始。"
+      content="把相隔，留在屏幕之外。一起看，一起发现，一起把想法标出来。"
     />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://syncaction.thomasthzh.top/" />
@@ -19,382 +19,203 @@
     <meta property="og:locale" content="zh_CN" />
     <link rel="canonical" href="https://syncaction.thomasthzh.top/" />
     <link rel="icon" type="image/svg+xml" href="/assets/syncaction-symbol-small-v4.svg" />
-    <link rel="stylesheet" href="/hero.css?v=refined-1" />
-    <script src="/hero.js?v=hero-1" defer></script>
-    <script src="/app.js?v=hero-1" defer></script>
-    <title>SyncAction · 一起看，也一起做点什么</title>
+    <link rel="stylesheet" href="/hero.css?v=cinema-6" />
+    <script src="/hero.js?v=cinema-6" defer></script>
+    <script src="/app.js?v=cinema-6" defer></script>
+    <title>SyncAction · 天涯共此时</title>
   </head>
   <body>
     <a class="skip-link" href="#main">跳到主要内容</a>
-    <svg class="svg-library" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
-      <symbol id="pointer-shape" viewBox="0 0 32 42">
-        <path
-          d="M3 2v30l8-8 6 13 6-3-6-13h12L3 2Z"
-          fill="currentColor"
-          stroke="white"
-          stroke-width="1.8"
-          stroke-linejoin="round"
-        />
-      </symbol>
-    </svg>
     <header class="site-header">
       <a class="brand" href="#" aria-label="SyncAction 首页"
-        ><img src="/assets/syncaction-symbol-light-v4.svg" width="29" height="29" alt="" /><span
+        ><img src="/assets/syncaction-symbol-light-v4.svg" width="26" height="26" alt="" /><span
           >SyncAction</span
         ></a
       >
       <nav aria-label="主要导航">
-        <a href="#experience">产品体验</a><a href="#start">如何开始</a
-        ><a class="nav-faq" href="#questions">常见问题</a>
+        <a href="#experience">看影片</a
+        ><a href="https://github.com/thomasthzh/SyncAction"
+          >GitHub <span aria-hidden="true">↗</span></a
+        >
       </nav>
-      <a class="button button-small button-white" href="#download"
-        >获取扩展 <span aria-hidden="true">↗</span></a
-      >
+      <a class="button button-small" href="#download">开始一起 <span aria-hidden="true">↗</span></a>
     </header>
     <main id="main">
       <section class="hero" aria-labelledby="hero-title">
-        <div class="hero-copy section-wrap">
-          <h1 id="hero-title">一个网页。<br /><em>我们，都在。</em></h1>
-          <p class="hero-description">把同伴带进浏览器。一起看，一起发现，一起把想法标出来。</p>
-          <div class="hero-actions">
-            <a class="button button-white" href="#download"
-              >开始一起用 <span aria-hidden="true">↗</span></a
-            ><a
-              class="film-launch text-link"
-              href="/assets/syncaction-film-v5-30s.mp4"
-              data-film-open
-              >观看宣传片 <span aria-hidden="true">▷</span
-              ><span class="sr-only">30 秒，含原创配乐</span></a
-            >
-          </div>
-          <p class="hero-footnote">Chrome / Edge 桌面扩展 · 开源 · 可自行部署</p>
+        <div class="hero-copy">
+          <h1 id="hero-title">天涯共此时</h1>
+          <p>把相隔，留在屏幕之外。</p>
         </div>
-        <figure class="hero-figure">
-          <div
-            id="hero-stage"
-            class="hero-stage"
-            aria-describedby="hero-scene-desc"
-            data-playback-state="static"
-          >
-            <div id="hero-camera" class="hero-camera" aria-hidden="true">
-              <div class="hero-browser-bar">
-                <span class="window-dots"><i></i><i></i><i></i></span><span>一个属于我们的房间</span
-                ><span>＋</span>
-              </div>
-              <img
-                class="hero-landscape"
-                src="/assets/hero-landscape-1920.webp"
-                srcset="
-                  /assets/hero-landscape-960.webp   960w,
-                  /assets/hero-landscape-1920.webp 1920w
-                "
-                sizes="(max-width: 720px) 100vw, 92vw"
-                width="1920"
-                height="1080"
-                fetchpriority="high"
-                alt="高山湖泊的日出风景，原创生成的示意内容"
+        <figure class="film-feature" id="experience" aria-label="SyncAction 产品宣传片">
+          <div class="film-screen">
+            <video
+              id="product-film"
+              controls
+              playsinline
+              muted
+              loop
+              preload="none"
+              width="1440"
+              height="810"
+              poster="/assets/syncaction-film-v6-poster.webp"
+              data-src="/assets/syncaction-film-v6-30s.mp4"
+              aria-label="SyncAction 30 秒产品宣传片：天涯共此时"
+              aria-describedby="film-description"
+            >
+              <track
+                kind="captions"
+                srclang="zh-CN"
+                label="中文动作说明"
+                data-src="/assets/syncaction-film-v6.zh-CN.vtt"
               />
-              <div class="hero-image-copy">
-                <span>THE SHARED MOMENT</span><strong>值得看的风景。<br />想和你一起。</strong>
-              </div>
-              <div class="hero-transport">
-                <span>Ⅱ</span><span class="hero-timeline"><i></i></span
-                ><span>一起看 · 功能示意</span>
-              </div>
-            </div>
-            <span class="hero-pointer p-you" data-hero-pointer="you" aria-hidden="true"
-              ><svg viewBox="0 0 32 42"><use href="#pointer-shape" /></svg
-              ><span class="hero-pointer-name" data-hero-name><i></i>你</span></span
-            >
-            <span class="hero-pointer p-friend" data-hero-pointer="friend" aria-hidden="true"
-              ><svg viewBox="0 0 32 42"><use href="#pointer-shape" /></svg
-              ><span class="hero-pointer-name" data-hero-name><i></i>小林</span></span
-            >
-            <span class="hero-pointer p-mei" data-hero-pointer="mei" aria-hidden="true"
-              ><svg viewBox="0 0 32 42"><use href="#pointer-shape" /></svg
-              ><span class="hero-pointer-name" data-hero-name><i></i>小梅</span></span
-            >
-            <span class="hero-pointer p-zhou" data-hero-pointer="zhou" aria-hidden="true"
-              ><svg viewBox="0 0 32 42"><use href="#pointer-shape" /></svg
-              ><span class="hero-pointer-name" data-hero-name><i></i>小周</span></span
-            >
+              <p>
+                浏览器无法播放影片。<a href="/assets/syncaction-film-v6-30s.mp4">下载 MP4 宣传片</a
+                >。
+              </p>
+            </video>
           </div>
-          <figcaption class="hero-scene-caption section-wrap">
-            <p id="hero-scene-desc">
-              四个光标，各自的设备。<span>已授权兼容页面上的功能演绎。</span>
-            </p>
-            <div class="hero-motion-controls">
-              <button id="hero-motion-toggle" type="button" hidden>暂停演绎</button
-              ><button id="hero-motion-replay" type="button" hidden>
-                重播 <span aria-hidden="true">↻</span>
+          <figcaption class="film-caption content-width">
+            <span class="film-caption-title"
+              >从一个光标，到我们的此刻。<small>30 秒产品演绎</small></span
+            >
+            <div class="film-actions" id="film-actions" hidden>
+              <button type="button" id="film-toggle" aria-label="播放宣传片">
+                <span data-play-icon aria-hidden="true">▷</span><span data-play-label>播放</span>
+              </button>
+              <button type="button" id="film-sound" aria-pressed="false">
+                <span aria-hidden="true">♪</span><span data-sound-label>开启声音</span>
+              </button>
+              <button type="button" id="film-fullscreen">
+                全屏 <span aria-hidden="true">↗</span>
               </button>
             </div>
-            <span id="hero-motion-status" class="sr-only" role="status" aria-live="polite"></span>
           </figcaption>
-        </figure>
-      </section>
-
-      <section class="experience-section section-wrap" id="features" aria-labelledby="demo-title">
-        <div class="experience" id="experience" aria-labelledby="demo-title">
-          <div class="demo-heading">
-            <div>
-              <h2 id="demo-title"><span>在一个工作面，</span><span>一起完成。</span></h2>
-              <p>播放、浏览、标记，切换一下就能试。</p>
-            </div>
-            <span class="demo-label">本地交互演示</span>
-          </div>
-          <div class="browser-frame">
-            <div class="browser-chrome" aria-hidden="true">
-              <span class="window-dots"><i></i><i></i><i></i></span
-              ><span class="address-bar"><span>◇</span> 一个属于我们的房间</span
-              ><span class="browser-plus">＋</span>
-            </div>
-            <div class="demo-tabs" role="tablist" aria-label="选择产品演示场景">
-              <button
-                type="button"
-                role="tab"
-                id="tab-watch"
-                aria-controls="panel-watch"
-                aria-selected="true"
-                tabindex="0"
-                data-scene="watch"
-              >
-                <span aria-hidden="true">▷</span> 一起看
-              </button>
-              <button
-                type="button"
-                role="tab"
-                id="tab-browse"
-                aria-controls="panel-browse"
-                aria-selected="false"
-                tabindex="-1"
-                data-scene="browse"
-              >
-                <span aria-hidden="true">▤</span> 一起浏览
-              </button>
-              <button
-                type="button"
-                role="tab"
-                id="tab-mark"
-                aria-controls="panel-mark"
-                aria-selected="false"
-                tabindex="-1"
-                data-scene="mark"
-              >
-                <span aria-hidden="true">⌁</span> 一起标记
-              </button>
-            </div>
-            <div class="demo-body">
-              <div class="demo-main">
-                <section
-                  class="demo-panel"
-                  role="tabpanel"
-                  id="panel-watch"
-                  aria-labelledby="tab-watch"
-                  tabindex="0"
-                >
-                  <div
-                    class="landscape"
-                    aria-label="演示画面：原创生成的高山湖泊日出风景"
-                    role="img"
-                  >
-                    <img
-                      src="/assets/hero-landscape-960.webp"
-                      width="960"
-                      height="540"
-                      loading="lazy"
-                      decoding="async"
-                      alt=""
-                    />
-                    <span class="landscape-caption"
-                      >THE QUIET MOMENT<br /><small>一起，把时间慢下来。</small></span
-                    ><span class="video-tag">示意画面</span>
-                  </div>
-                  <div class="media-info">
-                    <div>
-                      <span class="tiny-label">当前视频</span>
-                      <h3>周末，留一点时间给彼此</h3>
-                    </div>
-                    <span class="media-duration">01:30</span>
-                  </div>
-                  <div class="timeline">
-                    <input
-                      id="demo-progress"
-                      type="range"
-                      min="0"
-                      max="90"
-                      value="24"
-                      aria-label="演示播放进度（秒）"
-                    /><output id="demo-time" for="demo-progress">00:24 / 01:30</output>
-                  </div>
-                  <div class="demo-actions">
-                    <button
-                      class="button button-demo"
-                      id="demo-play"
-                      type="button"
-                      aria-pressed="false"
-                    >
-                      <span aria-hidden="true">▷</span> 播放演示</button
-                    ><button
-                      class="button button-demo-secondary"
-                      id="demo-join"
-                      type="button"
-                      aria-pressed="false"
-                    >
-                      让朋友加入演示
-                    </button>
-                  </div>
-                </section>
-                <section
-                  class="demo-panel"
-                  role="tabpanel"
-                  id="panel-browse"
-                  aria-labelledby="tab-browse"
-                  tabindex="0"
-                  hidden
-                >
-                  <div class="sample-page">
-                    <p class="tiny-label">我们的共享页面</p>
-                    <h3>好东西，<br />放在一起看。</h3>
-                    <p>少一点“链接发我”，<br />多一点“我也看到这里了”。</p>
-                    <span class="sample-decoration" aria-hidden="true">↗</span>
-                  </div>
-                  <div class="sample-links" aria-label="选择示例页面">
-                    <button
-                      class="sample-link"
-                      data-page="课程笔记"
-                      type="button"
-                      aria-pressed="true"
-                    >
-                      <span aria-hidden="true">01</span> 课程笔记
-                      <span aria-hidden="true">↗</span></button
-                    ><button
-                      class="sample-link"
-                      data-page="周末片单"
-                      type="button"
-                      aria-pressed="false"
-                    >
-                      <span aria-hidden="true">02</span> 周末片单
-                      <span aria-hidden="true">↗</span></button
-                    ><button
-                      class="sample-link"
-                      data-page="灵感收集"
-                      type="button"
-                      aria-pressed="false"
-                    >
-                      <span aria-hidden="true">03</span> 灵感收集 <span aria-hidden="true">↗</span>
-                    </button>
-                  </div>
-                  <p class="demo-hint">试着选择一个页面，看看同伴的位置如何呈现。</p>
-                </section>
-                <section
-                  class="demo-panel"
-                  role="tabpanel"
-                  id="panel-mark"
-                  aria-labelledby="tab-mark"
-                  tabindex="0"
-                  hidden
-                >
-                  <div class="note-page" id="demo-note">
-                    <p class="tiny-label">读到这一句的时候</p>
-                    <h3>好想法，值得一起停留。</h3>
-                    <p>
-                      有时不必说“第三段第二行”。<br />让同伴<span class="marked-phrase"
-                        >看见你指向的重点<svg viewBox="0 0 260 14" aria-hidden="true">
-                          <path d="M3 10 Q80 0 131 8 T257 5" /></svg></span
-                      >，<br />讨论就能自然地继续。
-                    </p>
-                    <span class="demo-cursor" aria-hidden="true">↖ <b>你</b></span
-                    ><span class="demo-danmaku" aria-hidden="true">就是这里！</span>
-                  </div>
-                  <div class="demo-actions">
-                    <button
-                      class="button button-demo"
-                      id="demo-mark"
-                      type="button"
-                      aria-pressed="false"
-                    >
-                      标出这个重点</button
-                    ><button class="button button-demo-secondary" id="demo-reset" type="button">
-                      重置演示
-                    </button>
-                  </div>
-                  <p class="demo-hint">真实使用时，需要先同意网站协作说明并允许网站权限。</p>
-                </section>
-              </div>
-              <aside class="demo-sidebar" aria-label="演示房间状态">
-                <div class="room-caption">
-                  <span class="tiny-label">示例房间</span>
-                  <h3>周末小聚</h3>
-                  <p>两个位置，一份陪伴</p>
-                </div>
-                <div class="demo-people">
-                  <div class="person">
-                    <span class="avatar avatar-you">你</span
-                    ><span>你<small id="you-state">正在领播 · 演示</small></span>
-                  </div>
-                  <div class="person">
-                    <span class="avatar avatar-friend">林</span
-                    ><span>小林<small id="friend-state">尚未跟随 · 演示</small></span>
-                  </div>
-                </div>
-                <div class="demo-context">
-                  <span class="tiny-label" id="context-label">本设备状态</span>
-                  <p id="context-value">你在领播 · 演示</p>
-                  <span class="context-line" aria-hidden="true"></span>
-                </div>
-                <p class="sidebar-note">连接、入房与跟随，<br />各自清楚。</p>
-              </aside>
-            </div>
-            <div
-              class="demo-status"
-              role="status"
-              aria-live="polite"
-              aria-atomic="true"
-              id="demo-status"
-            >
-              试着播放，再让朋友加入。所有操作都只在此页模拟。
-            </div>
-          </div>
-          <p class="demo-disclaimer">
-            每个人使用自己的设备，在已授权的兼容页面协作。这里仅作本地演示，不连接真实房间。<noscript>
-              启用 JavaScript 后可操作演示；下载和使用指南仍可直接访问。</noscript
-            >
-          </p>
-        </div>
-      </section>
-      <section class="getting-started section-wrap" id="start" aria-labelledby="start-title">
-        <div class="section-title-row">
-          <div>
-            <h2 id="start-title">三步，开始一起用。</h2>
-          </div>
-          <a
-            class="text-link"
-            href="https://github.com/thomasthzh/SyncAction/blob/main/docs/client.md"
-            >打开完整使用指南 <span aria-hidden="true">↗</span></a
+          <p
+            id="film-play-status"
+            class="film-status content-width"
+            role="status"
+            aria-live="polite"
+          ></p>
+          <noscript
+            ><p class="film-fallback content-width">
+              直接<a href="/assets/syncaction-film-v6-30s.mp4">播放宣传片</a>，或<a
+                href="/assets/syncaction-film-v6.zh-CN.vtt"
+                >阅读中文动作字幕</a
+              >。
+            </p></noscript
           >
+        </figure>
+        <div class="film-chapters content-width" id="features" aria-label="影片章节">
+          <button
+            type="button"
+            data-film-time="3"
+            data-film-end="7.5"
+            aria-label="播放一起看片段，从第 3 秒开始"
+          >
+            <span class="chapter-index">01</span
+            ><span class="chapter-copy"
+              ><strong>一起看</strong><span>暂停、跳转，跟上同一个瞬间。</span></span
+            ><span class="chapter-arrow" aria-hidden="true">↗</span>
+          </button>
+          <button
+            type="button"
+            data-film-time="7.5"
+            data-film-end="9.6"
+            aria-label="播放一起浏览片段，从第 7.5 秒开始"
+          >
+            <span class="chapter-index">02</span
+            ><span class="chapter-copy"
+              ><strong>一起浏览</strong><span>分享一页，把发现带给彼此。</span></span
+            ><span class="chapter-arrow" aria-hidden="true">↗</span>
+          </button>
+          <button
+            type="button"
+            data-film-time="9.6"
+            data-film-end="16.5"
+            aria-label="播放一起标记片段，从第 9.6 秒开始"
+          >
+            <span class="chapter-index">03</span
+            ><span class="chapter-copy"
+              ><strong>一起标记</strong><span>光标、画笔、弹幕，让想法被看见。</span></span
+            ><span class="chapter-arrow" aria-hidden="true">↗</span>
+          </button>
         </div>
-        <ol class="steps">
-          <li>
-            <span class="step-number">1</span>
-            <h3>装好扩展，打开侧栏</h3>
-            <p>
-              下载 Chrome 或 Edge 的
-              ZIP，解压到固定文件夹。在浏览器扩展管理页开启开发者模式，选择“加载已解压的扩展程序”。
-            </p>
-            <a class="text-link" href="#download"
-              >选择你的浏览器 <span aria-hidden="true">↓</span></a
+        <p id="film-description" class="film-description content-width">
+          各自的设备，同一个房间。影片为功能演绎，非真实录屏；协作需要各自安装扩展、授权兼容网页，并主动加入播放组。
+        </p>
+      </section>
+      <section class="start-section" id="download" aria-labelledby="download-title">
+        <div class="content-width">
+          <div class="download-heading">
+            <h2 id="download-title">下一次，<br /><span>一起。</span></h2>
+            <div class="download-details">
+              <p>
+                SyncAction <span class="version">v0.9.14</span><br /><span
+                  >开源的 Chrome / Edge 桌面扩展。</span
+                >
+              </p>
+              <div class="download-options">
+                <a
+                  class="button"
+                  href="https://github.com/thomasthzh/SyncAction/releases/download/v0.9.14/SyncAction-client-chrome-v0.9.14.zip"
+                  >获取 Chrome 版 <span aria-hidden="true">↓</span></a
+                >
+                <a
+                  class="button button-outline"
+                  href="https://github.com/thomasthzh/SyncAction/releases/download/v0.9.14/SyncAction-client-edge-v0.9.14.zip"
+                  >获取 Edge 版 <span aria-hidden="true">↓</span></a
+                >
+              </div>
+              <a
+                class="subtle-link"
+                href="https://github.com/thomasthzh/SyncAction/releases/tag/v0.9.14"
+                >发行说明 <span aria-hidden="true">↗</span></a
+              >
+            </div>
+          </div>
+          <div class="setup-heading" id="start">
+            <h3>让第一次，也很简单。</h3>
+            <a
+              class="subtle-link"
+              href="https://github.com/thomasthzh/SyncAction/blob/main/docs/client.md"
+              >完整使用指南 <span aria-hidden="true">↗</span></a
             >
-          </li>
-          <li>
-            <span class="step-number">2</span>
-            <h3>连接服务器，完成登录</h3>
-            <p>
-              在侧栏顶栏配置实际的公共服务器地址。按提示登录或注册；账号待批准时，等管理员批准后，点击侧栏“批准后登录”继续。也可连接朋友提供的服务器。
-            </p>
+          </div>
+          <ol class="setup-steps">
+            <li>
+              <span class="step-index">01</span>
+              <div>
+                <h4>装好扩展</h4>
+                <p>
+                  下载 ZIP
+                  并解压。在浏览器扩展管理页开启开发者模式，选择“加载已解压的扩展程序”，打开
+                  SyncAction 侧栏。
+                </p>
+              </div>
+            </li>
+            <li>
+              <span class="step-index">02</span>
+              <div>
+                <h4>连接，登录</h4>
+                <p>
+                  在侧栏配置下方公共服务器，或朋友提供的地址。注册后如需审批，等待管理员批准，再点击“批准后登录”。
+                </p>
+              </div>
+            </li>
+            <li>
+              <span class="step-index">03</span>
+              <div>
+                <h4>邀请，一起</h4>
+                <p>
+                  进入同一个房间，分享当前页。各自授权网站；领播者创建播放组，朋友打开对应页面并明确加入，开始跟随。
+                </p>
+              </div>
+            </li>
+          </ol>
+          <div class="connection-row">
             <div class="server-copy">
               <label for="server-address">本站公共服务器</label>
-              <div>
+              <div class="server-field">
                 <input
                   id="server-address"
                   type="text"
@@ -403,183 +224,53 @@
                   spellcheck="false"
                   aria-label="本站公共服务器地址"
                 /><button type="button" id="copy-server" aria-label="复制本站公共服务器地址">
-                  复制
+                  复制 <span aria-hidden="true">↗</span>
                 </button>
               </div>
-              <span id="copy-status" role="status" aria-live="polite"></span>
+              <p id="copy-status" role="status" aria-live="polite"></p>
             </div>
-          </li>
-          <li>
-            <span class="step-number">3</span>
-            <h3>进入同一房间，开始协作</h3>
-            <p>
-              创建或加入房间，分享当前页。在“开始一起看”中完成网站授权，创建播放组；朋友打开对应页面，加入播放组后开始跟随。
-            </p>
-            <p class="step-note">房间可能需要邀请或审批，以服务器与房间规则为准。</p>
-          </li>
-        </ol>
-
-        <section class="faq-section" id="questions" aria-labelledby="questions-title">
-          <div>
-            <h3 id="questions-title">常见问题</h3>
-          </div>
-          <div class="faq-list">
-            <details>
-              <summary>需要每个人都安装吗？</summary>
-              <p>
-                参与网页协作的朋友需要在各自的 Chrome 或 Edge
-                安装扩展，连接同一台公共服务器，进入同一个房间。视频仍由各自的网页播放，需要各自具备对应内容的访问权限。
-              </p>
-            </details>
-            <details>
-              <summary>所有网站和视频都支持吗？</summary>
-              <p>
-                不能保证。媒体需要能被扩展识别并控制；DRM
-                保护、没有有限时间轴的直播，或特殊播放器可能不适用。页面内容不一致时，位置型协作会保护性暂停。遇到问题可先在网页播放一次，再按侧栏提示重试。
-              </p>
-            </details>
-            <details>
-              <summary>查看另一播放组，会改变我正在跟随的组吗？</summary>
-              <p>
-                不会。查看和加入是不同动作；打开页面或查看另一组，不会自动改变本设备正在参与的播放组。需要本人明确加入后才开始跟随。
-              </p>
-            </details>
-            <details id="privacy-question">
-              <summary>网站授权后，会共享什么数据？</summary>
-              <p>
-                分享到房间的页面地址和标题会成为房间信息。按网站开启页面协作后，会发送内容兼容性摘要、量化位置、媒体状态，以及你主动发送的弹幕和绘制内容；该通道不发送
-                Cookie、密码、表单文字、网页正文、完整 DOM、截图或视频流。
-              </p>
-              <p>
-                网站权限可在侧栏管理并撤销。撤销权限会停止后续对应协作，已分享的页面与消息不会因此自动删除。登录会话保存在扩展本地；服务器仍处理账号、房间和消息等业务数据。
-              </p>
-            </details>
-            <details>
-              <summary>服务在线，为什么还没有一起播放？</summary>
-              <p>
-                服务在线表示能连接服务器；房间已同步表示房间信息已经同步。要跟随视频，还需打开对应页面、完成网站授权，并明确加入播放组。观看工作面会单独显示本设备是否参与，按就近提示继续即可。
-              </p>
-            </details>
-            <details>
-              <summary>可以自己部署服务器吗？</summary>
-              <p>
-                可以。客户端与服务端代码均在公开仓库中，服务器可自行部署。客户端填写你实际的 HTTPS
-                公共服务地址，不要填管理员后台地址。<a
-                  href="https://github.com/thomasthzh/SyncAction/blob/main/docs/server.md"
-                  >阅读服务器部署指南</a
-                >。
-              </p>
-            </details>
-          </div>
-        </section>
-      </section>
-      <section class="download-section" id="download" aria-labelledby="download-title">
-        <div class="download-inner section-wrap">
-          <div class="download-copy">
-            <div class="download-heading">
-              <img src="/assets/syncaction-symbol-v4.svg" width="40" height="40" alt="" />
-              <h2 id="download-title">下载 SyncAction</h2>
-            </div>
-            <p>
-              <span class="version">v0.9.14</span> · 桌面版 Chrome / Edge<br />下载
-              ZIP，解压后加载扩展。
-            </p>
-            <a
-              class="text-link"
-              href="https://github.com/thomasthzh/SyncAction/releases/tag/v0.9.14"
-              >查看本版更新 <span aria-hidden="true">↗</span></a
-            >
-          </div>
-          <div class="download-options">
-            <a
-              class="download-option"
-              href="https://github.com/thomasthzh/SyncAction/releases/download/v0.9.14/SyncAction-client-chrome-v0.9.14.zip"
-              ><span class="download-icon" aria-hidden="true">↗</span
-              ><span><strong>Chrome 版</strong><small>下载扩展 ZIP · v0.9.14</small></span
-              ><span class="download-arrow" aria-hidden="true">↓</span></a
-            ><a
-              class="download-option"
-              href="https://github.com/thomasthzh/SyncAction/releases/download/v0.9.14/SyncAction-client-edge-v0.9.14.zip"
-              ><span class="download-icon" aria-hidden="true">↗</span
-              ><span><strong>Edge 版</strong><small>下载扩展 ZIP · v0.9.14</small></span
-              ><span class="download-arrow" aria-hidden="true">↓</span></a
-            >
-            <p class="download-note">
-              已经安装？覆盖原文件夹后，在扩展管理页重新加载，即可保留原扩展身份与本地配置。<a
+            <p class="upgrade-note">
+              已经安装？覆盖原文件夹后重新加载，保留原扩展身份与本地配置。<a
                 href="https://github.com/thomasthzh/SyncAction/blob/main/docs/client.md#安装和升级"
-                >查看安装与升级步骤</a
+                >查看升级步骤 <span aria-hidden="true">↗</span></a
               >
             </p>
           </div>
         </div>
       </section>
     </main>
-    <dialog
-      id="film-dialog"
-      class="film-dialog"
-      aria-labelledby="film-title"
-      aria-describedby="film-description"
-    >
-      <div class="film-dialog-heading">
-        <h2 id="film-title">从一个光标，到四个人同屏。</h2>
-        <button id="film-close" type="button" aria-label="关闭宣传片">×</button>
+    <footer class="site-footer content-width">
+      <div class="footer-top">
+        <a class="brand" href="#" aria-label="回到 SyncAction 首页"
+          ><img src="/assets/syncaction-symbol-light-v4.svg" width="25" height="25" alt="" /><span
+            >SyncAction</span
+          ></a
+        >
+        <p>天涯共此时</p>
+        <nav aria-label="更多资源">
+          <a href="https://github.com/thomasthzh/SyncAction">源代码</a
+          ><a href="https://github.com/thomasthzh/SyncAction/blob/main/docs/server.md">自行部署</a
+          ><a href="https://github.com/thomasthzh/SyncAction/issues">反馈</a>
+        </nav>
       </div>
-      <video
-        id="product-film"
-        controls
-        playsinline
-        preload="none"
-        width="1440"
-        height="810"
-        data-src="/assets/syncaction-film-v5-30s.mp4"
-        data-poster="/assets/syncaction-film-v5-poster.png"
-        aria-label="SyncAction 30 秒产品宣传片"
-      >
-        <track
-          kind="captions"
-          srclang="zh-CN"
-          label="中文动作说明"
-          data-src="/assets/syncaction-film-v5.zh-CN.vtt"
-        />
-      </video>
-      <p id="film-description">
-        产品功能演绎，非真实录屏。第 3、7.5、11.5
-        秒伙伴陆续进入；四个光标始终连续移动，关键操作与镜头合拍。配乐原创，无人声。
-      </p>
-      <p id="film-play-status" role="status" aria-live="polite"></p>
-      <div class="film-dialog-links">
-        <a href="/assets/syncaction-film-v5-30s.mp4" download>下载宣传片 MP4</a
-        ><a href="/assets/syncaction-film-v5.zh-CN.vtt" download>下载中文动作字幕</a>
+      <div class="footer-bottom">
+        <p>
+          网站权限可随时在侧栏撤销；撤销会停止后续协作，已分享的信息不会自动删除。视频由各自网页播放，不传输屏幕或视频流。
+        </p>
+        <a href="/assets/syncaction-film-v6-30s.mp4" download
+          >下载宣传片 <span aria-hidden="true">↓</span></a
+        >
       </div>
       <details class="film-transcript">
-        <summary>阅读宣传片文字说明</summary>
+        <summary>影片文字说明</summary>
         <p>
-          前 3 秒，一个光标在已授权的视频网页中浏览。第 3
-          秒，第二个光标进入；朋友在自己的设备上明确加入播放组，再跟随领播者的暂停与进度调整。
-        </p>
-        <p>
-          第 7.5 秒第三人进入，随后展示共享页面、指向内容、画笔标记和主动发送弹幕。第 11.5
-          秒第四人进入，浏览器拉远形成四人英雄镜头。查看另一播放组不会改变本人参与的组；邀请由接收者接受，加入申请由房主确认。临时断线后可重新连接并读取已提交的房间状态，媒体跟随状态单独呈现。
-        </p>
-        <p>
-          首次使用先配置服务器，按规则登录或等待批准；管理员批准后，本人点击登录继续原入房目标。新网站先阅读并同意说明，再允许协作；网站权限随时可撤销，已分享信息不会因此自动删除。旁边是独立的已授权页面示例，同伴继续观看与讨论。四个光标从进场后持续留在画面中，沿各自路线连续移动，缓行经过关键操作。扩展适用于桌面
-          Chrome / Edge，通过 ZIP 解压加载，MIT 开源，可自行部署服务端。
+          一个光标在已授权的视频网页浏览。第 3
+          秒，小林进入，在自己的设备上确认加入播放组，跟随暂停与进度调整。第 7.5
+          秒，小梅进入，一起分享并打开网页，再用画笔、光标和主动发送的弹幕交流。第 11.5
+          秒，小周进入，四人持续同屏。查看另一播放组不改变正在参与的组；邀请由接收者接受，入房申请由房主确认。短暂断线后恢复房间信息，媒体跟随单独呈现。新设备先配置服务器，注册并按规则等待批准，再登录；新网站需要先同意说明并允许权限，也能随时撤销。最后，四个光标围绕
+          SyncAction 品牌继续移动：天涯共此时。配乐为原创合成，无人声。
         </p>
       </details>
-    </dialog>
-
-    <footer class="site-footer">
-      <a class="brand" href="#" aria-label="回到 SyncAction 首页"
-        ><img src="/assets/syncaction-symbol-v4.svg" width="28" height="28" alt="" /><span
-          >SyncAction</span
-        ></a
-      >
-      <p>一起看，也一起做点什么。</p>
-      <nav aria-label="更多资源">
-        <a href="https://github.com/thomasthzh/SyncAction">源代码</a
-        ><a href="https://github.com/thomasthzh/SyncAction/blob/main/docs/client.md">使用指南</a
-        ><a href="https://github.com/thomasthzh/SyncAction/issues">反馈问题</a>
-      </nav>
     </footer>
   </body>
 </html>

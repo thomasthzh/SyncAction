@@ -1,49 +1,49 @@
 # SyncAction product site
 
-This directory is a standalone, dependency-free marketing site. Serve its contents as the document
-root; it does not require a build, account, database or extension permission. The interactive
-product demonstration is local simulation, with no telemetry or connection to a room. It makes no
-external requests until a visitor follows a download or documentation link.
+This standalone, dependency-free static site introduces SyncAction through one original product
+film. Serve this directory as the document root; no build, account, database or extension permission
+is needed. It does not connect to a room, collect telemetry or make external requests until a
+visitor follows an external download or documentation link.
 
-## Hero narrative
+## Film as the product surface
 
-The page has four main sections: a shared four-person browser hero, one working local demo, a
-compact installation path with native FAQ disclosures, and downloads. Playback, browsing and
-annotation share the same demo surface. Explanations of groups, consent and privacy live alongside
-the relevant action or in the FAQ rather than in separate oversized chapters. The mobile layout
-recomposes the same hierarchy rather than shrinking a desktop canvas. Room membership, media
-following, site permission and content compatibility remain separate states.
+The v6 homepage opens with “天涯共此时” and a single integrated 30-second film. It replaces the
+simulated browser hero, interactive fake room and FAQ. Three short feature links seek within the
+same film; downloads and a compact first-use path follow. The existing brand and original landscape
+remain. No external fonts, framework or third-party playback library is required.
 
-`hero.css` styles the current homepage; `hero.js` progressively enhances its opening illustration.
-Four stable pointer elements enter in sequence over five seconds with continuous curved movement,
-pauses and short corrections. Their final positions are visible without JavaScript. The animation
-finishes once, has visible pause and replay controls, and suspends outside the viewport, behind the
-film dialog or when the page is inactive. Reduced motion and data-saving preferences start with a
-static composition. Explicit replay remains available. Scrolling only adds a small camera movement;
-it never captures scrolling or controls the pointer timeline.
+The film starts muted when visible. Sound requires a deliberate action. Native media controls,
+captions, pause, fullscreen, direct MP4 download and a text description remain available. Manual
+pause survives scrolling away and returning. Offscreen or inactive playback pauses and resumes only
+if playback was wanted. Reduced-motion and save-data preferences show the small WebP poster without
+loading MP4 or VTT until requested. Navigation, installation instructions and direct film/download
+links work without JavaScript. The page never captures scrolling or scrubs the film from scroll.
 
-The eager opening image uses local 960/1920-pixel WebP variants derived from the existing original
-film landscape. Lower images load lazily. There are no external fonts or runtime dependencies. The
-original `styles.css` and historical media URLs remain present for existing cached pages. Native
-headings, navigation, download links, setup and FAQ remain usable without JS.
+`hero.css` owns the homepage layout, `hero.js` owns the media lifecycle, and `app.js` owns server
+address copying with a manual-selection fallback. Historical `styles.css` and v1–v5 media URLs
+remain present for cached pages. The separate deterministic Canvas authoring surface is documented
+in [film source notes](film-source/README.md). The imagery and soundtrack are original
+illustrations, not a live room recording or an Apple asset.
 
-The three scenes distinguish viewing a shared page, joining a playback group, and consent for page
-collaboration. Playback starts only on request and its one-second timer stops when the demo is off
-screen, the tab is hidden, or another scene is selected. Navigation, downloads, setup instructions
-and native FAQ disclosure remain available without JavaScript. Browser testing should cover
-responsive layout, keyboard tab selection, reduced motion, copy failure, timer suspension, and
-no-JavaScript use, plus opening-animation suspension, resize continuity, replay and native browser
-zoom.
+## Product and release boundaries
 
-## Hosting
+Each person installs the desktop Chrome / Edge extension and plays their own content. Opening a
+page, room connection and media-group participation are separate actions. Page collaboration needs
+site permission and compatible content. Permission revocation stops future collaboration; it does
+not delete previously shared room information. Screen/video streaming and remote device control are
+not promised.
 
-Serve this directory over HTTPS with `index.html` as the root. Keep public API routes (`/v1/*`,
-`/socket.io/*`, `/healthz`, `/readyz`) on the existing application upstream when hosting at the same
-origin. Do not expose administrative routes. Return 404 for unknown files instead of rewriting every
-request to the landing page. Do not replace another service's live configuration with an unverified
-configuration file; preserve existing routes and take a rollback snapshot before adding a host.
+Application download links still target v0.9.14. Website/film revisions do not upgrade the extension
+or server. The public server address is not an administrative URL; never put credentials or private
+configuration in this directory. Existing users should retain the extension directory and identity
+when reloading an update. Detailed installation and compatibility notes live in the linked client
+guide rather than in a marketing-page FAQ.
 
-Suggested response headers:
+## Hosting and verification
+
+Serve `index.html` over HTTPS. Preserve the existing upstream for public API and Socket.IO routes;
+do not expose administrative routes or rewrite unknown static files to the homepage. Serve MP4 as
+`video/mp4` with byte ranges, VTT as `text/vtt`, and WebP as `image/webp`.
 
 ```text
 Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; media-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
@@ -53,26 +53,12 @@ Permissions-Policy: camera=(), microphone=(), geolocation=()
 Cache-Control: public, max-age=300
 ```
 
-Keep cache duration short for the unversioned HTML, CSS and JavaScript. Apply these restrictive CSP
-and cache policies to the static website, not API or Socket.IO responses. Deploy to an immutable
-release directory and atomically update the owned site route so a failed release can be rolled back
-without restarting the application or database.
+Keep unversioned HTML/CSS/JS caches short. Apply static-site policies only to the static site, not
+API responses. Stage an immutable release, preserve previous media and a rollback snapshot, then
+atomically update the owned route. Do not reload an unverified configuration or restart unrelated
+services.
 
-## Release updates
-
-The two download links and visible version currently target v0.9.14. When updating them, verify both
-assets against the published GitHub release, update the client guide, and test the final links. The
-server address is a public service address; never put credentials, administrative URLs or private
-configuration in this directory.
-
-## Product film
-
-The homepage opens a 30-second original product illustration on request. Four cursors enter
-progressively at0/3/7.5/11.5seconds, keep moving and remain through the ending. It does not preload
-the MP4, poster or Chinese captions before that request. Native controls, an HTML transcript, an MP4
-download and captions are available; closing the dialog unloads its media and returns focus. The
-soundtrack is original synthesis with impact beats at3/7.5/11.5/26seconds. Its landscape is an
-original AI-generated still with animated framing; UI and pointers remain code-drawn. See
-[film source notes](film-source/README.md) for the scene contract and deterministic Canvas rendering
-surface. Serve MP4 as `video/mp4` with byte range support and VTT as `text/vtt`; keep media allowed
-only from the same origin in the static CSP.
+Browser acceptance covers 320–1920px layout, direct muted playback, sound, native controls,
+fullscreen, chapter seeking, manual-pause continuity, offscreen suspension, captions, reduced
+motion, save-data fallback, no-JavaScript links, keyboard access, copy rejection and real HTTPS
+downloads. Browser emulation and code checks do not constitute physical-device or user research.
