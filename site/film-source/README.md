@@ -1,4 +1,4 @@
-# Product film source — v5
+# Product film source — v6
 
 The 30-second film is an original product illustration, not a live recording. Its fixed1440×810
 Canvas surface at `/film.html?render=1` provides `window.renderFilm(seconds)` after
@@ -13,13 +13,14 @@ after it. Every entered pointer keeps moving until the final frame. A click slow
 crossing its control; it does not introduce a static reading hold. All four remain visible after the
 fourth entrance.
 
-The opening browser expands into a full-frame landscape at the first drum entry. A large paused
-clock and timeline give playback a macro shot. A light shared-page composition switches to a close
-annotation surface; the fourth entry pulls the landscape back into one large floating browser plane
-under giant typography. A consistent dark field, the same landscape and restrained blue connect the
-macro, shared page, group and permission scenes before the brand ending. Transitions blend a
-complete cached previous frame, avoiding per-primitive ghosting. All four pointer tracks remain in
-one continuous screen coordinate space and are drawn once after the content transition.
+The opening is an immersive video surface, without a simulated browser shell. A full-frame landscape
+opens at the first drum entry; a large paused clock and timeline create a macro shot. A bright
+editorial page gives sharing a different material and scale. Four-person collaboration uses three
+framings at11.5/12.7/14.4 seconds: immersive wide, a closer photographic crop, then a pullback into
+one shared surface. A local dark gradient keeps the sky-backed headline readable. Small, explicitly
+owned controls keep real actions visible without a wall of tutorial forms. The final message is
+“天涯共此时”. Chapters use short complete-frame blends. All pointer tracks stay in one continuous
+screen coordinate space and are drawn once after the content transition.
 
 | Seconds   | Action                                                                                                   |
 | --------- | -------------------------------------------------------------------------------------------------------- |
@@ -32,24 +33,24 @@ one continuous screen coordinate space and are drawn once after the content tran
 | 16.5–19   | ViewB while remaining a participant inA, then return                                                     |
 | 19–22     | Recipient accepts an invitation; another room's owner approves a request; recovery reads committed state |
 | 22–26     | Separate new-device example: server, admin approval, login; site consent, allow, revoke                  |
-| 26–30     | Duet brand and URL; all four cursors continue on independent moving corner paths                         |
+| 26–30     | “天涯共此时”, Duet brand and URL; all four cursors continue on independent moving corner paths           |
 
 `film-motion.js` owns four global Hermite tracks with nonzero motion after entry. Independent curved
 reading routes, varied travel speeds and slow moving clicks avoid synchronized orbiting or random
 jitter. Ordinary knots preserve velocity. Seek and pen endpoints preserve their exact analytic
 tangents. Clicks and UI confirmations share a timeline; seek and pen progress are also shared with
 the drawing. All names are drawn before all arrow bodies. `window.filmState` exposes stable IDs,
-positions, analytic velocity, visibility, targets, chapter and transition state for independent
-acceptance. No random jitter, orbit, cursor rotation, chapter teleport or unimplemented remote click
-is added. These authored paths are not measured human traces; numerical bounds do not prove human
-realism.
+positions, analytic velocity, visibility, targets, chapter, shot and transition state for
+independent acceptance. No random jitter, orbit, cursor rotation, chapter teleport or unimplemented
+remote click is added. These authored paths are not measured human traces; numerical bounds do not
+prove human realism.
 
 ## Sources and boundaries
 
 The original Duet icon uses two unframed curves around shared space. Full/optical-small/monochrome/
 dark-background masters live in `design/brand`. No Apple logo, footage, font, UI asset or wallpaper
-is bundled. Apple official[MacBook Pro](https://www.apple.com/macbook-pro/),
-[AirPods Pro](https://www.apple.com/airpods-pro/) imagery and
+is bundled. Apple official [iPhone](https://www.apple.com/iphone/) and
+[AirPods Pro](https://www.apple.com/airpods-pro/) pages and
 [App Icons guidance](https://developer.apple.com/design/human-interface-guidelines/app-icons)
 informed our interpretation of oversized focal subjects, close-ups, negative space and simple
 recognizable marks; this is an independent design, not an Apple affiliation.
@@ -70,8 +71,8 @@ approval have different actors. First use is a separate new-device example; left
 remain on another authorized page while the new site's permission is revoked. Revocation stops
 future collaboration and does not delete already shared messages or URLs.
 
-The homepage lazily selects versionedv5 media, with native controls, captions, transcript,
-downloads, keyboard and reduced-motion handling. Closing unloads and returns focus. V1/v2/v3/v4
-media and old website symbol URLs remain available. Validation includes motion regressions, brand
-regeneration, independent120Hz sampling, actual encoded frames, completeH264/AAC decode and
-real-browser playback.
+The homepage embeds versionedv6 media directly with native controls, captions, transcript,
+downloads, keyboard and reduced-motion handling. V1/v2/v3/v4/v5 media and old website symbol URLs
+remain available. Acceptance uses motion regressions, independent120Hz sampling, actual encoded
+frames, completeH264/AAC decode and real-browser playback. Numerical motion checks are not a
+substitute for reviewing the finished film.

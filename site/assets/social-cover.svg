@@ -1,9 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
-  <defs>
-    <linearGradient id="brand" x2="1" y2="1"><stop stop-color="#3b82f6"/><stop offset="1" stop-color="#4f46e5"/></linearGradient>
-    <linearGradient id="sky" x2="0" y2="1"><stop stop-color="#a1c7c7"/><stop offset=".65" stop-color="#d9d5ae"/><stop offset="1" stop-color="#486f85"/></linearGradient>
-  </defs>
-  <rect width="1200" height="630" fill="#f0f6f8"/>
+  <rect width="1200" height="630" fill="#050506" />
+  <style>#sa-duet-ink stop { stop-color: #f5f5f7; }</style>
+  <g transform="translate(560 92) scale(1.6666666667) translate(-64 -56)">
   <!-- brand:start -->
 <svg x="64" y="56" width="48" height="48" viewBox="0 0 128 128">
   <title id="title">SyncAction</title>
@@ -24,29 +22,11 @@
   </g>
 </svg>
   <!-- brand:end -->
-  <g font-family="Segoe UI,Microsoft YaHei,PingFang SC,sans-serif">
-    <text x="128" y="89" font-size="28" font-weight="700" fill="#102b43">SyncAction</text>
-    <text x="65" y="255" font-size="65" font-weight="700" fill="#102b43">一起看。</text>
-    <text x="65" y="350" font-size="57" font-weight="700" fill="#087783">也一起做点什么。</text>
-    <text x="68" y="417" font-size="22" fill="#536779">共享网页 · 跟随播放 · 光标、弹幕与画笔</text>
-    <text x="68" y="555" font-size="18" fill="#536779">Chrome / Edge 桌面扩展 · 开源，可自行部署</text>
   </g>
-  <g transform="translate(675 157)">
-    <rect width="460" height="334" rx="20" fill="#ffffff" stroke="#cfdee6"/>
-    <path d="M20 0h420q20 0 20 20v20H0V20Q0 0 20 0" fill="#e5eef3"/>
-    <g fill="#b4c8d4"><circle cx="21" cy="20" r="4"/><circle cx="35" cy="20" r="4"/><circle cx="49" cy="20" r="4"/></g>
-    <rect x="90" y="11" width="290" height="18" rx="5" fill="#ffffff"/>
-    <rect x="20" y="62" width="308" height="187" rx="10" fill="url(#sky)"/>
-    <circle cx="229" cy="111" r="28" fill="#fff2bc"/>
-    <path d="M20 218Q110 165 183 226T328 216V239q0 10-10 10H30q-10 0-10-10Z" fill="#3e6976"/>
-    <path d="M20 234Q145 197 245 249H30q-10 0-10-10Z" fill="#244c5f"/>
-    <rect x="20" y="268" width="180" height="9" rx="4" fill="#a6c0c8"/>
-    <rect x="20" y="291" width="308" height="4" rx="2" fill="#dce8ed"/>
-    <rect x="20" y="291" width="110" height="4" rx="2" fill="#087783"/>
-    <rect x="346" y="62" width="94" height="252" rx="10" fill="#f2f7f9"/>
-    <circle cx="372" cy="97" r="13" fill="#d5e8ec"/>
-    <circle cx="372" cy="146" r="13" fill="#e7e2f1"/>
-    <path d="M395 92h26m-26 10h16m-16 39h26m-26 10h16" stroke="#a1bbc6" stroke-width="5" stroke-linecap="round"/>
-    <path d="M375 224h34m-34 13h45" stroke="#bfd4dc" stroke-width="5" stroke-linecap="round"/>
+  <g font-family="Segoe UI,Microsoft YaHei,PingFang SC,sans-serif" text-anchor="middle">
+    <text x="600" y="218" font-size="23" font-weight="500" fill="#d5d5dd">SyncAction</text>
+    <text x="600" y="350" font-size="102" font-weight="600" letter-spacing="-5" fill="#f5f5f7">天涯共此时</text>
+    <text x="600" y="416" font-size="24" fill="#9b9ba7">把相隔，留在屏幕之外。</text>
+    <text x="600" y="550" font-size="17" fill="#7d7d8a">syncaction.thomasthzh.top</text>
   </g>
 </svg>

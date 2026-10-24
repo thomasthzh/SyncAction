@@ -1,308 +1,184 @@
-/* global document, window, navigator, IntersectionObserver, ResizeObserver, MutationObserver */
+/* global document, window, navigator, IntersectionObserver */
 
-// A finite illustration. Stable pointer elements stay outside the moving page camera.
+// One real film. A visitor's playback choice survives scrolling and visibility changes.
 (() => {
-  const stage = document.querySelector("#hero-stage");
-  const camera = document.querySelector("#hero-camera");
-  const toggle = document.querySelector("#hero-motion-toggle");
-  const replay = document.querySelector("#hero-motion-replay");
-  const status = document.querySelector("#hero-motion-status");
-  const ids = ["you", "friend", "mei", "zhou"];
-  const pointers = ids.map((id) => stage?.querySelector(`[data-hero-pointer="${id}"]`));
-  if (!stage || !camera || !toggle || !replay || !status || pointers.some((node) => !node)) return;
-  if (pointers.some((node) => typeof node.animate !== "function")) return;
-  if (!("IntersectionObserver" in window) || !("ResizeObserver" in window)) return;
-
-  const duration = 5000;
+  const video = document.querySelector("#product-film");
+  const controls = document.querySelector("#film-actions");
+  const toggle = document.querySelector("#film-toggle");
+  const sound = document.querySelector("#film-sound");
+  const fullscreen = document.querySelector("#film-fullscreen");
+  const status = document.querySelector("#film-play-status");
+  const chapters = [...document.querySelectorAll("[data-film-time]")];
+  if (!video || !controls || !toggle || !sound || !fullscreen || !status) return;
   const reduced = window.matchMedia("(prefers-reduced-motion: reduce)");
   const connection = navigator.connection;
-  const filmDialog = document.querySelector("#film-dialog");
-  const prefersStatic = () => reduced.matches || Boolean(connection?.saveData);
-  const clamp = (value) => Math.min(1, Math.max(0, value));
-  const entrances = [0, 1000, 2000, 3000];
-  let animations = [];
+  let loaded = false;
   let visible = false;
   let pageActive = true;
-  let wanted = !prefersStatic();
-  let staticMode = !wanted;
-  let finished = false;
-  let cameraFrame = 0;
-  let scrollListening = false;
-  let width = 0;
-  let height = 0;
-  let generation = 0;
+  let userChoice = false;
+  let wantsPlayback = !reduced.matches && !connection?.saveData;
+  let suspending = false;
+  let pendingSeek = null;
+  let playGeneration = 0;
+  controls.hidden = false;
+  video.muted = true;
+  // Until a source exists Chromium's disabled native controls swallow pointer
+  // input. Show the poster with working page controls, then enable native UI.
+  video.controls = false;
+  video.tabIndex = 0;
 
-  function elapsed() {
-    return Number(animations[0]?.currentTime ?? (finished || staticMode ? duration : 0));
+  function load() {
+    if (loaded) return;
+    video.controls = true;
+    video.src = video.dataset.src;
+    const track = video.querySelector("track");
+    if (track) track.src = track.dataset.src;
+    loaded = true;
   }
-
-  // Coordinates are relative to each CSS final position; entry coordinates use an edge.
-  function route(index, anchor) {
-    const point = (time, x, y, stop = false) => ({ time, x, y, stop });
-    const local = (time, x, y, stop = false) =>
-      point(time, anchor.x + x * width, anchor.y + y * height, stop);
-    const end = (time) => point(time, anchor.x, anchor.y, true);
-    return [
-      [
-        local(0, 0.12, -0.12, true),
-        local(180, 0.12, -0.12, true),
-        local(540, 0.21, -0.18),
-        local(820, 0.22, -0.15, true),
-        local(1450, 0.22, -0.15, true),
-        local(1840, 0.12, -0.03),
-        local(2190, 0.08, 0.03, true),
-        local(3100, 0.08, 0.03, true),
-        local(3470, 0.01, -0.03),
-        end(3790),
-        end(duration),
-      ],
-      [
-        point(0, width + 80, anchor.y + height * 0.04, true),
-        point(770, width + 80, anchor.y + height * 0.04, true),
-        point(1000, width - 1, anchor.y + height * 0.02),
-        local(1420, 0.08, 0.07),
-        local(1740, 0.04, 0.08, true),
-        local(3050, 0.04, 0.08, true),
-        local(3450, -0.02, 0.02),
-        end(3810),
-        end(duration),
-      ],
-      [
-        point(0, -80, anchor.y + height * 0.08, true),
-        point(1780, -80, anchor.y + height * 0.08, true),
-        point(2000, 1, anchor.y + height * 0.08),
-        local(2420, -0.14, 0.01),
-        local(2780, -0.04, -0.04, true),
-        local(3490, -0.04, -0.04, true),
-        local(3820, 0.01, -0.01),
-        end(4130),
-        end(duration),
-      ],
-      [
-        point(0, anchor.x - width * 0.06, height + 80, true),
-        point(2780, anchor.x - width * 0.06, height + 80, true),
-        point(3000, anchor.x - width * 0.06, height - 1),
-        local(3410, -0.05, 0.09),
-        local(3750, -0.04, 0.03, true),
-        local(4170, -0.04, 0.03, true),
-        local(4440, 0.01, -0.01),
-        end(4770),
-        end(duration),
-      ],
-    ][index];
+  function syncControls() {
+    const playing = !video.paused && !video.ended;
+    toggle.querySelector("[data-play-icon]").textContent = playing ? "Ⅱ" : "▷";
+    toggle.querySelector("[data-play-label]").textContent = playing ? "暂停" : "播放";
+    toggle.setAttribute("aria-label", playing ? "暂停宣传片" : "播放宣传片");
+    sound.setAttribute("aria-pressed", String(!video.muted));
+    sound.querySelector("[data-sound-label]").textContent = video.muted ? "开启声音" : "关闭声音";
   }
-
-  function keyframes(points, anchor) {
-    const velocities = points.map((point, index) => {
-      if (point.stop || !index || index === points.length - 1) return { x: 0, y: 0 };
-      const before = points[index - 1];
-      const after = points[index + 1];
-      const a = point.time - before.time;
-      const b = after.time - point.time;
-      const incoming = { x: (point.x - before.x) / a, y: (point.y - before.y) / a };
-      const outgoing = { x: (after.x - point.x) / b, y: (after.y - point.y) / b };
-      const x = (incoming.x * b + outgoing.x * a) / (a + b);
-      const y = (incoming.y * b + outgoing.y * a) / (a + b);
-      const limit =
-        1.6 * Math.min(Math.hypot(incoming.x, incoming.y), Math.hypot(outgoing.x, outgoing.y));
-      const factor = Math.min(1, limit / (Math.hypot(x, y) || 1));
-      return { x: x * factor, y: y * factor };
-    });
-    const frames = [];
-    for (let index = 1; index < points.length; index++) {
-      const a = points[index - 1];
-      const b = points[index];
-      const span = b.time - a.time;
-      const count = a.x === b.x && a.y === b.y ? 1 : 6;
-      for (let step = index === 1 ? 0 : 1; step <= count; step++) {
-        const t = step / count;
-        const h1 = 2 * t ** 3 - 3 * t ** 2 + 1;
-        const h2 = t ** 3 - 2 * t ** 2 + t;
-        const h3 = -2 * t ** 3 + 3 * t ** 2;
-        const h4 = t ** 3 - t ** 2;
-        const av = velocities[index - 1];
-        const bv = velocities[index];
-        const x = h1 * a.x + h2 * span * av.x + h3 * b.x + h4 * span * bv.x;
-        const y = h1 * a.y + h2 * span * av.y + h3 * b.y + h4 * span * bv.y;
-        frames.push({
-          offset: (a.time + span * t) / duration,
-          transform: `translate3d(${(x - anchor.x).toFixed(2)}px, ${(y - anchor.y).toFixed(2)}px, 0)`,
-        });
-      }
+  function suspend() {
+    playGeneration += 1;
+    suspending = true;
+    video.pause();
+  }
+  async function play(explicit = false) {
+    if (!explicit && (!wantsPlayback || !visible || document.hidden || !pageActive)) return;
+    load();
+    suspending = false;
+    const generation = ++playGeneration;
+    try {
+      await video.play();
+      if (generation !== playGeneration) return;
+      if (!visible || document.hidden || !pageActive) suspend();
+      else status.textContent = "";
+    } catch (error) {
+      if (generation !== playGeneration || error.name === "AbortError") return;
+      status.textContent = "点击播放，观看完整影片。";
     }
-    return frames;
   }
-
-  function build(time = 0) {
-    generation += 1;
-    const currentGeneration = generation;
-    for (const animation of animations) animation.cancel();
-    animations = [];
-    width = stage.clientWidth;
-    height = stage.clientHeight;
-    pointers.forEach((node, index) => {
-      const anchor = { x: node.offsetLeft, y: node.offsetTop };
-      const animation = node.animate(keyframes(route(index, anchor), anchor), {
-        duration,
-        fill: "both",
-        easing: "linear",
-      });
-      animation.pause();
-      animation.currentTime = time;
-      animations.push(animation);
-      const name = node.querySelector("[data-hero-name]");
-      if (name && index) {
-        const opacity = name.animate(
-          [
-            { offset: 0, opacity: 0 },
-            { offset: entrances[index] / duration, opacity: 0 },
-            { offset: (entrances[index] + 120) / duration, opacity: 1 },
-            { offset: 1, opacity: 1 },
-          ],
-          { duration, fill: "both" },
-        );
-        opacity.pause();
-        opacity.currentTime = time;
-        animations.push(opacity);
-      }
-    });
-    animations[0].addEventListener("finish", () => {
-      if (generation !== currentGeneration) return;
-      finished = true;
-      wanted = false;
-      sync("finished");
-    });
+  function reconcile() {
+    if (!visible || document.hidden || !pageActive || !wantsPlayback) suspend();
+    else play();
   }
-
-  function resetCamera() {
-    camera.style.setProperty("--hero-camera-scale", "1");
-    camera.style.setProperty("--hero-camera-y", "0px");
-    camera.style.setProperty("--hero-camera-tilt", "0deg");
+  function userPlay() {
+    userChoice = true;
+    wantsPlayback = true;
+    play(true);
   }
-
-  function scheduleCamera() {
-    if (cameraFrame || !scrollListening) return;
-    cameraFrame = window.requestAnimationFrame(() => {
-      cameraFrame = 0;
-      if (!scrollListening) return;
-      const bounds = stage.getBoundingClientRect();
-      const progress = clamp(-bounds.top / Math.max(bounds.height, 1));
-      camera.style.setProperty("--hero-camera-scale", String(1 + progress * 0.045));
-      camera.style.setProperty("--hero-camera-y", `${(-progress * 24).toFixed(2)}px`);
-      camera.style.setProperty("--hero-camera-tilt", `${(progress * -1.6).toFixed(2)}deg`);
-    });
-  }
-
-  function sync(reason) {
-    const available = visible && pageActive && !document.hidden && !filmDialog?.open;
-    const running = available && wanted && !staticMode && !finished;
-    for (const animation of animations) {
-      if (running) animation.play();
-      else animation.pause();
+  // Empty native media controls cannot emit `play`; retain that direct entry point
+  // when reduced motion or data saving deliberately deferred source attachment.
+  video.addEventListener("click", () => {
+    if (!loaded) userPlay();
+  });
+  video.addEventListener("keydown", (event) => {
+    if (!loaded && (event.key === " " || event.key === "Enter")) {
+      event.preventDefault();
+      userPlay();
     }
-    const scrolling = available && !prefersStatic();
-    if (scrolling !== scrollListening) {
-      scrollListening = scrolling;
-      if (scrolling) {
-        window.addEventListener("scroll", scheduleCamera, { passive: true });
-        window.addEventListener("resize", scheduleCamera, { passive: true });
-        scheduleCamera();
-      } else {
-        window.removeEventListener("scroll", scheduleCamera);
-        window.removeEventListener("resize", scheduleCamera);
-        window.cancelAnimationFrame(cameraFrame);
-        cameraFrame = 0;
-      }
-    }
-    if (prefersStatic()) resetCamera();
-    const state = staticMode
-      ? "static"
-      : finished
-        ? "finished"
-        : running
-          ? "playing"
-          : wanted
-            ? "suspended"
-            : "paused";
-    stage.dataset.playbackState = state;
-    stage.dataset.playbackIntent = wanted ? "play" : "pause";
-    stage.dataset.motionTime = String(Math.round(elapsed()));
-    stage.dataset.motionReason = reason;
-    toggle.textContent = wanted && !finished ? "暂停演绎" : "播放演绎";
-    toggle.setAttribute("aria-pressed", String(wanted && !finished));
-    status.textContent =
-      state === "finished" || state === "static"
-        ? "四个光标，同在一个页面。可播放或重播功能演绎。"
-        : state === "playing"
-          ? "正在播放一次功能演绎。"
-          : state === "suspended"
-            ? "演绎已暂缓，返回此区域后继续。"
-            : "演绎已暂停。";
-  }
-
-  function start(restart) {
-    if (restart || staticMode || finished) {
-      staticMode = false;
-      finished = false;
-      build(0);
-    }
-    wanted = true;
-    sync(restart ? "replay" : "play");
-  }
-
+  });
   toggle.addEventListener("click", () => {
-    if (wanted && !finished) {
-      wanted = false;
-      sync("user-pause");
-    } else start(false);
+    userChoice = true;
+    if (!video.paused) {
+      wantsPlayback = false;
+      suspend();
+      syncControls();
+    } else userPlay();
   });
-  replay.addEventListener("click", () => start(true));
-
-  function preferenceChanged() {
-    if (prefersStatic()) wanted = false;
-    sync("preference");
-  }
-  reduced.addEventListener("change", preferenceChanged);
-  connection?.addEventListener("change", preferenceChanged);
-  document.addEventListener("visibilitychange", () => sync("visibility"));
-  const intersection = new IntersectionObserver(
-    ([entry]) => {
-      visible = entry.isIntersecting;
-      sync("intersection");
-    },
-    { threshold: 0 },
-  );
-  const resize = new ResizeObserver(() => {
-    if (animations.length && (width !== stage.clientWidth || height !== stage.clientHeight)) {
-      const time = Math.min(duration, elapsed());
-      build(time);
-      sync("resize");
+  sound.addEventListener("click", () => {
+    video.muted = !video.muted;
+    syncControls();
+    if (!video.muted) userPlay();
+  });
+  fullscreen.addEventListener("click", async () => {
+    try {
+      if (video.requestFullscreen) await video.requestFullscreen();
+      else if (video.webkitEnterFullscreen) video.webkitEnterFullscreen();
+      else status.textContent = "请使用播放器中的全屏按钮。";
+    } catch {
+      status.textContent = "请使用播放器中的全屏按钮。";
     }
-    scheduleCamera();
   });
-  intersection.observe(stage);
-  resize.observe(stage);
-  if (filmDialog)
-    new MutationObserver(() => sync("film-dialog")).observe(filmDialog, {
-      attributes: true,
-      attributeFilter: ["open"],
+  video.addEventListener("play", () => {
+    suspending = false;
+    if (!wantsPlayback) {
+      userChoice = true;
+      wantsPlayback = true;
+    }
+    if (!visible || document.hidden || !pageActive) suspend();
+    syncControls();
+  });
+  video.addEventListener("pause", () => {
+    if (!suspending && visible && !document.hidden && pageActive) {
+      userChoice = true;
+      wantsPlayback = false;
+    }
+    syncControls();
+  });
+  video.addEventListener("volumechange", syncControls);
+  video.addEventListener("loadedmetadata", () => {
+    if (pendingSeek !== null) {
+      video.currentTime = Math.min(pendingSeek, video.duration);
+      pendingSeek = null;
+    }
+  });
+  video.addEventListener("error", () => {
+    status.textContent = "影片暂时无法载入，可以使用页尾的下载链接。";
+  });
+  chapters.forEach((button) => {
+    button.addEventListener("click", () => {
+      const seconds = Number(button.dataset.filmTime);
+      load();
+      if (video.readyState >= 1) video.currentTime = seconds;
+      else pendingSeek = seconds;
+      video.scrollIntoView({ block: "center", behavior: reduced.matches ? "instant" : "smooth" });
+      visible = true;
+      userPlay();
     });
+  });
+  video.addEventListener("timeupdate", () => {
+    for (const button of chapters) {
+      const active =
+        video.currentTime >= Number(button.dataset.filmTime) &&
+        video.currentTime < Number(button.dataset.filmEnd);
+      if (active) button.setAttribute("aria-current", "true");
+      else button.removeAttribute("aria-current");
+    }
+  });
+  function preferencesChanged() {
+    if (!userChoice) {
+      wantsPlayback = !reduced.matches && !connection?.saveData;
+      reconcile();
+    }
+  }
+  reduced.addEventListener("change", preferencesChanged);
+  connection?.addEventListener("change", preferencesChanged);
+  document.addEventListener("visibilitychange", reconcile);
   window.addEventListener("pagehide", () => {
     pageActive = false;
-    visible = false;
-    intersection.disconnect();
-    resize.disconnect();
-    sync("pagehide");
+    suspend();
   });
   window.addEventListener("pageshow", () => {
     pageActive = true;
-    intersection.observe(stage);
-    resize.observe(stage);
-    sync("pageshow");
+    reconcile();
   });
-
-  if (!staticMode) build();
-  toggle.hidden = false;
-  replay.hidden = false;
-  sync("ready");
+  if ("IntersectionObserver" in window) {
+    new IntersectionObserver(
+      ([entry]) => {
+        visible = entry.isIntersecting && entry.intersectionRatio >= 0.12;
+        reconcile();
+      },
+      { threshold: 0.12 },
+    ).observe(video);
+  } else {
+    visible = true;
+    reconcile();
+  }
+  syncControls();
 })();
