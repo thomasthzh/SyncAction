@@ -1,7 +1,7 @@
 .service-status-card--compact {
   display: block;
   padding: 0 12px;
-  border-radius: 16px;
+  border-radius: var(--sa-radius-card);
   box-shadow: none;
 }
 
@@ -92,7 +92,7 @@
   gap: 5px;
   padding: 13px 14px;
   border: 1px solid rgb(8 127 140 / 18%);
-  border-radius: 14px;
+  border-radius: var(--sa-radius-card);
   background: var(--sa-accent-soft);
 }
 

@@ -64,12 +64,17 @@ afterEach(() => {
 });
 
 describe("vNext guest lobby", () => {
-  it("keeps healthy service details collapsed and public rooms directly available", async () => {
+  it("keeps healthy diagnostics in settings while public rooms stay directly available", async () => {
     const store = new TestUiStore();
     const probe = vi.fn().mockResolvedValue({ latencyMs: 42 });
     const root = renderPanel(<App store={store} serviceStatusProbe={{ probe }} />);
 
     await flushUi();
+
+    expect(root.querySelector(".service-status-card")).toBeNull();
+    expect(probe).not.toHaveBeenCalled();
+    expect(root.querySelector('[data-editorial-surface="public-rooms"]')).not.toBeNull();
+    await click(byRole(root, "button", "设置"));
 
     const card = root.querySelector(".service-status-card");
     expect(card).toBeTruthy();
@@ -85,10 +90,7 @@ describe("vNext guest lobby", () => {
     expect(summary.textContent).not.toContain("42 ms");
     expect(summary.textContent).not.toContain("协议 v1");
     expect(probe).toHaveBeenCalledOnce();
-    const publicRooms = root.querySelector('[data-editorial-surface="public-rooms"]')!;
-    expect(card!.compareDocumentPosition(publicRooms) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
-      Node.DOCUMENT_POSITION_FOLLOWING,
-    );
+    expect(card!.closest('[role="dialog"]')).not.toBeNull();
   });
 
   it("shows production help while offline and retries in place", async () => {
@@ -99,6 +101,7 @@ describe("vNext guest lobby", () => {
       .mockResolvedValueOnce({ latencyMs: 55 });
     const root = renderPanel(<App store={store} serviceStatusProbe={{ probe }} />);
 
+    await click(byRole(root, "button", "设置"));
     await flushUi();
     expect(root.textContent).toContain("服务暂不可用");
     expect(root.textContent).toContain("请检查服务器地址和网络连接");
@@ -140,6 +143,7 @@ describe("vNext guest lobby", () => {
       />,
     );
 
+    await click(byRole(root, "button", "设置"));
     await flushUi();
 
     const card = root.querySelector(".service-status-card");
@@ -160,9 +164,11 @@ describe("vNext guest lobby", () => {
           }),
       )
       .mockResolvedValue({ latencyMs: 9 });
-    renderPanel(<App store={new TestUiStore()} serviceStatusProbe={{ probe }} />);
+    const root = renderPanel(<App store={new TestUiStore()} serviceStatusProbe={{ probe }} />);
 
     await flushUi();
+    expect(probe).not.toHaveBeenCalled();
+    await click(byRole(root, "button", "设置"));
     expect(probe).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(30_000);
     expect(probe).toHaveBeenCalledOnce();
@@ -176,6 +182,9 @@ describe("vNext guest lobby", () => {
     Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
     document.dispatchEvent(new Event("visibilitychange"));
     await flushUi();
+    expect(probe).toHaveBeenCalledTimes(2);
+    await click(byRole(root.querySelector('[role="dialog"]')!, "button", "关闭"));
+    await vi.advanceTimersByTimeAsync(60_000);
     expect(probe).toHaveBeenCalledTimes(2);
   });
 

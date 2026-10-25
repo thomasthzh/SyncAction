@@ -1,13 +1,13 @@
 /* global AbortController, DOMException, HTMLElement, document */
 
 import { AdminApiError, createAdminApi } from "./api.js";
+import { createConsoleDom } from "./dom.js";
+import { createWorkspaceViews } from "./workspace-views.js";
 import {
-  buildOverviewMetrics,
   buildRoomConfirmation,
   lifecycleLabel,
   presentName,
   quotaClassLabel,
-  selectRooms,
   selectUsers,
   userStatusLabel,
 } from "./view-model.js";
@@ -108,6 +108,7 @@ import {
  *   members: RoomMember[];
  *   confirmation: ReturnType<typeof buildRoomConfirmation> | null;
  *   error: string | null;
+ *   transferTargetUserId: string;
  * }} DrawerState
  * @typedef {{
  *   tagName: string;
@@ -120,6 +121,8 @@ import {
  *   totpEnrollment: TotpEnrollment | null;
  *   currentView: "overview" | "approvals" | "activation-keys" | "rooms" | "users" | "audit" | "diagnostics";
  *   users: AdminUser[];
+ *   pendingUsers: AdminUser[];
+ *   pendingTotal: number;
  *   rooms: AdminRoom[];
  *   diagnostics: AdminDiagnostics;
  *   auditEvents: AuditEvent[];
@@ -148,6 +151,8 @@ import {
  *   error: string | null;
  *   notice: string | null;
  *   refreshWarning: string | null;
+ *   refreshedAt: Date | null;
+ *   activationDraft: string;
  * }} ConsoleState
  */
 
@@ -190,6 +195,8 @@ export function createConsoleApp(options) {
     totpEnrollment: null,
     currentView: "overview",
     users: [],
+    pendingUsers: [],
+    pendingTotal: 0,
     rooms: [],
     diagnostics: emptyDiagnostics,
     auditEvents: [],
@@ -218,8 +225,22 @@ export function createConsoleApp(options) {
     error: null,
     notice: null,
     refreshWarning: null,
+    refreshedAt: null,
+    activationDraft: "",
   };
+  const dom = createConsoleDom(documentObject);
+  const { sectionHeading, formField, actionButton, messageBanner, node, textNode } = dom;
+  const {
+    renderOverview,
+    renderPendingUsers,
+    renderActivationKeys,
+    renderRoomManagement,
+    renderUsersAndDevices,
+    renderAudit,
+    renderDiagnostics,
+  } = createWorkspaceViews({ state, document: documentObject, dom });
   let started = false;
+  let rendering = false;
   let generation = 0;
   /** @type {AbortController | null} */
   let transientReadController = null;
@@ -286,6 +307,7 @@ export function createConsoleApp(options) {
     state.pendingActions.clear();
     state.totpEnrollment = null;
     state.oneTimeActivation = null;
+    state.activationDraft = "";
     root.removeEventListener("click", clickHandler);
     root.removeEventListener("submit", submitHandler);
     root.removeEventListener("change", changeHandler);
@@ -309,6 +331,8 @@ export function createConsoleApp(options) {
         ? /** @type {TotpEnrollment} */ (await api.totpEnrollment(signal))
         : null;
       state.users = [];
+      state.pendingUsers = [];
+      state.pendingTotal = 0;
       state.rooms = [];
       state.auditEvents = [];
       state.activationGrants = [];
@@ -331,20 +355,33 @@ export function createConsoleApp(options) {
       typeof api.listActivationGrants === "function"
         ? api.listActivationGrants(signal)
         : Promise.resolve({ grants: [] });
-    const [usersResult, roomsResult, diagnosticsResult, auditResult, activationResult] =
-      await Promise.all([
-        api.listUsers({ limit: 200 }, signal),
-        api.listRooms({ limit: 200 }, signal),
-        api.diagnostics(signal),
-        api.listAuditEvents(100, signal),
-        activationGrantsPromise,
-      ]);
+    const [
+      usersResult,
+      roomsResult,
+      diagnosticsResult,
+      auditResult,
+      activationResult,
+      pendingResult,
+    ] = await Promise.all([
+      api.listUsers({ limit: 200 }, signal),
+      api.listRooms({ limit: 200 }, signal),
+      api.diagnostics(signal),
+      api.listAuditEvents(100, signal),
+      activationGrantsPromise,
+      api.listUsers({ status: "PENDING", limit: 200 }, signal),
+    ]);
     return {
       users: /** @type {{ users: AdminUser[] }} */ (usersResult).users,
       rooms: /** @type {{ rooms: AdminRoom[] }} */ (roomsResult).rooms,
       diagnostics: /** @type {AdminDiagnostics} */ (diagnosticsResult),
       auditEvents: /** @type {{ events: AuditEvent[] }} */ (auditResult).events,
       activationGrants: /** @type {{ grants: ActivationGrant[] }} */ (activationResult).grants,
+      pendingUsers: /** @type {{ users: AdminUser[] }} */ (pendingResult).users,
+      pendingTotal:
+        /** @type {{ total?: number; users: AdminUser[] }} */ (pendingResult).total ??
+        /** @type {{ users: AdminUser[] }} */ (pendingResult).users.filter(
+          (user) => user.status === "PENDING",
+        ).length,
     };
   }
 
@@ -355,19 +392,27 @@ export function createConsoleApp(options) {
     state.diagnostics = snapshot.diagnostics;
     state.auditEvents = snapshot.auditEvents;
     state.activationGrants = snapshot.activationGrants;
+    state.pendingUsers = snapshot.pendingUsers;
+    state.pendingTotal = snapshot.pendingTotal;
+    state.refreshedAt = new Date();
   }
 
   /** @param {AbortSignal} signal */
   async function fetchApprovalProjection(signal) {
-    const [usersResult, diagnosticsResult, auditResult] = await Promise.all([
+    const [usersResult, diagnosticsResult, auditResult, pendingResult] = await Promise.all([
       api.listUsers({ limit: 200 }, signal),
       api.diagnostics(signal),
       api.listAuditEvents(100, signal),
+      api.listUsers({ status: "PENDING", limit: 200 }, signal),
     ]);
     return () => {
       state.users = /** @type {{ users: AdminUser[] }} */ (usersResult).users;
       state.diagnostics = /** @type {AdminDiagnostics} */ (diagnosticsResult);
       state.auditEvents = /** @type {{ events: AuditEvent[] }} */ (auditResult).events;
+      state.pendingUsers = /** @type {{ users: AdminUser[] }} */ (pendingResult).users;
+      state.pendingTotal =
+        /** @type {{ total?: number; users: AdminUser[] }} */ (pendingResult).total ??
+        state.pendingUsers.filter((user) => user.status === "PENDING").length;
     };
   }
 
@@ -458,6 +503,7 @@ export function createConsoleApp(options) {
             throw new DOMException("Console destroyed", "AbortError");
           }
           applyProjection();
+          state.refreshedAt = new Date();
         } finally {
           releaseController(controller);
         }
@@ -640,6 +686,31 @@ export function createConsoleApp(options) {
       return;
     }
     const action = target.getAttribute("data-action");
+    if (action === "refresh-data" && isButton(target)) {
+      // A complete snapshot must never overtake an acknowledged local write.
+      // Writes with no follow-up projection (keys/logout) also use this gate.
+      if (state.pendingActions.size > 0) return;
+      const operationGeneration = generation;
+      state.pendingActions.add("refresh-data");
+      state.error = null;
+      render();
+      try {
+        await queueAuthoritativeRefresh(async (signal) => {
+          const snapshot = await fetchConsoleData(signal);
+          return () => applyConsoleSnapshot(snapshot);
+        }, operationGeneration);
+        if (isLive(operationGeneration)) {
+          state.refreshWarning = null;
+          state.notice = "管理数据已刷新";
+        }
+      } catch (error) {
+        if (isLive(operationGeneration) && !isAbort(error)) state.error = errorMessage(error);
+      } finally {
+        state.pendingActions.delete("refresh-data");
+        if (isLive(operationGeneration)) render();
+      }
+      return;
+    }
     if (action === "navigate") {
       if (state.pendingActions.has("create-activation-grant")) {
         state.notice = "正在生成账户密钥，请等待完整密钥显示后再离开";
@@ -653,6 +724,13 @@ export function createConsoleApp(options) {
         state.notice = null;
         state.error = null;
         render();
+        if (target.getAttribute("data-focus-binding") === "true") {
+          const select = root.querySelector('[data-form="prepare-linked-user"] select');
+          if (isFocusableElement(select)) select.focus();
+          root
+            .querySelector('[data-region="linked-user-binding"]')
+            ?.scrollIntoView?.({ block: "nearest" });
+        }
       }
       return;
     }
@@ -753,10 +831,13 @@ export function createConsoleApp(options) {
           state.onboarding = null;
           state.totpEnrollment = null;
           state.users = [];
+          state.pendingUsers = [];
+          state.pendingTotal = 0;
           state.rooms = [];
           state.auditEvents = [];
           state.activationGrants = [];
           state.oneTimeActivation = null;
+          state.activationDraft = "";
         },
         null,
       );
@@ -814,13 +895,24 @@ export function createConsoleApp(options) {
         const controller = beginTransientRead();
         state.drawerReturnFocus = focusTokenForElement(target);
         try {
-          const result = /** @type {{ members: RoomMember[] }} */ (
-            await api.listRoomMembers(room.roomId, controller.signal)
-          );
+          // Deleted rooms cannot expose members. Their summary still provides the
+          // recovery action, which the server validates against current quotas.
+          const result =
+            room.lifecycle === "DELETED"
+              ? { members: [] }
+              : /** @type {{ members: RoomMember[] }} */ (
+                  await api.listRoomMembers(room.roomId, controller.signal)
+                );
           if (!isLive(operationGeneration, controller)) {
             return;
           }
-          state.drawer = { room, members: result.members, confirmation: null, error: null };
+          state.drawer = {
+            room,
+            members: result.members,
+            confirmation: null,
+            error: null,
+            transferTargetUserId: "",
+          };
           state.focusIntent = "drawer-initial";
         } catch (error) {
           if (isLive(operationGeneration, controller) && !isAbort(error)) {
@@ -922,6 +1014,10 @@ export function createConsoleApp(options) {
       return;
     }
     const field = event.target.getAttribute("data-filter");
+    if (event.target.getAttribute("data-field") === "transfer-target" && state.drawer !== null) {
+      state.drawer.transferTargetUserId = event.target.value;
+      return;
+    }
     if (field === "user-query") {
       state.userFilters.query = event.target.value;
     } else if (field === "user-status" && isUserStatusFilter(event.target.value)) {
@@ -988,7 +1084,11 @@ export function createConsoleApp(options) {
 
   /** @param {string} userId */
   function applyApprovalSuccess(userId) {
-    const approved = state.users.find((user) => user.id === userId && user.status === "PENDING");
+    const approved = state.pendingUsers.find(
+      (user) => user.id === userId && user.status === "PENDING",
+    );
+    state.pendingUsers = state.pendingUsers.filter((user) => user.id !== userId);
+    if (approved !== undefined) state.pendingTotal = Math.max(0, state.pendingTotal - 1);
     state.users = state.users.map((user) =>
       user.id === userId ? { ...user, status: /** @type {const} */ ("ACTIVE") } : user,
     );
@@ -1085,15 +1185,19 @@ export function createConsoleApp(options) {
     fetchProjection,
     preserveDrawerError = false,
   ) {
-    if (!started || state.pendingActions.has(key)) {
+    if (!started || state.pendingActions.has(key) || state.pendingActions.has("refresh-data")) {
       return;
     }
     const operationGeneration = generation;
     const controller = createController();
     state.pendingActions.add(key);
     button.disabled = true;
+    const refresh = root.querySelector('[data-action="refresh-data"]');
+    if (isButton(refresh)) refresh.disabled = true;
     state.error = null;
     state.notice = null;
+    root.querySelector('[data-region="mutation-notice"]')?.remove();
+    root.querySelector('[data-region="mutation-error"]')?.remove();
     if (state.drawer !== null) {
       state.drawer.error = null;
     }
@@ -1139,7 +1243,22 @@ export function createConsoleApp(options) {
   }
 
   function render() {
+    // Replacing a focused field can synchronously fire its native change event.
+    // That handler updates state; the active render reads it after replacement.
+    if (rendering) return;
+    rendering = true;
+    try {
+      renderWorkspace();
+    } finally {
+      rendering = false;
+    }
+  }
+
+  function renderWorkspace() {
     const retainedFocus = focusTokenForElement(documentObject.activeElement);
+    const retainedNavScroll = root.querySelector(".console-sidebar nav")?.scrollLeft ?? 0;
+    const noteDraft = root.querySelector('[data-form="activation-grant"] input[name="note"]');
+    if (isInput(noteDraft) && state.authenticated) state.activationDraft = noteDraft.value;
     root.replaceChildren();
     root.setAttribute("data-authenticated", String(state.authenticated));
     if (!state.authenticated) {
@@ -1175,11 +1294,9 @@ export function createConsoleApp(options) {
       main.append(warning);
     }
     const content = node("div", "console-content");
-    if (state.principal?.linkedUserId === null) {
-      content.append(renderLinkedUserBinding());
-    }
     if (state.currentView === "overview") {
       content.append(renderOverview());
+      if (state.principal?.linkedUserId === null) content.append(renderLinkedUserBinding());
     } else if (state.currentView === "approvals") {
       content.append(sectionHeading("用户审批", "优先处理待审批账号"));
       content.append(renderPendingUsers());
@@ -1200,6 +1317,18 @@ export function createConsoleApp(options) {
       shell.append(renderDrawer(state.drawer));
     }
     root.append(shell);
+    if (state.pendingActions.has("refresh-data")) {
+      for (const button of root.querySelectorAll(
+        'form[data-form="activation-grant"] button[type="submit"], [data-action="approve-user"], [data-action="revoke-activation-grant"], [data-action="confirm-linked-user"], [data-action="confirm-room-action"], [data-action="logout"]',
+      )) {
+        if (isButton(button)) {
+          button.disabled = true;
+          button.title = "数据正在刷新，请完成后再操作";
+        }
+      }
+    }
+    const nav = root.querySelector(".console-sidebar nav");
+    if (nav !== null) nav.scrollLeft = retainedNavScroll;
     restoreFocusAfterRender(retainedFocus);
   }
 
@@ -1383,10 +1512,24 @@ export function createConsoleApp(options) {
     const nav = documentObject.createElement("nav");
     nav.setAttribute("aria-label", "管理员一级导航");
     for (const [view, label] of navigation) {
+      if (view === "overview" || view === "audit") {
+        const group = textNode(
+          "span",
+          "nav-group-label",
+          view === "overview" ? "协作管理" : "安全与系统",
+        );
+        group.setAttribute("aria-hidden", "true");
+        nav.append(group);
+      }
       const button = actionButton(label, "nav");
       button.setAttribute("data-action", "navigate");
       button.setAttribute("data-nav-view", view);
       button.setAttribute("aria-current", state.currentView === view ? "page" : "false");
+      if (view === "approvals" && state.diagnostics.counts.pendingUsers > 0) {
+        const count = textNode("span", "nav-count", String(state.diagnostics.counts.pendingUsers));
+        count.setAttribute("aria-label", `${state.diagnostics.counts.pendingUsers} 个待审批`);
+        button.append(count);
+      }
       nav.append(button);
     }
     sidebar.append(nav);
@@ -1402,6 +1545,13 @@ export function createConsoleApp(options) {
     const logout = actionButton("退出登录", "quiet");
     logout.setAttribute("data-action", "logout");
     identity.append(logout);
+    if (state.principal?.linkedUserId === null && state.currentView !== "overview") {
+      const binding = actionButton("绑定普通账号", "quiet");
+      binding.setAttribute("data-action", "navigate");
+      binding.setAttribute("data-nav-view", "overview");
+      binding.setAttribute("data-focus-binding", "true");
+      identity.append(binding);
+    }
     sidebar.append(identity);
     return sidebar;
   }
@@ -1490,371 +1640,27 @@ export function createConsoleApp(options) {
       textNode("div", "header-context", "超级管理员工作区"),
       textNode("h1", "header-title", title),
     );
-    const status = textNode("span", "service-status", "本机管理服务 · 已连接");
-    status.setAttribute("data-tone", "success");
-    header.append(status);
+    const tools = node("div", "header-tools");
+    const status = textNode(
+      "span",
+      "service-status",
+      state.refreshedAt === null
+        ? "数据尚未刷新"
+        : `更新于 ${new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" }).format(state.refreshedAt)}`,
+    );
+    const refresh = actionButton(
+      state.pendingActions.has("refresh-data") ? "刷新中…" : "刷新数据",
+      "quiet",
+    );
+    refresh.setAttribute("data-action", "refresh-data");
+    refresh.disabled = state.pendingActions.size > 0;
+    if (refresh.disabled)
+      refresh.title = state.pendingActions.has("refresh-data")
+        ? "数据正在刷新"
+        : "当前操作完成后可刷新";
+    tools.append(status, refresh);
+    header.append(tools);
     return header;
-  }
-
-  function renderOverview() {
-    const fragment = documentObject.createDocumentFragment();
-    fragment.append(sectionHeading("审批与容量概览", "先处理准入，再观察普通房间容量"));
-    const metrics = node("section", "metric-strip");
-    metrics.setAttribute("aria-label", "容量与系统指标");
-    for (const metric of buildOverviewMetrics({
-      users: state.users,
-      rooms: state.rooms,
-      diagnostics: state.diagnostics,
-    })) {
-      const item = node("div", "metric-item");
-      item.setAttribute("data-metric-id", metric.id);
-      item.setAttribute("data-tone", metric.tone);
-      item.append(
-        textNode("span", "metric-label", metric.label),
-        textNode("strong", "metric-value", metric.value),
-      );
-      metrics.append(item);
-    }
-    fragment.append(metrics);
-    const grid = node("div", "overview-grid");
-    const approvals = panel("待审批账号", "按注册时间优先");
-    approvals.append(renderPendingUsers());
-    const capacity = panel("房间容量", "只显示数量与账号标识");
-    capacity.append(renderRoomCapacity());
-    grid.append(approvals, capacity);
-    fragment.append(grid);
-    return fragment;
-  }
-
-  function renderPendingUsers() {
-    const pendingUsers = selectUsers(state.users, {
-      status: "PENDING",
-      sortBy: "createdAt",
-      direction: "asc",
-    });
-    if (pendingUsers.length === 0) {
-      return emptyState("当前没有待审批账号");
-    }
-    const table = baseTable(["账号", "显示名称", "注册时间", "状态", "操作"]);
-    const body = tableBody(table);
-    for (const user of pendingUsers) {
-      const row = body.insertRow();
-      appendCell(row, user.username, "mono");
-      appendCell(row, presentName(user.displayName, 22), "truncate");
-      appendCell(row, formatDate(user.createdAt));
-      appendPillCell(row, userStatusLabel(user.status), statusTone(user.status));
-      const actionCell = row.insertCell();
-      const button = actionButton("批准", "primary-small");
-      button.setAttribute("data-action", "approve-user");
-      button.setAttribute("data-user-id", user.id);
-      button.disabled = state.pendingActions.has(`approve:${user.id}`);
-      actionCell.append(button);
-    }
-    return table;
-  }
-
-  function renderActivationKeys() {
-    const fragment = documentObject.createDocumentFragment();
-    fragment.append(
-      sectionHeading("账户密钥", "创建一次性激活凭据，并查看密钥与最终账户之间的对应关系"),
-    );
-    const layout = node("div", "activation-layout");
-    const createPanel = panel("创建密钥", "有效期 7 天；备注用于区分接收者或设备");
-    const form = documentObject.createElement("form");
-    form.className = "activation-form";
-    form.setAttribute("data-form", "activation-grant");
-    const noteField = formField("备注", "note", "text", "off");
-    const noteInput = noteField.querySelector("input");
-    if (isInput(noteInput)) {
-      noteInput.maxLength = 120;
-      noteInput.placeholder = "例如：Alice / 设计组笔记本";
-    }
-    const create = actionButton("生成账户密钥", "primary");
-    create.type = "submit";
-    create.disabled = state.pendingActions.has("create-activation-grant");
-    form.append(noteField, create);
-    createPanel.append(form);
-    layout.append(createPanel);
-
-    if (state.oneTimeActivation !== null) {
-      const oneTime = node("section", "activation-one-time");
-      oneTime.setAttribute("data-region", "one-time-activation-key");
-      oneTime.append(
-        textNode("h3", "activation-one-time-title", "立即保存并传递完整密钥"),
-        textNode(
-          "p",
-          "activation-warning",
-          "完整密钥只显示这一次；关闭卡片、切换页面或退出登录后都无法再次查看。",
-        ),
-        textNode("span", "activation-path-label", "用户密钥登录路径"),
-        textNode("code", "activation-path", "/v1/auth/key-login"),
-        textNode("p", "activation-one-time-meta", `备注：${state.oneTimeActivation.grant.note}`),
-        textNode(
-          "p",
-          "activation-one-time-meta",
-          `到期：${formatDate(state.oneTimeActivation.grant.expiresAt)}`,
-        ),
-        textNode("code", "activation-secret", state.oneTimeActivation.activationKey),
-      );
-      const actions = node("div", "activation-actions");
-      const copy = actionButton("复制完整密钥", "primary");
-      copy.setAttribute("data-action", "copy-activation-key");
-      const dismiss = actionButton("我已安全保存", "quiet");
-      dismiss.setAttribute("data-action", "dismiss-activation-key");
-      actions.append(copy, dismiss);
-      oneTime.append(actions);
-      layout.append(oneTime);
-    }
-    fragment.append(layout);
-
-    const mapping = panel("密钥与账户关系", "列表不保存、不返回完整密钥");
-    if (state.activationGrants.length === 0) {
-      mapping.append(emptyState("尚未创建账户密钥"));
-      fragment.append(mapping);
-      return fragment;
-    }
-    const table = baseTable([
-      "备注",
-      "对应账户",
-      "密钥尾号",
-      "状态",
-      "创建时间",
-      "使用时间",
-      "操作",
-    ]);
-    const body = tableBody(table);
-    for (const grant of state.activationGrants) {
-      const row = body.insertRow();
-      appendCell(row, presentName(grant.note, 36), "truncate");
-      appendCell(
-        row,
-        grant.account === null
-          ? "尚未激活"
-          : `@${grant.account.username} · ${grant.account.displayName}`,
-      );
-      appendCell(row, `…${grant.keyTail}`, "mono");
-      appendPillCell(row, activationStatusLabel(grant.status), activationStatusTone(grant.status));
-      appendCell(row, formatDate(grant.createdAt));
-      appendCell(row, grant.usedAt === null ? "尚未使用" : formatDate(grant.usedAt));
-      const actionCell = row.insertCell();
-      if (grant.status === "ACTIVE" || grant.status === "CLAIMED") {
-        const revoke = actionButton("撤销", "danger");
-        revoke.setAttribute("data-action", "revoke-activation-grant");
-        revoke.setAttribute("data-grant-id", grant.id);
-        revoke.disabled = state.pendingActions.has(`revoke-activation-grant:${grant.id}`);
-        actionCell.append(revoke);
-      } else {
-        actionCell.textContent = "—";
-      }
-    }
-    mapping.append(table);
-    fragment.append(mapping);
-    return fragment;
-  }
-
-  function renderRoomCapacity() {
-    const list = node("div", "capacity-list");
-    const selected = selectRooms(state.rooms, {
-      lifecycle: "ACTIVE",
-      sortBy: "openTabCount",
-      direction: "desc",
-    });
-    if (selected.length === 0) {
-      return emptyState("当前没有活跃房间");
-    }
-    for (const room of selected.slice(0, 8)) {
-      const row = node("div", "capacity-row");
-      const name = presentName(room.name, 24);
-      const identity = node("div", "capacity-identity");
-      const nameNode = textNode("strong", "truncate-text", name.text);
-      if (name.title !== null) {
-        nameNode.title = name.title;
-      }
-      identity.append(
-        nameNode,
-        textNode("span", "muted", `@${room.ownerUsername} · ${quotaClassLabel(room.quotaClass)}`),
-      );
-      const usage = node("div", "capacity-usage");
-      usage.append(
-        textNode(
-          "strong",
-          "",
-          room.quotaClass === "EXEMPT"
-            ? `${String(room.openTabCount)} · 配额豁免`
-            : `${String(room.openTabCount)} / 20`,
-        ),
-        textNode("span", "muted", `${String(room.memberCount)} 名成员`),
-      );
-      const button = actionButton("管理", "quiet");
-      button.setAttribute("data-action", "open-room");
-      button.setAttribute("data-room-id", room.roomId);
-      row.append(identity, usage, button);
-      list.append(row);
-    }
-    return list;
-  }
-
-  function renderRoomManagement() {
-    const fragment = documentObject.createDocumentFragment();
-    fragment.append(sectionHeading("房间管理", "筛选、排序并从详情抽屉执行危险操作"));
-    const toolbar = node("div", "filter-bar");
-    toolbar.append(
-      filterInput("搜索房间或所有者", "room-query", state.roomFilters.query),
-      filterSelect("生命周期", "room-lifecycle", state.roomFilters.lifecycle, [
-        ["ALL", "全部状态"],
-        ["ACTIVE", "活跃"],
-        ["DELETED", "已删除"],
-      ]),
-      filterSelect("配额类别", "room-quota", state.roomFilters.quotaClass, [
-        ["ALL", "全部配额"],
-        ["ORDINARY", "普通配额"],
-        ["EXEMPT", "配额豁免"],
-      ]),
-      filterSelect("排序字段", "room-sort", state.roomFilters.sortBy, [
-        ["name", "房间名称"],
-        ["ownerUsername", "所有者"],
-        ["memberCount", "成员数"],
-        ["openTabCount", "打开标签"],
-        ["serverSeq", "服务器序号"],
-      ]),
-      filterSelect("排序方向", "room-direction", state.roomFilters.direction, [
-        ["asc", "升序"],
-        ["desc", "降序"],
-      ]),
-    );
-    fragment.append(toolbar);
-    const selected = selectRooms(state.rooms, state.roomFilters);
-    const table = baseTable(["房间", "所有者", "成员", "打开标签", "配额", "状态", "操作"]);
-    const body = tableBody(table);
-    for (const room of selected) {
-      const row = body.insertRow();
-      appendCell(row, presentName(room.name, 30), "truncate");
-      appendCell(row, `@${room.ownerUsername}`);
-      appendCell(row, String(room.memberCount), "numeric");
-      appendCell(
-        row,
-        room.quotaClass === "EXEMPT"
-          ? `${String(room.openTabCount)} · 豁免`
-          : `${String(room.openTabCount)} / 20`,
-        "numeric",
-      );
-      appendPillCell(
-        row,
-        quotaClassLabel(room.quotaClass),
-        room.quotaClass === "EXEMPT" ? "success" : "neutral",
-      );
-      appendPillCell(
-        row,
-        lifecycleLabel(room.lifecycle),
-        room.lifecycle === "ACTIVE" ? "success" : "neutral",
-      );
-      const cell = row.insertCell();
-      const button = actionButton("详情", "quiet");
-      button.setAttribute("data-action", "open-room");
-      button.setAttribute("data-room-id", room.roomId);
-      cell.append(button);
-    }
-    fragment.append(table);
-    return fragment;
-  }
-
-  function renderUsersAndDevices() {
-    const fragment = documentObject.createDocumentFragment();
-    fragment.append(sectionHeading("用户与设备", "查看账号状态与当前可用设备会话"));
-    const toolbar = node("div", "filter-bar");
-    toolbar.append(
-      filterInput("搜索账号或显示名称", "user-query", state.userFilters.query),
-      filterSelect("账号状态", "user-status", state.userFilters.status, [
-        ["ALL", "全部状态"],
-        ["PENDING", "待审批"],
-        ["ACTIVE", "活跃"],
-        ["SUSPENDED", "已暂停"],
-        ["REVOKED", "已撤销"],
-      ]),
-    );
-    fragment.append(toolbar);
-    const selected = selectUsers(state.users, state.userFilters);
-    const table = baseTable(["账号", "显示名称", "状态", "密码重置", "设备"]);
-    const body = tableBody(table);
-    for (const user of selected) {
-      const row = body.insertRow();
-      appendCell(row, user.username, "mono");
-      appendCell(row, presentName(user.displayName, 26), "truncate");
-      appendPillCell(row, userStatusLabel(user.status), statusTone(user.status));
-      appendCell(row, user.passwordResetRequired ? "需要" : "否");
-      const cell = row.insertCell();
-      const button = actionButton("查看设备", "quiet");
-      button.setAttribute("data-action", "view-devices");
-      button.setAttribute("data-user-id", user.id);
-      cell.append(button);
-      if (state.selectedUserId === user.id) {
-        const detailRow = body.insertRow();
-        const detailCell = detailRow.insertCell();
-        detailCell.colSpan = 5;
-        detailCell.append(renderDevices(state.devicesByUserId.get(user.id) ?? []));
-      }
-    }
-    fragment.append(table);
-    return fragment;
-  }
-
-  /**
-   * @param {AdminDevice[]} devices
-   */
-  function renderDevices(devices) {
-    if (devices.length === 0) {
-      return emptyState("没有当前可用设备会话");
-    }
-    const list = node("div", "device-list");
-    for (const device of devices) {
-      const row = node("div", "device-row");
-      row.append(
-        textNode("code", "", device.deviceId),
-        textNode("span", "", `${String(device.activeSessionCount)} 个会话`),
-        textNode("span", "muted", formatDate(device.lastRotatedAt)),
-      );
-      list.append(row);
-    }
-    return list;
-  }
-
-  function renderAudit() {
-    const fragment = documentObject.createDocumentFragment();
-    fragment.append(sectionHeading("安全审计", "结构化事件只显示标识符、计数和稳定原因码"));
-    const table = baseTable(["时间", "事件", "目标", "安全详情"]);
-    const body = tableBody(table);
-    for (const event of state.auditEvents) {
-      const row = body.insertRow();
-      appendCell(row, formatDate(event.createdAt));
-      appendCell(row, event.eventType, "mono");
-      appendCell(row, `${event.targetType}:${event.targetId}`, "mono");
-      appendCell(row, JSON.stringify(event.details ?? {}), "mono audit-detail");
-    }
-    fragment.append(table);
-    return fragment;
-  }
-
-  function renderDiagnostics() {
-    const fragment = documentObject.createDocumentFragment();
-    fragment.append(sectionHeading("系统诊断", "管理员服务与聚合计数"));
-    const grid = node("dl", "diagnostic-grid");
-    const entries = [
-      ["数据库", state.diagnostics.database === "ready" ? "正常" : "异常"],
-      ["用户总数", state.diagnostics.counts.users],
-      ["待审批", state.diagnostics.counts.pendingUsers],
-      ["活跃用户", state.diagnostics.counts.activeUsers],
-      ["已暂停", state.diagnostics.counts.suspendedUsers],
-      ["已撤销", state.diagnostics.counts.revokedUsers],
-      ["活跃房间", state.diagnostics.counts.rooms],
-      ["活跃会话", state.diagnostics.counts.activeDeviceSessions],
-    ];
-    for (const [label, value] of entries) {
-      const item = node("div", "diagnostic-item");
-      item.append(textNode("dt", "", String(label)), textNode("dd", "", String(value)));
-      grid.append(item);
-    }
-    fragment.append(grid);
-    return fragment;
   }
 
   /**
@@ -1913,6 +1719,9 @@ export function createConsoleApp(options) {
     }
     content.append(facts);
     content.append(textNode("h3", "drawer-section-title", "成员"));
+    if (drawer.room.lifecycle === "DELETED") {
+      content.append(textNode("p", "muted", "已删除房间不提供当前成员列表。恢复后可重新查看。"));
+    }
     const memberList = node("div", "member-list");
     for (const member of drawer.members) {
       const row = node("div", "member-row");
@@ -1945,6 +1754,7 @@ export function createConsoleApp(options) {
           option.textContent = `@${member.username}`;
           select.append(option);
         }
+        select.value = drawer.transferTargetUserId;
         actions.append(select);
         const transfer = actionButton("准备转移", "warning");
         transfer.setAttribute("data-action", "prepare-room-action");
@@ -2001,199 +1811,6 @@ export function createConsoleApp(options) {
     actions.append(back, confirm);
     content.append(actions);
     return content;
-  }
-
-  /**
-   * @param {string} title
-   * @param {string} description
-   */
-  function sectionHeading(title, description) {
-    const heading = node("div", "section-heading");
-    heading.append(textNode("h2", "", title), textNode("p", "", description));
-    return heading;
-  }
-
-  /**
-   * @param {string} title
-   * @param {string} description
-   */
-  function panel(title, description) {
-    const section = node("section", "panel");
-    const heading = node("header", "panel-heading");
-    heading.append(textNode("h3", "", title), textNode("span", "", description));
-    section.append(heading);
-    return section;
-  }
-
-  /**
-   * @param {string[]} headers
-   */
-  function baseTable(headers) {
-    const table = documentObject.createElement("table");
-    table.className = "data-table";
-    const head = table.createTHead();
-    const row = head.insertRow();
-    for (const header of headers) {
-      const cell = documentObject.createElement("th");
-      cell.scope = "col";
-      cell.textContent = header;
-      row.append(cell);
-    }
-    table.createTBody();
-    return table;
-  }
-
-  /**
-   * @param {HTMLTableElement} table
-   */
-  function tableBody(table) {
-    const body = table.tBodies.item(0);
-    if (body === null) {
-      throw new Error("TABLE_BODY_MISSING");
-    }
-    return body;
-  }
-
-  /**
-   * @param {HTMLTableRowElement} row
-   * @param {string | ReturnType<typeof presentName>} value
-   * @param {string} [className]
-   */
-  function appendCell(row, value, className = "") {
-    const cell = row.insertCell();
-    if (className !== "") {
-      cell.className = className;
-    }
-    if (typeof value === "string") {
-      cell.textContent = value;
-    } else {
-      cell.textContent = value.text;
-      if (value.title !== null) {
-        cell.title = value.title;
-      }
-    }
-  }
-
-  /**
-   * @param {HTMLTableRowElement} row
-   * @param {string} label
-   * @param {string} tone
-   */
-  function appendPillCell(row, label, tone) {
-    const cell = row.insertCell();
-    const pill = textNode("span", "status-pill", label);
-    pill.setAttribute("data-tone", tone);
-    cell.append(pill);
-  }
-
-  /**
-   * @param {string} label
-   * @param {string} name
-   * @param {string} type
-   * @param {string} autocomplete
-   * @param {string} [inputMode]
-   */
-  function formField(label, name, type, autocomplete, inputMode) {
-    const wrapper = node("label", "form-field");
-    wrapper.append(textNode("span", "", label));
-    const input = documentObject.createElement("input");
-    input.name = name;
-    input.type = type;
-    input.setAttribute("autocomplete", autocomplete);
-    input.required = true;
-    if (inputMode !== undefined) {
-      input.inputMode = inputMode;
-    }
-    wrapper.append(input);
-    return wrapper;
-  }
-
-  /**
-   * @param {string} placeholder
-   * @param {string} field
-   * @param {string} value
-   */
-  function filterInput(placeholder, field, value) {
-    const input = documentObject.createElement("input");
-    input.type = "search";
-    input.placeholder = placeholder;
-    input.value = value;
-    input.setAttribute("aria-label", placeholder);
-    input.setAttribute("data-filter", field);
-    return input;
-  }
-
-  /**
-   * @param {string} label
-   * @param {string} field
-   * @param {string} value
-   * @param {Array<[string, string]>} choices
-   */
-  function filterSelect(label, field, value, choices) {
-    const select = documentObject.createElement("select");
-    select.setAttribute("aria-label", label);
-    select.setAttribute("data-filter", field);
-    for (const [choiceValue, choiceLabel] of choices) {
-      const option = documentObject.createElement("option");
-      option.value = choiceValue;
-      option.textContent = choiceLabel;
-      select.append(option);
-    }
-    select.value = value;
-    return select;
-  }
-
-  /**
-   * @param {string} label
-   * @param {string} variant
-   */
-  function actionButton(label, variant) {
-    const button = documentObject.createElement("button");
-    button.type = "button";
-    button.className = `button button-${variant}`;
-    button.textContent = label;
-    return button;
-  }
-
-  /**
-   * @param {string} message
-   * @param {string} tone
-   */
-  function messageBanner(message, tone) {
-    const banner = textNode("div", "message-banner", message);
-    banner.setAttribute("role", tone === "danger" ? "alert" : "status");
-    banner.setAttribute("data-tone", tone);
-    return banner;
-  }
-
-  /**
-   * @param {string} message
-   */
-  function emptyState(message) {
-    return textNode("p", "empty-state", message);
-  }
-
-  /**
-   * @param {keyof HTMLElementTagNameMap} tag
-   * @param {string} className
-   */
-  function node(tag, className) {
-    const element = documentObject.createElement(tag);
-    if (className !== "") {
-      element.className = className;
-    }
-    return element;
-  }
-
-  /**
-   * @param {keyof HTMLElementTagNameMap} tag
-   * @param {string} className
-   * @param {string} text
-   */
-  function textNode(tag, className, text) {
-    const element = node(tag, className);
-    element.textContent = text;
-    return element;
   }
 
   return { start, destroy, getState: () => state };
@@ -2303,62 +1920,6 @@ function isRoomSort(value) {
  */
 function isSortDirection(value) {
   return value === "asc" || value === "desc";
-}
-
-/**
- * @param {AdminUser["status"]} status
- */
-function statusTone(status) {
-  if (status === "ACTIVE") {
-    return "success";
-  }
-  if (status === "PENDING") {
-    return "warning";
-  }
-  if (status === "SUSPENDED") {
-    return "danger";
-  }
-  return "neutral";
-}
-
-/**
- * @param {ActivationGrant["status"]} status
- */
-function activationStatusLabel(status) {
-  return {
-    ACTIVE: "未领取",
-    CLAIMED: "待完善（密钥仍可登录）",
-    USED: "已完成",
-    REVOKED: "已撤销",
-    EXPIRED: "已过期",
-  }[status];
-}
-
-/**
- * @param {ActivationGrant["status"]} status
- */
-function activationStatusTone(status) {
-  if (status === "ACTIVE") {
-    return "success";
-  }
-  if (status === "CLAIMED" || status === "EXPIRED") {
-    return "warning";
-  }
-  return "neutral";
-}
-
-/**
- * @param {string | Date} value
- */
-function formatDate(value) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return "—";
-  }
-  return new Intl.DateTimeFormat("zh-CN", {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(date);
 }
 
 /**

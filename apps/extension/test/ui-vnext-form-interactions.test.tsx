@@ -49,6 +49,22 @@ function submitTwice(root: HTMLElement): void {
 }
 
 describe("vNext account form interactions", () => {
+  it("keeps input entered immediately after the login dialog appears", async () => {
+    const root = document.createElement("div");
+    document.body.append(root);
+    try {
+      render(<AuthDialog {...authProps()} />, root);
+      const username = root.querySelector<HTMLInputElement>('[name="username"]')!;
+      input(username, "ming");
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(username.value).toBe("ming");
+    } finally {
+      render(null, root);
+      root.remove();
+    }
+  });
   it("opens on the username, explains validation and returns focus to the invalid field", async () => {
     const props = authProps();
     const root = renderPanel(<AuthDialog {...props} />);

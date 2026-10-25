@@ -1,4 +1,3 @@
-import { useState } from "preact/hooks";
 import type { ComponentChildren, JSX } from "preact";
 import type { UiStore } from "../store.js";
 import { Icon } from "../icons.js";
@@ -12,6 +11,7 @@ export interface AppShellProps {
   readonly onOpenAuth: () => void;
   readonly onOpenMessages: () => void;
   readonly onOpenServerProfiles: () => void;
+  readonly onOpenSettings: () => void;
   readonly onOpenAccountSettings: (() => void) | null;
   readonly children: ComponentChildren;
 }
@@ -23,10 +23,10 @@ export function AppShell({
   onOpenAuth,
   onOpenMessages,
   onOpenServerProfiles,
+  onOpenSettings,
   onOpenAccountSettings,
   children,
 }: AppShellProps): JSX.Element {
-  const [loggingOut, setLoggingOut] = useState(false);
   const shell = store.shell.value;
   const account = shell.account;
   const selectedProfile = shell.profiles.find(
@@ -41,19 +41,13 @@ export function AppShell({
         ? "重新登录"
         : "登录 | 注册";
 
-  async function logout(): Promise<void> {
-    setLoggingOut(true);
-    await store.command({ name: "AUTH_LOGOUT" });
-    setLoggingOut(false);
-  }
-
   return (
     <div class="syncaction-app" data-native-sidepanel>
       <header class="top-bar" data-editorial-identity>
         <GlassMaterial />
         <div class="brand-lockup">
           <span class="brand-mark" aria-hidden="true">
-            <Icon name="logo" size={36} />
+            <Icon name="logo" size={30} />
           </span>
           <button
             class="server-button"
@@ -69,6 +63,15 @@ export function AppShell({
           </button>
         </div>
         <div class="top-bar__actions">
+          <button
+            class="icon-button"
+            type="button"
+            aria-label="设置"
+            title="设置"
+            onClick={onOpenSettings}
+          >
+            <Icon name="settings" />
+          </button>
           <button
             class="icon-button"
             type="button"
@@ -116,14 +119,6 @@ export function AppShell({
                   <strong>{account.displayName}</strong>
                 </button>
               )}
-              <button
-                class="text-button"
-                type="button"
-                disabled={loggingOut}
-                onClick={() => void logout()}
-              >
-                {loggingOut ? "退出中…" : "退出"}
-              </button>
             </div>
           )}
         </div>

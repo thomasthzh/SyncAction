@@ -197,16 +197,14 @@ describe("task-scoped permission and connection UI", () => {
     expect(close).not.toHaveBeenCalled();
   });
 
-  it("puts returning rooms ahead of server diagnostics and keeps room selection as the real command", async () => {
+  it("prioritizes returning rooms without health polling and keeps room selection as the real command", async () => {
     const fixture = createVisualStore("lobby");
     const store = new TestUiStore();
     store.update({ shell: fixture.shell.value, discovery: fixture.discovery.value });
     const root = renderPanel(<App store={store} />);
-    const roomList = root.querySelector(".my-rooms")!;
-    const service = root.querySelector(".service-status-card")!;
-    expect(
-      roomList.compareDocumentPosition(service) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
+    const roomList = root.querySelector<HTMLElement>(".my-rooms")!;
+    expect(root.querySelector(".service-status-card")).toBeNull();
+    expect(roomList.hidden).toBe(false);
     expect(root.querySelector(".welcome-strip .primary-button")).toBeNull();
     await click(byRole(roomList, "button", store.discovery.value.rooms[0]!.name));
     expect(store.commandCalls.at(-1)).toEqual({

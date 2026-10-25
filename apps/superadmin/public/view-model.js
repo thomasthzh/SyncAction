@@ -180,8 +180,8 @@ export function buildOverviewMetrics(input) {
     },
     {
       id: "system",
-      label: "系统状态",
-      value: input.diagnostics.database === "ready" ? "正常" : "异常",
+      label: "数据库读取",
+      value: input.diagnostics.database === "ready" ? "已响应" : "未响应",
       tone: input.diagnostics.database === "ready" ? "success" : "danger",
     },
   ];

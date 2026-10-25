@@ -13,6 +13,8 @@ import { RoomSwitcher } from "./room-switcher.js";
 import { StartWatchingCard } from "./start-watching-card.js";
 import { useCommandFeedback } from "../use-command-feedback.js";
 import type { UiCommandInput } from "../store.js";
+import { WorkspaceTabs } from "./workspace-tabs.js";
+import { RoomMembersWorkspace } from "./room-members-workspace.js";
 
 export interface ActiveRoomProps {
   readonly store: UiStore;
@@ -34,6 +36,7 @@ export function ActiveRoom({
   onRequestPagePermission,
 }: ActiveRoomProps): JSX.Element {
   const [pageQuery, setPageQuery] = useState("");
+  const [workspace, setWorkspace] = useState("watch");
   const surface = useRef<HTMLDivElement>(null);
   const activeElement = document.activeElement;
   const focusedWatchControl =
@@ -89,6 +92,11 @@ export function ActiveRoom({
     media?.state !== "OFFLINE" &&
     (media === null || media.roomMediaRevision !== null);
   const watchAwaiting = mediaView.groups.length === 0 && !watchConnected;
+  const pendingOwnProposals = mediaView.groups
+    .filter((group) =>
+      group.members.some((member) => member.userId === currentUserId && member.role === "LEADER"),
+    )
+    .reduce((count, group) => count + group.proposals.length, 0);
   useLayoutEffect(() => {
     if (
       focusedWatchControl !== null &&
@@ -242,7 +250,7 @@ export function ActiveRoom({
   }
 
   return (
-    <div class="active-room" ref={surface}>
+    <div class="active-room" data-workspace-view={workspace} ref={surface}>
       <header class="room-header">
         <RoomSwitcher
           store={store}
@@ -278,7 +286,35 @@ export function ActiveRoom({
         </span>
       </div>
 
+      <WorkspaceTabs
+        id="room-workspace"
+        label="房间工作区"
+        selected={workspace}
+        onSelect={setWorkspace}
+        tabs={[
+          { id: "watch", label: "观看", count: mediaView.groups.length },
+          { id: "pages", label: "页面", count: rows.length },
+          { id: "members", label: "成员", count: totalCount },
+        ]}
+      />
+
       <ActionableStatus statusCode={statusCode} onAction={recover} />
+      {workspace !== "watch" && pendingOwnProposals > 0 ? (
+        <button
+          class="workspace-pending-action"
+          type="button"
+          onClick={() => {
+            setWorkspace("watch");
+            queueMicrotask(() =>
+              surface.current?.querySelector<HTMLElement>("#room-workspace-tab-watch")?.focus(),
+            );
+          }}
+        >
+          <Icon name="message" size={16} />
+          <span>你的播放组有 {pendingOwnProposals} 条待处理提议</span>
+          <Icon name="chevron" size={16} />
+        </button>
+      ) : null}
       <ActionableStatus errorCode={feedback.errorCode} />
       {feedback.pending === "media" ? (
         <p class="command-feedback" role="status">
@@ -289,45 +325,56 @@ export function ActiveRoom({
         <p class={`media-notice media-notice--${mediaView.notice.tone}`}>{mediaView.notice.text}</p>
       )}
 
-      {watchAwaiting ? (
-        <section
-          class="start-watching watch-workspace editorial-surface"
-          data-watch-awaiting
-          tabIndex={-1}
-          aria-labelledby="watch-awaiting-heading"
-        >
-          <h2 id="watch-awaiting-heading">播放协作暂未连接</h2>
-          <p class="section-description">
-            连接恢复后会重新显示视频与参与状态；当前先暂停媒体操作。
-          </p>
-        </section>
-      ) : mediaView.groups.length === 0 ? (
-        <StartWatchingCard store={store} onRequestPagePermission={onRequestPagePermission} />
-      ) : null}
-      {media !== null && mediaView.groups.length > 0 ? (
-        <WatchWorkspace
-          key={`${shell.selectedProfileId}:${room.selectedRoomId}`}
-          view={mediaView}
-          media={media}
-          currentUserId={currentUserId}
-          onIntent={sendMediaIntent}
-          busy={feedback.pending === "media"}
-        />
-      ) : null}
-      {watchConnected &&
-      media !== null &&
-      mediaView.groups.length > 0 &&
-      media.localMembership === null ? (
-        <details class="watch-new-group">
-          <summary>用当前视频新建播放组</summary>
+      <div
+        class="workspace-panel"
+        id="room-workspace-panel-watch"
+        role="tabpanel"
+        aria-labelledby="room-workspace-tab-watch"
+        hidden={workspace !== "watch"}
+      >
+        {watchAwaiting ? (
+          <section
+            class="start-watching watch-workspace editorial-surface"
+            data-watch-awaiting
+            tabIndex={-1}
+            aria-labelledby="watch-awaiting-heading"
+          >
+            <h2 id="watch-awaiting-heading">播放协作暂未连接</h2>
+            <p class="section-description">
+              连接恢复后会重新显示视频与参与状态；当前先暂停媒体操作。
+            </p>
+          </section>
+        ) : mediaView.groups.length === 0 ? (
           <StartWatchingCard store={store} onRequestPagePermission={onRequestPagePermission} />
-        </details>
-      ) : null}
+        ) : null}
+        {media !== null && mediaView.groups.length > 0 ? (
+          <WatchWorkspace
+            key={`${shell.selectedProfileId}:${room.selectedRoomId}`}
+            view={mediaView}
+            media={media}
+            currentUserId={currentUserId}
+            onIntent={sendMediaIntent}
+            busy={feedback.pending === "media"}
+          />
+        ) : null}
+        {watchConnected &&
+        media !== null &&
+        mediaView.groups.length > 0 &&
+        media.localMembership === null ? (
+          <details class="watch-new-group">
+            <summary>用当前视频新建播放组</summary>
+            <StartWatchingCard store={store} onRequestPagePermission={onRequestPagePermission} />
+          </details>
+        ) : null}
+      </div>
 
       <section
         class="shared-tab-stream shared-tab-stream--supporting editorial-surface"
         data-editorial-surface="shared-pages"
-        aria-labelledby="shared-page-heading"
+        aria-labelledby="room-workspace-tab-pages"
+        role="tabpanel"
+        id="room-workspace-panel-pages"
+        hidden={workspace !== "pages"}
       >
         <header class="section-heading">
           <div>
@@ -388,18 +435,31 @@ export function ActiveRoom({
         )}
       </section>
 
-      {detail?.visibility === "PUBLIC" ? (
-        <details class="public-room-details">
-          <summary>公开房间信息</summary>
-          <p>
-            {detail.joinPolicy === "OPEN"
-              ? "任何已登录用户可直接加入"
-              : detail.joinPolicy === "APPROVAL"
-                ? "新成员需房主批准"
-                : "公开可见，仅可通过邀请加入"}
-          </p>
-        </details>
-      ) : null}
+      <div
+        class="workspace-panel"
+        id="room-workspace-panel-members"
+        role="tabpanel"
+        aria-labelledby="room-workspace-tab-members"
+        hidden={workspace !== "members"}
+      >
+        <RoomMembersWorkspace
+          store={store}
+          onOpenInvite={onOpenInvite}
+          onOpenRoomLifecycle={onOpenRoomLifecycle}
+        />
+        {detail?.visibility === "PUBLIC" ? (
+          <details class="public-room-details">
+            <summary>公开房间信息</summary>
+            <p>
+              {detail.joinPolicy === "OPEN"
+                ? "任何已登录用户可直接加入"
+                : detail.joinPolicy === "APPROVAL"
+                  ? "新成员需房主批准"
+                  : "公开可见，仅可通过邀请加入"}
+            </p>
+          </details>
+        ) : null}
+      </div>
       <BottomActionDock
         store={store}
         isOwner={detail?.role === "OWNER"}

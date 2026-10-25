@@ -1,5 +1,6 @@
 import type { PublicRoomSummary } from "@syncaction/protocol";
 import type { JSX } from "preact";
+import { useState } from "preact/hooks";
 import type { UiStore } from "../store.js";
 import { Icon } from "../icons.js";
 import type { UiCommandResult } from "../../ui/ui-protocol.js";
@@ -8,6 +9,7 @@ import { PublicRoomFeed } from "./public-room-feed.js";
 import { ServiceStatusCard, type ServiceStatusProbe } from "./service-status-card.js";
 import { useCommandFeedback } from "../use-command-feedback.js";
 import { isPlaceholderServerOrigin } from "../../server-configuration.js";
+import { WorkspaceTabs } from "./workspace-tabs.js";
 
 export interface GuestLobbyProps {
   readonly store: UiStore;
@@ -37,6 +39,7 @@ export function GuestLobby({
     shell.profiles.find(({ profileId }) => profileId === shell.selectedProfileId) ??
     shell.profiles[0]!;
   const returning = authenticated && discovery.rooms.length > 0;
+  const [view, setView] = useState("mine");
   const connectionErrorCode = shell.phase === "ERROR" ? (shell.errorCode ?? "NETWORK_ERROR") : null;
   const reconnectAllowed =
     connectionErrorCode !== null &&
@@ -63,7 +66,10 @@ export function GuestLobby({
   }
 
   return (
-    <div class={`lobby-surface${returning ? " lobby-surface--returning" : ""}`}>
+    <div
+      class={`lobby-surface${returning ? " lobby-surface--returning" : ""}`}
+      data-workspace-view={authenticated ? view : "discover"}
+    >
       <section class={`welcome-strip${returning ? " welcome-strip--compact" : ""}`}>
         <div>
           <p class="eyebrow">
@@ -99,10 +105,26 @@ export function GuestLobby({
       ) : null}
 
       {authenticated ? (
+        <WorkspaceTabs
+          id="lobby-workspace"
+          label="房间列表"
+          selected={view}
+          onSelect={setView}
+          tabs={[
+            { id: "mine", label: "我的房间", count: discovery.rooms.length },
+            { id: "discover", label: "发现房间", count: discovery.publicRooms.length },
+          ]}
+        />
+      ) : null}
+
+      {authenticated ? (
         <section
           class="my-rooms editorial-surface"
           data-editorial-surface="my-rooms"
-          aria-labelledby="my-room-heading"
+          aria-labelledby="lobby-workspace-tab-mine"
+          id="lobby-workspace-panel-mine"
+          role="tabpanel"
+          hidden={view !== "mine"}
         >
           <header class="section-heading">
             <div>
@@ -180,22 +202,24 @@ export function GuestLobby({
         </section>
       ) : null}
 
-      <ServiceStatusCard
-        profile={selectedProfile}
-        transport={store.transport.value}
-        connectionErrorCode={connectionErrorCode}
-        onOpenServerProfiles={onOpenServerProfiles}
-        {...(reconnectAllowed
-          ? {
-              onReconnect: () =>
-                store.command({
-                  name: "SERVER_SELECT",
-                  payload: { profileId: selectedProfile.profileId },
-                }),
-            }
-          : {})}
-        {...(serviceStatusProbe === undefined ? {} : { probe: serviceStatusProbe })}
-      />
+      {connectionErrorCode !== null || store.transport.value !== "CONNECTED" ? (
+        <ServiceStatusCard
+          profile={selectedProfile}
+          transport={store.transport.value}
+          connectionErrorCode={connectionErrorCode}
+          onOpenServerProfiles={onOpenServerProfiles}
+          {...(reconnectAllowed
+            ? {
+                onReconnect: () =>
+                  store.command({
+                    name: "SERVER_SELECT",
+                    payload: { profileId: selectedProfile.profileId },
+                  }),
+              }
+            : {})}
+          {...(serviceStatusProbe === undefined ? {} : { probe: serviceStatusProbe })}
+        />
+      ) : null}
 
       <ActionableStatus errorCode={actionError} />
       <ActionableStatus errorCode={feedback.errorCode} />
@@ -204,11 +228,19 @@ export function GuestLobby({
           {feedback.message}
         </p>
       ) : null}
-      <PublicRoomFeed
-        rooms={discovery.publicRooms}
-        onJoin={onJoinPublicRoom}
-        onRefresh={() => store.command({ name: "PUBLIC_ROOMS_REFRESH" })}
-      />
+      <div
+        class="workspace-panel"
+        id="lobby-workspace-panel-discover"
+        role={authenticated ? "tabpanel" : undefined}
+        aria-labelledby={authenticated ? "lobby-workspace-tab-discover" : undefined}
+        hidden={authenticated && view !== "discover"}
+      >
+        <PublicRoomFeed
+          rooms={discovery.publicRooms}
+          onJoin={onJoinPublicRoom}
+          onRefresh={() => store.command({ name: "PUBLIC_ROOMS_REFRESH" })}
+        />
+      </div>
     </div>
   );
 }

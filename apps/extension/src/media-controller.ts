@@ -366,6 +366,16 @@ export class MediaController {
     await this.whenIdle();
   }
 
+  public async handlePresenceChanged(): Promise<void> {
+    if (this.#synchronized) {
+      const generation = this.#generation;
+      this.#enqueue(async () => {
+        if (this.#generationGuard(generation)()) await this.#refreshNavigation();
+      });
+    }
+    await this.whenIdle();
+  }
+
   public async handleBindingsChanged(): Promise<void> {
     if (this.#synchronized) {
       this.#cancelLeaderAuthorityBatch(true);

@@ -20,7 +20,6 @@ import {
   type PointerFrame,
   type PointerLeaseUpdate,
   type PointerUpdate,
-  type PresenceSnapshotMessage,
   type PresenceUpdate,
   type PresenceUpdateV2,
 } from "@syncaction/protocol";
@@ -63,6 +62,7 @@ import type {
   CollaborationTransport,
   MediaSnapshotHandler,
   PointerMessageHandler,
+  PresenceMessageHandler,
 } from "../src/socket-transport.js";
 
 const roomId = "018f8f8e-4b5c-7d6e-8f90-123456789ab1";
@@ -113,7 +113,7 @@ class FakeTransport implements ReplicaTransport {
   public synchronizeFailuresRemaining = 0;
   public readonly submissions: ClientOperationEnvelope[] = [];
   public handlers: ReplicaTransportHandlers | undefined;
-  public presenceHandler: ((snapshot: PresenceSnapshotMessage) => void) | undefined;
+  public presenceHandler: PresenceMessageHandler | undefined;
   public readonly presenceUpdates: Array<PresenceUpdate | PresenceUpdateV2> = [];
   public pointerHandler: PointerMessageHandler | undefined;
   public readonly pointerUpdates: PointerUpdate[] = [];
@@ -162,9 +162,7 @@ class FakeTransport implements ReplicaTransport {
     this.handlers = undefined;
   }
 
-  public setPresenceHandler(
-    handler: ((snapshot: PresenceSnapshotMessage) => void) | undefined,
-  ): void {
+  public setPresenceHandler(handler: PresenceMessageHandler | undefined): void {
     this.presenceHandler = handler;
   }
 
@@ -1151,6 +1149,53 @@ describe("BackgroundController", () => {
     await controller.stop();
     expect(transport.mediaHandler).toBeUndefined();
     expect(pagePort.mediaLocks.every((locked) => !locked)).toBe(true);
+  });
+
+  it("refreshes member navigation when presence arrives after the media snapshot", async () => {
+    const controller = new BackgroundController({
+      persistence,
+      configStore: new StaticConfigStore(config),
+      transportFactory: () => transport,
+      browserPort: new MutableBrowserPort(),
+      browserSessionId: "018f8f8e-4b5c-7d6e-8f90-123456789ab5",
+      pagePort: new FakePointerPagePort(),
+    });
+    await controller.start();
+    transport.emitMedia({
+      type: "media.groups.snapshot",
+      protocolVersion: 1,
+      roomId: snapshot.roomId,
+      roomMediaRevision: 0,
+      groups: [],
+    });
+    await controller.whenIdle();
+    expect((await controller.getStatus()).media?.navigation).toEqual([]);
+    transport.presenceHandler?.(
+      PresenceSnapshotV2MessageSchema.parse({
+        type: "presence.snapshot.v2",
+        protocolVersion: 1,
+        roomId,
+        presenceSeq: 1,
+        presences: [
+          {
+            userId: "018f8f8e-4b5c-7d6e-8f90-123456789cd1",
+            deviceId: "018f8f8e-4b5c-7d6e-8f90-123456789cd2",
+            username: "member",
+            displayName: "Member",
+            logicalTabId: snapshot.order[0]!,
+            expiresAt: Date.now() + 30000,
+            contentContext: null,
+          },
+        ],
+      }),
+    );
+    await vi.waitFor(async () =>
+      expect((await controller.getStatus()).media?.navigation).toMatchObject([
+        { canJump: false, logicalTabId: snapshot.order[0]! },
+      ]),
+    );
+    expect(transport.mediaCommands).toEqual([]);
+    await controller.stop();
   });
 
   it("creates the first media group only for a current observed shared tab", async () => {

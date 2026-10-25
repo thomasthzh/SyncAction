@@ -209,7 +209,7 @@ describe("sidepanel everyday workflows", () => {
     expect(root.querySelector('[role="menu"]')).toBeNull();
     expect(document.activeElement).not.toBe(document.body);
     if (shiftKey) expect(document.activeElement).toBe(trigger);
-    else expect(document.activeElement).toBe(root.querySelector('select[aria-label="查看播放组"]'));
+    else expect(document.activeElement).toBe(root.querySelector("#room-workspace-tab-watch"));
   });
 
   it("shows playback command failures instead of silently dropping them", async () => {

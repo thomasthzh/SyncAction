@@ -216,7 +216,7 @@ describe("administrator console rendering", () => {
     expect(root.querySelectorAll("[data-nav-view]")).toHaveLength(7);
     expect(root.querySelectorAll("[data-metric-id]")).toHaveLength(5);
     expect(root.textContent).toContain("待审批账号");
-    expect(root.textContent).toContain("房间容量");
+    expect(root.textContent).toContain("正在协作的房间");
     expect(root.textContent).toContain("配额豁免");
     expect(root.querySelector('[data-region="linked-user-binding"]')).toBeNull();
 
@@ -229,12 +229,12 @@ describe("administrator console rendering", () => {
     );
     await flushTasks();
     expect(approveButton?.disabled).toBe(true);
-    expect(api.listUsers).toHaveBeenCalledTimes(1);
+    expect(api.listUsers).toHaveBeenCalledTimes(2);
     expect(api.diagnostics).toHaveBeenCalledTimes(1);
     expect(api.listAuditEvents).toHaveBeenCalledTimes(1);
     approval.resolve({});
     await flushTasks();
-    expect(api.listUsers).toHaveBeenCalledTimes(2);
+    expect(api.listUsers).toHaveBeenCalledTimes(4);
     expect(api.diagnostics).toHaveBeenCalledTimes(2);
     expect(api.listAuditEvents).toHaveBeenCalledTimes(2);
     expect(root.querySelector('[data-metric-id="pending"] .metric-value')?.textContent).toBe("0");
@@ -406,7 +406,7 @@ describe("administrator console rendering", () => {
       expect.any(AbortSignal),
     );
     expect(api.me).toHaveBeenCalledTimes(1);
-    expect(api.listUsers).toHaveBeenCalledTimes(1);
+    expect(api.listUsers).toHaveBeenCalledTimes(2);
     expect(api.listRooms).toHaveBeenCalledTimes(1);
     expect(api.diagnostics).toHaveBeenCalledTimes(1);
     expect(api.listAuditEvents).toHaveBeenCalledTimes(1);
@@ -414,7 +414,7 @@ describe("administrator console rendering", () => {
     binding.resolve({});
     await flushTasks();
     expect(api.me).toHaveBeenCalledTimes(2);
-    expect(api.listUsers).toHaveBeenCalledTimes(2);
+    expect(api.listUsers).toHaveBeenCalledTimes(3);
     expect(api.listRooms).toHaveBeenCalledTimes(2);
     expect(api.diagnostics).toHaveBeenCalledTimes(2);
     expect(api.listAuditEvents).toHaveBeenCalledTimes(2);
@@ -978,6 +978,8 @@ describe("administrator console static boundary", () => {
       "/app.js",
       "/api.js",
       "/view-model.js",
+      "/dom.js",
+      "/workspace-views.js",
       "/syncaction-symbol.svg",
     ]) {
       const asset = await app.inject({ method: "GET", url: path });

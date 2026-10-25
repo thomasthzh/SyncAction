@@ -85,7 +85,7 @@ describe("vNext accessibility and visual-system contract", () => {
   });
 
   it("ships only local visual assets and no remote font or stylesheet dependency", () => {
-    const source = `${readVnextSource()}\n${readIfPresent(stylesPath)}\n${readIfPresent(
+    const source = `${readVnextSource()}\n${readVnextStyles()}\n${readIfPresent(
       sidepanelStylesPath,
     )}`;
     expect(source).not.toMatch(
@@ -94,7 +94,7 @@ describe("vNext accessibility and visual-system contract", () => {
   });
 
   it("uses bounded optical chrome while keeping dense rows and layout transitions lightweight", () => {
-    const styles = readIfPresent(stylesPath);
+    const styles = readVnextStyles();
     for (const declaration of [
       "color-scheme: light",
       "--sa-bg: #eef4fa",
@@ -106,8 +106,11 @@ describe("vNext accessibility and visual-system contract", () => {
       "--sa-blue-gray: #e8eef3",
       "--sa-line: rgb(56 85 117 / 13%)",
       "--sa-danger: #c93434",
-      "--sa-radius-card: 22px",
-      "--sa-radius-control: 14px",
+      "--sa-radius-card: 12px",
+      "--sa-radius-control: 10px",
+      "--sa-radius-chrome: 16px",
+      "--sa-feedback-duration: 140ms",
+      "--sa-enter-duration: 160ms",
       "--sa-ease: cubic-bezier(0.22, 1, 0.36, 1)",
     ]) {
       expect(styles).toContain(declaration);
@@ -125,6 +128,13 @@ describe("vNext accessibility and visual-system contract", () => {
     expect(styles).not.toMatch(
       /transition(?:-property)?:[^;]*(?:width|height|inset|margin|padding)/iu,
     );
+    expect(styles).toMatch(/\[hidden\]\s*\{\s*display:\s*none\s*!important/iu);
+    const workspaceStyles = readIfPresent(resolve(vnextRoot, "styles/workspace.css"));
+    expect(workspaceStyles).toMatch(
+      /\.active-room\s*>\s*\[role="tabpanel"\][^{]*\{[^}]*min-height:\s*0[^}]*overflow-y:\s*auto/iu,
+    );
+    expect(workspaceStyles).toMatch(/\.workspace-tabs\s*\{[^}]*flex:\s*none/iu);
+    expect(styles).toMatch(/\.bottom-action-dock\s*\{[^}]*flex:\s*none/iu);
   });
 
   it("removes motion and transparency when the operating system requests it", () => {
@@ -147,7 +157,7 @@ describe("vNext accessibility and visual-system contract", () => {
     expect(styles).toMatch(/body\s*\{[\s\S]*?width:\s*100%/iu);
     expect(styles).toContain("--sa-panel-max: 480px");
     expect(styles).toMatch(
-      /\.syncaction-app\s*\{[\s\S]*?inline-size:\s*min\(100%,\s*var\(--sa-panel-max\)\)[\s\S]*?min-block-size:\s*100dvh/iu,
+      /\.syncaction-app\s*\{[^}]*inline-size:\s*min\(100%,\s*var\(--sa-panel-max\)\)[^}]*block-size:\s*100dvh[^}]*min-block-size:\s*0/iu,
     );
     expect(styles).toMatch(/\.syncaction-app\s*\{[\s\S]*?margin-inline:\s*auto/iu);
     expect(styles).toContain("overflow-x: clip");
@@ -194,6 +204,15 @@ function readVnextSource(): string {
     .filter((entry) => entry.isFile() && [".ts", ".tsx"].includes(extname(entry.name)))
     .map((entry) => readFileSync(resolve(entry.parentPath, entry.name), "utf8"))
     .join("\n");
+}
+
+function readVnextStyles(): string {
+  return [
+    readIfPresent(stylesPath),
+    ...readdirSync(resolve(vnextRoot, "styles"))
+      .filter((name) => extname(name) === ".css")
+      .map((name) => readIfPresent(resolve(vnextRoot, "styles", name))),
+  ].join("\n");
 }
 
 function mediaBlock(source: string, query: string): string {

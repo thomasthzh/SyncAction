@@ -34,10 +34,12 @@ import { RoomLifecycleSheet } from "./components/room-lifecycle-sheet.js";
 import { ServerProfileDialog, type ServerVerifier } from "./components/server-profile-dialog.js";
 import type { ServiceStatusProbe } from "./components/service-status-card.js";
 import { UpgradeNotice } from "./components/upgrade-notice.js";
+import { WorkspaceSettings } from "./components/workspace-settings.js";
 
 export type Overlay =
   | { kind: "AUTH"; mode: AuthMode }
   | { kind: "MESSAGES" }
+  | { kind: "SETTINGS" }
   | { kind: "SERVER_PROFILES" }
   | { kind: "AUTHORIZED_SITES" }
   | { kind: "ACCOUNT_SETTINGS" }
@@ -150,6 +152,7 @@ export function App({
   const [actionError, setActionError] = useState<string | null>(null);
   const openerRef = useRef<HTMLElement | null>(null);
   const serverReturnAuthMode = useRef<AuthMode | null>(null);
+  const settingsChild = useRef(false);
   const initialPermissionIntentOpened = useRef(false);
   const permissionCaptureGeneration = useRef(0);
   const server = selectedServerContext(store);
@@ -204,6 +207,7 @@ export function App({
   }
 
   function closeOverlay(options: { clearDeferred?: boolean } = {}): void {
+    settingsChild.current = false;
     permissionCaptureGeneration.current += 1;
     if (options.clearDeferred === true) {
       rememberDestination(null);
@@ -227,13 +231,28 @@ export function App({
     const selectedServer = selectedServerContext(store);
     serverReturnAuthMode.current = null;
     if (returnToAuth === null || isPlaceholderServerOrigin(selectedServer.profile.baseUrl)) {
-      closeOverlay();
+      closeSettingsChild();
     } else {
       setOverlay({
         kind: "AUTH",
         mode: supportedAuthMode(returnToAuth, selectedServer),
       });
     }
+  }
+
+  function closeSettingsChild(): void {
+    if (settingsChild.current) {
+      settingsChild.current = false;
+      setOverlay({ kind: "SETTINGS" });
+    } else closeOverlay();
+  }
+
+  function openSettingsChild(
+    next: "SERVER_PROFILES" | "AUTHORIZED_SITES" | "ACCOUNT_SETTINGS",
+  ): void {
+    settingsChild.current = true;
+    if (next === "SERVER_PROFILES") openServerProfiles();
+    else setOverlay({ kind: next });
   }
 
   useEffect(() => {
@@ -519,6 +538,7 @@ export function App({
       onOpenAuth={openAuth}
       onOpenMessages={() => openOverlay({ kind: "MESSAGES" })}
       onOpenServerProfiles={() => openServerProfiles()}
+      onOpenSettings={() => openOverlay({ kind: "SETTINGS" })}
       onOpenAccountSettings={
         server.accountSettingsSupported && store.shell.value.account?.status === "ACTIVE"
           ? () => openOverlay({ kind: "ACCOUNT_SETTINGS" })
@@ -592,7 +612,21 @@ export function App({
         <AccountSettingsDialog
           store={store}
           account={store.shell.value.account}
+          onClose={closeSettingsChild}
+        />
+      ) : null}
+      {overlay?.kind === "SETTINGS" ? (
+        <WorkspaceSettings
+          store={store}
           onClose={() => closeOverlay()}
+          onOpenServerProfiles={() => openSettingsChild("SERVER_PROFILES")}
+          onOpenAuthorizedSites={() => openSettingsChild("AUTHORIZED_SITES")}
+          onOpenAccountSettings={
+            server.accountSettingsSupported && store.shell.value.account?.status === "ACTIVE"
+              ? () => openSettingsChild("ACCOUNT_SETTINGS")
+              : null
+          }
+          {...(serviceStatusProbe === undefined ? {} : { serviceStatusProbe })}
         />
       ) : null}
       {overlay?.kind === "CREATE_ROOM" ? (
@@ -628,7 +662,7 @@ export function App({
           store={store}
           profileId={server.profileId}
           load={loadAuthorizedSites}
-          onClose={() => closeOverlay()}
+          onClose={closeSettingsChild}
         />
       ) : null}
       {overlay?.kind === "PAGE_PERMISSION" ? (

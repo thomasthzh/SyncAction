@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
+import { useLayoutEffect, useRef, useState } from "preact/hooks";
 import { Icon } from "../icons.js";
 import type { UiCommandResult } from "../../ui/ui-protocol.js";
 import { ActionableStatus } from "./actionable-status.js";
@@ -56,7 +56,7 @@ export function AuthDialog({
   const formRef = useRef<HTMLFormElement>(null);
   const feedbackRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     setUsername("");
     setDisplayName("");
     setPassword("");
