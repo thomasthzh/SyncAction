@@ -101,6 +101,14 @@ export function BottomActionDock({
   return (
     <footer class="bottom-action-dock" data-bottom-action-dock>
       <GlassMaterial />
+      <p class="dock-context" title={store.pageAccess.value.origin ?? "当前浏览器页面"}>
+        <span>当前页</span>
+        <strong>
+          {store.pageAccess.value.origin === null
+            ? "尚未选择网页"
+            : new URL(store.pageAccess.value.origin).host}
+        </strong>
+      </p>
       <div class="bottom-action-dock__tools">
         {tools.map((tool) => (
           <span class="dock-tool" key={tool.label}>

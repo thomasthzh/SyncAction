@@ -18,6 +18,7 @@ export const iconNames = [
   "close",
   "search",
   "check",
+  "settings",
 ] as const;
 
 export type IconName = (typeof iconNames)[number];
@@ -63,6 +64,13 @@ export function Icon({ name, size = 20, className = "" }: IconProps): JSX.Elemen
 }
 
 function pathsFor(name: Exclude<IconName, "logo">): ComponentChildren {
+  if (name === "settings")
+    return (
+      <>
+        <circle cx="12" cy="12" r="3" />
+        <path d="m9 3-.5 2-2 1-2-.5-2 3 1.5 1.5v3L2.5 15l2 3 2-.5 2 1L9 21h6l.5-2 2-1 2 .5 2-3L20 13.5v-3L21.5 9l-2-3-2 .5-2-1L15 3Z" />
+      </>
+    );
   switch (name) {
     case "chevron":
       return <path d="m9 6 6 6-6 6" />;

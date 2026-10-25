@@ -78,7 +78,8 @@ describe("administrator authoritative refresh", () => {
     let userReadCount = 0;
     let firstRefreshSignal: AbortSignal | undefined;
     const listUsers = vi.fn(async (_filters: unknown, signal?: AbortSignal) => {
-      void _filters;
+      if ((_filters as { status?: string }).status === "PENDING")
+        return { users: [pendingUserA, pendingUserB] };
       userReadCount += 1;
       if (userReadCount === 2) {
         firstRefreshSignal = signal;
@@ -106,17 +107,18 @@ describe("administrator authoritative refresh", () => {
     click(mounted.window, queryButton(mounted.root, `approve-user`, "user-pending-b"));
     await flushTasks();
     expect(firstRefreshSignal?.aborted).toBe(false);
-    expect(listUsers).toHaveBeenCalledTimes(2);
+    expect(userReadCount).toBe(2);
 
     firstRefresh.resolve({ users: [pendingUserB] });
     await flushTasks();
     await flushTasks();
-    expect(listUsers).toHaveBeenCalledTimes(3);
+    expect(userReadCount).toBe(3);
   });
 
   it("keeps write success distinct when the authoritative refresh fails", async () => {
     let userReadCount = 0;
-    const listUsers = vi.fn(async () => {
+    const listUsers = vi.fn(async (filters: { status?: string }) => {
+      if (filters.status === "PENDING") return { users: [pendingUserA] };
       userReadCount += 1;
       if (userReadCount === 2) {
         throw new AdminApiError("ADMIN_RESPONSE_INVALID", 502, "refresh-request");
@@ -461,6 +463,153 @@ describe("administrator responsive and announcement boundary", () => {
       )?.groups?.rules ?? "";
     expect(contrastRules).toContain("--sa-success:");
     expect(contrastRules).toContain("--sa-warning:");
+  });
+});
+
+describe("administrator task workspace regressions", () => {
+  it.each(["create", "revoke"])(
+    "holds activation %s while a complete refresh is in flight",
+    async (action) => {
+      const grant = {
+        id: "grant-1",
+        note: "fixture",
+        keyTail: "12345678",
+        status: "ACTIVE",
+        account: null,
+        expiresAt: "2026-12-01T00:00:00Z",
+        usedAt: null,
+        revokedAt: null,
+        createdAt: "2026-10-25T00:00:00Z",
+      };
+      const snapshot = deferred<{ grants: (typeof grant)[] }>();
+      let reads = 0;
+      const createActivationGrant = vi.fn(async () => ({ activationKey: "fixture-key", grant }));
+      const revokeActivationGrant = vi.fn(async () => ({ ...grant, status: "REVOKED" }));
+      const mounted = await mountConsole(
+        createApi({
+          listActivationGrants: vi.fn(async () =>
+            ++reads === 1 ? { grants: [grant] } : snapshot.promise,
+          ),
+          createActivationGrant,
+          revokeActivationGrant,
+        }),
+      );
+      click(mounted.window, mounted.root.querySelector('[data-nav-view="activation-keys"]'));
+      setInput(mounted.root, "note", "fixture note");
+      click(mounted.window, mounted.root.querySelector('[data-action="refresh-data"]'));
+      await flushTasks();
+      if (action === "create") {
+        expect(
+          mounted.root.querySelector('form[data-form="activation-grant"] button:disabled'),
+        ).not.toBeNull();
+        submit(mounted.window, mounted.root.querySelector('[data-form="activation-grant"]'));
+      } else {
+        const revoke = mounted.root.querySelector('[data-action="revoke-activation-grant"]');
+        expect(revoke?.hasAttribute("disabled")).toBe(true);
+        click(mounted.window, revoke);
+      }
+      await flushTasks();
+      expect(createActivationGrant).not.toHaveBeenCalled();
+      expect(revokeActivationGrant).not.toHaveBeenCalled();
+      snapshot.resolve({ grants: [grant] });
+      await flushTasks();
+      await flushTasks();
+      expect(
+        mounted.root.querySelector('[data-action="revoke-activation-grant"]:disabled'),
+      ).toBeNull();
+      mounted.app.destroy();
+    },
+  );
+
+  it("does not reenter DOM replacement when a focused field emits its final change", async () => {
+    const mounted = await mountConsole(createApi());
+    click(mounted.window, mounted.root.querySelector('[data-nav-view="rooms"]'));
+    const replace = mounted.root.replaceChildren.bind(mounted.root);
+    let reentered = false;
+    let inside = false;
+    const replacement = vi.spyOn(mounted.root, "replaceChildren").mockImplementation((...nodes) => {
+      if (inside) reentered = true;
+      inside = true;
+      const input = mounted.root.querySelector('[data-filter="room-query"]');
+      input?.dispatchEvent(new mounted.window.Event("change", { bubbles: true }));
+      replace(...nodes);
+      inside = false;
+    });
+    click(mounted.window, mounted.root.querySelector('[data-nav-view="users"]'));
+    expect(reentered).toBe(false);
+    expect(mounted.root.querySelector('[data-filter="user-query"]')).not.toBeNull();
+    replacement.mockRestore();
+    mounted.app.destroy();
+  });
+
+  it("loads pending accounts independently from the latest all-status user page and labels its bounded scope", async () => {
+    const oldPending = {
+      ...pendingUserA,
+      id: "old-pending",
+      createdAt: "2025-01-01T00:00:00.000Z",
+    };
+    const listUsers = vi.fn(async (filters: { status?: string }) =>
+      filters.status === "PENDING"
+        ? { users: [oldPending], total: 209 }
+        : { users: [activeUserA], total: 500 },
+    );
+    const mounted = await mountConsole(createApi({ listUsers }));
+    expect(
+      mounted.root.querySelector('[data-action="approve-user"][data-user-id="old-pending"]'),
+    ).not.toBeNull();
+    expect(mounted.root.querySelector("caption")?.textContent).toContain("1 / 209");
+    expect(listUsers).toHaveBeenCalledWith({ status: "PENDING", limit: 200 }, expect.anything());
+    mounted.app.destroy();
+  });
+
+  it("opens deleted room recovery without the active-only members read and preserves a failed recovery confirmation", async () => {
+    const members = vi.fn(async () => {
+      throw new AdminApiError("ADMIN_READ_NOT_FOUND", 404, "fixture");
+    });
+    const restore = vi.fn(async () => {
+      throw new AdminApiError("ORDINARY_ROOM_LIMIT_REACHED", 409, "fixture");
+    });
+    const mounted = await mountConsole(
+      createApi({
+        listRooms: vi.fn(async () => ({ rooms: [{ ...activeRoom, lifecycle: "DELETED" }] })),
+        listRoomMembers: members,
+        restoreRoom: restore,
+      }),
+    );
+    click(mounted.window, mounted.root.querySelector('[data-nav-view="rooms"]'));
+    click(mounted.window, queryButton(mounted.root, "open-room", activeRoom.roomId));
+    await flushTasks();
+    expect(members).not.toHaveBeenCalled();
+    click(mounted.window, mounted.root.querySelector('[data-room-action="restore"]'));
+    click(mounted.window, mounted.root.querySelector('[data-action="confirm-room-action"]'));
+    await flushTasks();
+    expect(restore).toHaveBeenCalledWith(activeRoom.roomId, "ADMIN_RECOVERY", expect.anything());
+    expect(mounted.root.querySelector('[data-region="drawer"]')?.textContent).toContain(
+      "普通房间容量已满",
+    );
+    expect(mounted.root.querySelector('[data-action="confirm-room-action"]')).not.toBeNull();
+    mounted.app.destroy();
+  });
+
+  it("preserves an unsent activation note across task navigation and an explicit data refresh", async () => {
+    const mounted = await mountConsole(createApi());
+    click(mounted.window, mounted.root.querySelector('[data-nav-view="activation-keys"]'));
+    setInput(mounted.root, "note", "设计组的新成员");
+    click(mounted.window, mounted.root.querySelector('[data-nav-view="users"]'));
+    click(mounted.window, mounted.root.querySelector('[data-nav-view="activation-keys"]'));
+    expect(
+      (mounted.root.querySelector('input[name="note"]') as unknown as HTMLInputElement)?.value,
+    ).toBe("设计组的新成员");
+    click(mounted.window, mounted.root.querySelector('[data-action="refresh-data"]'));
+    await flushTasks();
+    await flushTasks();
+    expect(
+      (mounted.root.querySelector('input[name="note"]') as unknown as HTMLInputElement)?.value,
+    ).toBe("设计组的新成员");
+    expect(mounted.root.querySelector('[data-region="mutation-notice"]')?.textContent).toContain(
+      "管理数据已刷新",
+    );
+    mounted.app.destroy();
   });
 });
 

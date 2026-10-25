@@ -109,7 +109,8 @@ describe("vNext one-screen shell", () => {
     });
     expect(root.querySelector('[role="dialog"]')).toBeNull();
     expect(root.textContent).toContain("阿明");
-    expect(root.textContent).toContain("退出");
+    await click(byRole(root, "button", "设置"));
+    expect(byRole(root, "button", "退出登录")).toBeTruthy();
   });
 
   it("switches to registration, reports pending approval, and keeps command errors inline", async () => {
@@ -608,7 +609,7 @@ describe("vNext one-screen shell", () => {
     expect(root.textContent).toContain("登录密码已设置，此账户密钥已永久失效");
   });
 
-  it("renders authenticated rooms, invitations, create-room, and logout without hidden tabs", async () => {
+  it("keeps rooms and invitations together with account actions in settings", async () => {
     const store = new TestUiStore();
     const state = baseSlices();
     store.update({
@@ -658,7 +659,8 @@ describe("vNext one-screen shell", () => {
       name: "ROOM_SELECT",
       payload: { roomId: "018f8f8e-4b5c-7d6e-8f90-123456789c34" },
     });
-    await click(byRole(root, "button", "退出"));
+    await click(byRole(root, "button", "设置"));
+    await click(byRole(root, "button", "退出登录"));
     expect(store.commandCalls.at(-1)).toEqual({ name: "AUTH_LOGOUT" });
   });
 

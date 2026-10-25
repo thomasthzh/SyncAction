@@ -314,6 +314,7 @@ export class BackgroundController {
           });
         },
         onRemotePresenceChanged: async (logicalTabIds) => {
+          await mediaController?.handlePresenceChanged();
           await Promise.all(
             logicalTabIds.flatMap((logicalTabId) => [
               pointerController?.handleContentCompatibilityChanged(logicalTabId),

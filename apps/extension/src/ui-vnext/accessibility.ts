@@ -4,14 +4,31 @@ const FOCUSABLE_SELECTOR = [
   "input:not([disabled])",
   "select:not([disabled])",
   "textarea:not([disabled])",
+  "details > summary",
   '[tabindex]:not([tabindex="-1"])',
 ].join(",");
 
 export function getFocusableElements(root: HTMLElement): HTMLElement[] {
-  return [...root.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)].filter(
-    (element) =>
-      !element.hidden && element.getAttribute("aria-hidden") !== "true" && element.tabIndex >= 0,
-  );
+  return [...root.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)].filter((element) => {
+    if (element.closest('[hidden], [inert], [aria-hidden="true"]') !== null) return false;
+    if (
+      element.tabIndex < 0 &&
+      !(element.matches("summary") && !element.hasAttribute("tabindex"))
+    ) {
+      return false;
+    }
+    for (
+      let ancestor = element.parentElement;
+      ancestor !== null;
+      ancestor = ancestor.parentElement
+    ) {
+      if (ancestor.matches("details:not([open])")) {
+        const summary = [...ancestor.children].find((child) => child.tagName === "SUMMARY");
+        if (!summary?.contains(element)) return false;
+      }
+    }
+    return true;
+  });
 }
 
 export function installFocusTrap(dialog: HTMLElement, restoreTo: HTMLElement): () => void {

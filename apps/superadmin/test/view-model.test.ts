@@ -138,7 +138,7 @@ describe("administrator console view models", () => {
         tone: "success",
       },
       { id: "sessions", label: "活跃会话", value: "7", tone: "neutral" },
-      { id: "system", label: "系统状态", value: "正常", tone: "success" },
+      { id: "system", label: "数据库读取", value: "已响应", tone: "success" },
     ]);
   });
 

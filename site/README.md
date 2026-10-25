@@ -33,7 +33,7 @@ site permission and compatible content. Permission revocation stops future colla
 not delete previously shared room information. Screen/video streaming and remote device control are
 not promised.
 
-Application download links still target v0.9.14. Website/film revisions do not upgrade the extension
+Application download links still target v0.9.15. Website/film revisions do not upgrade the extension
 or server. The public server address is not an administrative URL; never put credentials or private
 configuration in this directory. Existing users should retain the extension directory and identity
 when reloading an update. Detailed installation and compatibility notes live in the linked client
