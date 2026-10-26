@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
 import type { JSX } from "preact";
+import { capturePageShareContext } from "../page-share-context.js";
 import type { UiStore } from "../store.js";
 import { shareResult } from "../share-result.js";
 import { useCommandFeedback } from "../use-command-feedback.js";
@@ -126,7 +127,7 @@ export function StartWatchingCard({
     requestedRoom.current = store.room.value.selectedRoomId;
     requestedOrigin.current = access.origin;
     requestedRevision.current = access.documentRevision;
-    requestedUrl.current = null;
+    requestedUrl.current = access.url ?? null;
     feedback.setErrorCode(null);
     if (access.documentRevision !== null) {
       try {
@@ -137,9 +138,19 @@ export function StartWatchingCard({
       return;
     }
     setStage("SHARING");
+    const expectedContext = capturePageShareContext(store);
+    if (expectedContext === null) {
+      inFlight.current = false;
+      setStage("IDLE");
+      feedback.setErrorCode("PROTECTED_PAGE");
+      return;
+    }
     const result = await feedback.run(
       "分享当前视频页面",
-      async () => shareResult(await store.command({ name: "CURRENT_TAB_SHARE" })).result,
+      async () =>
+        shareResult(
+          await store.command({ name: "CURRENT_TAB_SHARE", payload: { expectedContext } }),
+        ).result,
     );
     if (!isCurrent()) {
       inFlight.current = false;

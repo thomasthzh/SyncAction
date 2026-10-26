@@ -17,6 +17,7 @@ export interface PermissionDialogProps {
   readonly externalErrorCode?: string | null;
   readonly onConfirm: (agreed: boolean) => PermissionConfirmation | Promise<PermissionConfirmation>;
   readonly onClose: () => void;
+  readonly onRetry?: () => void;
 }
 
 const FEATURE_LABELS: Record<PageFeature, string> = {
@@ -37,6 +38,7 @@ export function PermissionDialog({
   externalErrorCode = null,
   onConfirm,
   onClose,
+  onRetry,
 }: PermissionDialogProps): JSX.Element {
   const [agreed, setAgreed] = useState(false);
   const [pending, setPending] = useState(false);
@@ -99,6 +101,7 @@ export function PermissionDialog({
 
   const titleId = "syncaction-permission-title";
   const effectiveErrorCode = externalErrorCode ?? errorCode;
+  const preflightFailed = !ready && externalErrorCode !== null;
   const stale =
     effectiveErrorCode === "PAGE_PERMISSION_INTENT_STALE" ||
     effectiveErrorCode === "PAGE_CHANGED_DURING_PERMISSION";
@@ -106,7 +109,7 @@ export function PermissionDialog({
     <ModalDialog titleId={titleId} pending={pending} onClose={onClose}>
       <header class="dialog-header">
         <div>
-          <p class="eyebrow">按网站授权</p>
+          <p class="eyebrow">插件页面访问权限</p>
           <h2 id={titleId}>允许页面协作</h2>
         </div>
         <button
@@ -122,50 +125,55 @@ export function PermissionDialog({
       </header>
       <div class="permission-task">
         <strong>允许后继续：{nextAction}</strong>
-        <p>只继续本次操作。服务器、房间或页面变化后，需要从当前页面重新发起。</p>
+        <p>允许 SyncAction 在这类页面显示光标、弹幕和画笔。由浏览器授予权限，无需向网站申请。</p>
       </div>
       <div class="permission-scope">
         <span>当前网站</span>
         <strong>{origin}</strong>
-        <p>授权覆盖此网站的页面，并按当前服务器与条款版本隔离；其他网站需另行允许。</p>
+        <p>同一服务下会记住对此网站的允许；换房间无需重复授权。你可随时在设置中撤回。</p>
       </div>
-      <section class="permission-disclosure" aria-label="页面协作数据说明">
-        <h3>启用后可能发送</h3>
-        <ul>
-          <li>逻辑标签页标识与页面兼容性摘要</li>
-          <li>量化后的光标与画笔坐标</li>
-          <li>已识别媒体的播放状态</li>
-          <li>你主动发送的弹幕与画笔内容</li>
-        </ul>
-        <h3>明确不会发送</h3>
-        <ul>
-          <li>不会发送 Cookie、密码或表单输入</li>
-          <li>不会发送页面文字、DOM、截图或视频流</li>
-          <li>不会发送浏览历史或无关标签页</li>
-        </ul>
-        <p class="subtle-copy">
-          授权仅适用于上方精确网站，并按当前服务器配置和条款版本隔离。
-          <a href={privacyPageUrl} target="_blank" rel="noreferrer">
-            查看本地隐私说明
-          </a>
-        </p>
-      </section>
+      <p class="permission-summary-copy">
+        只同步共享页的协作与播放状态，不发送 Cookie、密码或表单输入。
+      </p>
       <details class="permission-technical-details">
-        <summary>权限与条款详情</summary>
-        <dl class="permission-summary">
-          <div>
-            <dt>本次功能</dt>
-            <dd>{FEATURE_LABELS[feature]}</dd>
-          </div>
-          <div>
-            <dt>浏览器权限</dt>
-            <dd>{browserPermission}</dd>
-          </div>
-          <div>
-            <dt>协议版本</dt>
-            <dd>{termsVersion}</dd>
-          </div>
-        </dl>
+        <summary>查看数据和权限说明</summary>
+        <section class="permission-disclosure" aria-label="页面协作数据说明">
+          <h3>启用后可能发送</h3>
+          <ul>
+            <li>逻辑标签页标识与页面兼容性摘要</li>
+            <li>量化后的光标与画笔坐标</li>
+            <li>已识别媒体的播放状态</li>
+            <li>你主动发送的弹幕与画笔内容</li>
+          </ul>
+          <h3>明确不会发送</h3>
+          <ul>
+            <li>不会发送 Cookie、密码或表单输入</li>
+            <li>不会发送页面文字、DOM、截图或视频流</li>
+            <li>不会发送浏览历史或无关标签页</li>
+          </ul>
+          <p class="subtle-copy">
+            授权仅适用于上方精确网站，并按当前服务器配置和条款版本隔离。
+            <a href={privacyPageUrl} target="_blank" rel="noreferrer">
+              查看本地隐私说明
+            </a>
+          </p>
+        </section>
+        <div class="permission-summary-details">
+          <dl class="permission-summary">
+            <div>
+              <dt>本次功能</dt>
+              <dd>{FEATURE_LABELS[feature]}</dd>
+            </div>
+            <div>
+              <dt>浏览器权限</dt>
+              <dd>{browserPermission}</dd>
+            </div>
+            <div>
+              <dt>协议版本</dt>
+              <dd>{termsVersion}</dd>
+            </div>
+          </dl>
+        </div>
       </details>
       <label class="agreement-row">
         <input
@@ -185,18 +193,20 @@ export function PermissionDialog({
         <button
           class="primary-button"
           type="button"
-          disabled={!agreed || pending || !ready || stale}
-          onClick={confirm}
+          disabled={preflightFailed ? onRetry === undefined : !agreed || pending || !ready || stale}
+          onClick={preflightFailed ? onRetry : confirm}
         >
           {pending
             ? "正在启用…"
-            : !ready
-              ? "正在检查…"
-              : stale
-                ? "请重新发起授权"
-                : permissionSaved
-                  ? "重试启用"
-                  : "允许当前站点"}
+            : preflightFailed
+              ? "重新检查"
+              : !ready
+                ? "正在检查…"
+                : stale
+                  ? "请重新发起授权"
+                  : permissionSaved
+                    ? "重试启用"
+                    : "允许当前站点"}
         </button>
       </footer>
     </ModalDialog>

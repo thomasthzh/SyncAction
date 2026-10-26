@@ -1,13 +1,18 @@
-import type {
-  BrowserActuator,
-  BrowserActuatorResult,
-  BrowserObserver,
-  BrowserObserverResult,
+import {
+  BrowserObserverEventSchema,
+  type BrowserActuator,
+  type BrowserActuatorResult,
+  type BrowserObserver,
+  type BrowserObserverResult,
+  type PendingTabPublication,
+  type BrowserChangePolicy,
 } from "@syncaction/browser-sync";
 
 export interface RoomBrowserControllerOptions {
-  observer: Pick<BrowserObserver, "observe" | "shareTab">;
-  actuator: Pick<BrowserActuator, "reconcile">;
+  observer: Pick<BrowserObserver, "observe" | "shareTab"> &
+    Partial<Pick<BrowserObserver, "readPendingPublication" | "discardPendingPublication">>;
+  actuator: Pick<BrowserActuator, "reconcile"> & Partial<Pick<BrowserActuator, "openSharedTab">>;
+  browserChangePolicy?: BrowserChangePolicy;
 }
 
 type ObserverStatusReason = Extract<
@@ -34,8 +39,9 @@ export function browserRecoveryMessage(status: RoomBrowserStatus | null): string
 }
 
 export class RoomBrowserController {
-  readonly #observer: Pick<BrowserObserver, "observe" | "shareTab">;
-  readonly #actuator: Pick<BrowserActuator, "reconcile">;
+  readonly #observer: RoomBrowserControllerOptions["observer"];
+  readonly #actuator: RoomBrowserControllerOptions["actuator"];
+  readonly #browserChangePolicy: BrowserChangePolicy;
   #tail: Promise<void> = Promise.resolve();
   #status: RoomBrowserStatus = {
     state: "IDLE",
@@ -47,23 +53,69 @@ export class RoomBrowserController {
   public constructor(options: RoomBrowserControllerOptions) {
     this.#observer = options.observer;
     this.#actuator = options.actuator;
+    this.#browserChangePolicy = options.browserChangePolicy ?? "AUTOMATIC";
   }
 
   public getStatus(): RoomBrowserStatus {
     return structuredClone(this.#status);
   }
 
+  public readPendingPublication(tabId: unknown): PendingTabPublication | null {
+    return this.#observer.readPendingPublication?.(tabId) ?? null;
+  }
+
+  public openSharedTab(logicalTabId: unknown): Promise<BrowserActuatorResult> {
+    return this.#enqueue(async () => {
+      if (this.#actuator.openSharedTab === undefined) throw new Error("ROOM_TAB_NOT_AVAILABLE");
+      const result = await this.#actuator.openSharedTab(logicalTabId);
+      this.#setActuatorResult(result);
+      return result;
+    });
+  }
+
   public async handleBrowserEvent(eventInput: unknown): Promise<BrowserObserverResult> {
     return this.#enqueue(async () => {
       const result = await this.#observer.observe(eventInput);
+      this.#setObserverResult(result);
+      const event = BrowserObserverEventSchema.safeParse(eventInput);
+      if (
+        this.#browserChangePolicy === "MANUAL" &&
+        event.success &&
+        event.data.type === "TAB_UPDATED" &&
+        (result.kind === "EFFECT_CONSUMED" ||
+          (result.kind === "IGNORED" && result.reason === "NO_CHANGE"))
+      ) {
+        // Browser navigation completes after the replica transition. Revalidate
+        // the finished document without enqueueing another controller operation.
+        this.#setActuatorResult(await this.#actuator.reconcile({ confirmedRecovery: false }));
+      }
+      return result;
+    });
+  }
+
+  public async shareBrowserTab(
+    tabIdInput: unknown,
+    expectedUrl?: string,
+  ): Promise<BrowserObserverResult> {
+    return this.#enqueue(async () => {
+      const result = await this.#observer.shareTab(
+        tabIdInput,
+        expectedUrl === undefined ? undefined : { expectedUrl },
+      );
       this.#setObserverResult(result);
       return result;
     });
   }
 
-  public async shareBrowserTab(tabIdInput: unknown): Promise<BrowserObserverResult> {
+  public async shareBrowserTabAsNew(
+    tabIdInput: unknown,
+    expectedUrl?: string,
+  ): Promise<BrowserObserverResult> {
     return this.#enqueue(async () => {
-      const result = await this.#observer.shareTab(tabIdInput);
+      const result = await this.#observer.shareTab(tabIdInput, {
+        asNew: true,
+        ...(expectedUrl === undefined ? {} : { expectedUrl }),
+      });
       this.#setObserverResult(result);
       return result;
     });
@@ -97,6 +149,7 @@ export class RoomBrowserController {
     switch (result.kind) {
       case "INTENT_RECORDED":
       case "EFFECT_CONSUMED":
+      case "LOCAL_STATE_CHANGED":
         this.#status = {
           state: "SYNCHRONIZED",
           reason: null,

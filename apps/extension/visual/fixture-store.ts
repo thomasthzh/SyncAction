@@ -8,7 +8,7 @@ import type {
 } from "../src/ui-vnext/store.js";
 import type { UiCommandResult, UiStateSlices } from "../src/ui/ui-protocol.js";
 
-export type VisualFixture = "lobby" | "room" | "guest";
+export type VisualFixture = "lobby" | "room" | "guest" | "room-unshared";
 
 export const FIXTURE_NOW_MS = Date.parse("2026-08-24T08:00:00.000Z");
 
@@ -285,12 +285,21 @@ function roomSlices(): UiStateSlices {
 }
 
 export function createVisualStore(fixture: VisualFixture): UiStore {
-  const slices = fixture === "room" ? roomSlices() : lobbySlices();
+  const slices = fixture === "room" || fixture === "room-unshared" ? roomSlices() : lobbySlices();
+  if (fixture === "room-unshared") {
+    slices.pageAccess = {
+      ...slices.pageAccess,
+      documentRevision: null,
+      contentCompatibility: null,
+      enabledFeatures: [],
+      reason: "ROOM_DOCUMENT_UNAVAILABLE",
+    };
+  }
   if (fixture === "guest") {
     slices.shell = { ...slices.shell, phase: "SIGNED_OUT", account: null };
     slices.discovery = { ...slices.discovery, rooms: [], invitations: [] };
   }
-  return new VisualUiStore(slices);
+  return new VisualUiStore(slices, fixture === "room-unshared");
 }
 
 class VisualUiStore implements UiStore {
@@ -312,7 +321,10 @@ class VisualUiStore implements UiStore {
   public readonly pendingCommands = signal<ReadonlySet<string>>(new Set());
   public readonly commandError = signal<UiCommandError | null>(null);
 
-  public constructor(state: UiStateSlices) {
+  public constructor(
+    state: UiStateSlices,
+    private readonly pageToolFixture = false,
+  ) {
     this.shell = signal(state.shell);
     this.discovery = signal(state.discovery);
     this.room = signal(state.room);
@@ -322,7 +334,26 @@ class VisualUiStore implements UiStore {
   }
 
   public command(_command: UiCommandInput): Promise<UiCommandResult> {
-    void _command;
+    if (this.pageToolFixture && _command.name === "CURRENT_TAB_SHARE") {
+      return Promise.resolve({
+        type: "ui.command.result",
+        commandId: uuid(900),
+        ok: true,
+        value: {
+          kind: "INTENT_RECORDED",
+          sharedPageContext: { tabId: 42, url: "https://docs.example/article" },
+        },
+      });
+    }
+    if (this.pageToolFixture && _command.name === "PAGE_PERMISSION_REFRESH") {
+      this.pageAccess.value = {
+        ...this.pageAccess.value,
+        documentRevision: { roomEpoch: 0, tabUpdatedAtSeq: 12 },
+        contentCompatibility: "EXACT",
+        enabledFeatures: ["POINTER", "DANMAKU", "DRAWING", "MEDIA_CONTROL"],
+        reason: null,
+      };
+    }
     return Promise.resolve({
       type: "ui.command.result",
       commandId: uuid(900),

@@ -125,6 +125,7 @@ let transport: FakePresenceTransport;
 let presence: ActiveTabPresenceController;
 let roomSyncRequests: number;
 let remotePresenceChanges: string[][];
+let statusChanges: number;
 
 beforeEach(() => {
   now = 1_785_104_000_000;
@@ -133,6 +134,7 @@ beforeEach(() => {
   transport = new FakePresenceTransport();
   roomSyncRequests = 0;
   remotePresenceChanges = [];
+  statusChanges = 0;
   presence = new ActiveTabPresenceController({
     roomId,
     browserSessionId,
@@ -148,10 +150,114 @@ beforeEach(() => {
     onRemotePresenceChanged: async (logicalTabIds) => {
       remotePresenceChanges.push([...logicalTabIds]);
     },
+    onStatusChanged: () => {
+      statusChanges += 1;
+    },
   });
 });
 
 describe("ActiveTabPresenceController", () => {
+  it("stays online outside the shared page while its navigation is awaiting confirmation", async () => {
+    await presence.handleActiveTabChanged(7);
+    await presence.setSynchronized(true);
+    expect(transport.updates.at(-1)?.logicalTabId).toBe(logicalTabId);
+    currentRecord = ReplicaRecordSchema.parse({
+      ...currentRecord,
+      nextOutboxSeq: 2,
+      outbox: [
+        {
+          outboxSeq: 1,
+          enqueuedAtMs: now,
+          envelope: {
+            protocolVersion: 1,
+            roomId,
+            roomEpoch: 0,
+            deviceId,
+            baseServerSeq: 1,
+            clientOpId: "018f8f8e-4b5c-7d6e-8f90-123456789bff",
+            operation: { type: "tab.navigate", logicalTabId, url: "https://example.com/new" },
+          },
+        },
+      ],
+    });
+    await presence.handleBindingsChanged();
+    expect(transport.updates.at(-1)?.logicalTabId).toBeNull();
+    await expect(
+      presence.handlePageCompatibilityReport(7, compatibilityReport("A".repeat(43))),
+    ).resolves.toBe(false);
+    expect(presence.getStatus().state).toBe("ONLINE");
+    currentRecord = record();
+    await presence.handleBindingsChanged();
+    expect(transport.updates.at(-1)?.logicalTabId).toBe(logicalTabId);
+  });
+
+  it("notifies member changes for self and members outside shared pages without waking page effects", async () => {
+    await presence.setSynchronized(true);
+    const baseline = statusChanges;
+    const own = {
+      ...v2Presence(now + 30_000),
+      userId: localUserId,
+      logicalTabId: null,
+      contentContext: null,
+    };
+    transport.handler?.({ ...snapshotV2(1, now + 30_000), presences: [own] });
+    await presence.whenIdle();
+    expect(statusChanges).toBe(baseline + 1);
+    expect(presence.getStatus().presences).toHaveLength(1);
+    expect(remotePresenceChanges).toEqual([]);
+
+    transport.handler?.(
+      deltaV2(1, {
+        kind: "UPSERT",
+        presence: { ...v2Presence(now + 30_000), logicalTabId: null, contentContext: null },
+      }),
+    );
+    await presence.whenIdle();
+    expect(statusChanges).toBe(baseline + 2);
+    expect(presence.getStatus().presences).toHaveLength(2);
+    expect(remotePresenceChanges).toEqual([]);
+
+    transport.handler?.(deltaV2(2, { kind: "REMOVE", userId: remoteUserId, deviceId }));
+    await presence.whenIdle();
+    expect(statusChanges).toBe(baseline + 3);
+    expect(presence.getStatus().presences).toHaveLength(1);
+    expect(remotePresenceChanges).toEqual([]);
+  });
+
+  it("ignores lease-only renewals but notifies expiry, heartbeat failure and recovery", async () => {
+    await presence.setSynchronized(true);
+    const outside = { ...v2Presence(now + 30_000), logicalTabId: null, contentContext: null };
+    transport.handler?.({ ...snapshotV2(1, now + 30_000), presences: [outside] });
+    await presence.whenIdle();
+    const baseline = statusChanges;
+    now += 1_000;
+    transport.handler?.(
+      deltaV2(1, { kind: "UPSERT", presence: { ...outside, expiresAt: now + 30_000 } }),
+    );
+    scheduler.tick();
+    await presence.whenIdle();
+    expect(statusChanges).toBe(baseline);
+
+    now += 30_000;
+    scheduler.tick();
+    await presence.whenIdle();
+    expect(statusChanges).toBe(baseline + 1);
+    expect(presence.getStatus().presences).toEqual([]);
+    transport.failure = new Error("NETWORK_UNAVAILABLE");
+    scheduler.tick();
+    await presence.whenIdle();
+    expect(statusChanges).toBe(baseline + 2);
+    expect(presence.getStatus().state).toBe("DEGRADED");
+    scheduler.tick();
+    await presence.whenIdle();
+    expect(statusChanges).toBe(baseline + 2);
+    transport.failure = undefined;
+    scheduler.tick();
+    await presence.whenIdle();
+    expect(statusChanges).toBe(baseline + 3);
+    expect(presence.getStatus().state).toBe("ONLINE");
+  });
+
   it("publishes online-outside immediately and renews every ten seconds", async () => {
     await presence.setSynchronized(true);
 

@@ -197,6 +197,35 @@ beforeEach(async () => {
 });
 
 describe("DanmakuController exact routing", () => {
+  it("pauses an existing route while a new URL has not been confirmed", async () => {
+    await controller.handleActiveTabChanged(11);
+    await controller.setSynchronized(true);
+    expect(controller.getStatus().ready).toBe(true);
+    currentRecord = ReplicaRecordSchema.parse({
+      ...currentRecord,
+      nextOutboxSeq: 2,
+      outbox: [
+        {
+          outboxSeq: 1,
+          enqueuedAtMs: now,
+          envelope: {
+            protocolVersion: 1,
+            roomId,
+            roomEpoch: 3,
+            deviceId,
+            baseServerSeq: 9,
+            clientOpId: "018f8f8e-4b5c-7d6e-8f90-123456789eff",
+            operation: { type: "tab.navigate", logicalTabId, url: "https://example.com/new" },
+          },
+        },
+      ],
+    });
+    await controller.handleBindingsChanged();
+    expect(controller.getStatus().ready).toBe(false);
+    await controller.handleSubmit(11, 0, submission());
+    expect(transport.sent).toEqual([]);
+  });
+
   it("accepts runtime state only from the exact active top document", async () => {
     await controller.handleActiveTabChanged(11);
     await controller.setSynchronized(true);

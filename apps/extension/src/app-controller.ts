@@ -61,13 +61,31 @@ import {
 } from "./server-profile.js";
 import {
   MediaGroupCreateExpectedContextSchema,
+  PageToolExpectedContextSchema,
+  PageShareExpectedContextSchema,
   type MediaGroupCreateExpectedContext,
+  type PageToolExpectedContext,
+  type PageShareExpectedContext,
   type UiSliceHint,
 } from "./ui/ui-protocol.js";
 
 export const PRODUCT_SELECTION_STORAGE_KEY = "syncaction.product-selections.v2";
 export const LEGACY_PRODUCT_SELECTION_STORAGE_KEY = "syncaction.product-selection.v1";
 const SESSION_LIFECYCLE_RETRY_MS = 1_000;
+
+/** Page access depends on confirmed document/binding and compatibility state,
+ * not media position or presence heartbeat timestamps. */
+function pageAccessRuntimeKey(room: ExtensionStatus | null): string {
+  return JSON.stringify([
+    room?.state,
+    room?.serverSeq,
+    room?.bindingCount,
+    room?.bindingValidationKey,
+    room?.browser?.state,
+    room?.browser?.reason,
+    room?.presence?.compatibilities ?? [],
+  ]);
+}
 
 const LegacyProductSelectionSchema = z
   .object({
@@ -246,9 +264,12 @@ export interface RoomRuntime {
   ): Promise<void>;
   handlePageCapability(reportInput: PageCapabilityReport): Promise<void>;
   handlePagePermissionBoundaryChanged(): Promise<void>;
-  toggleDanmakuInput(): Promise<void>;
+  toggleDanmakuInput(expected?: {
+    tabId: number;
+    documentRevision: DocumentRevision;
+  }): Promise<void>;
   setDanmakuHidden?(hidden: boolean): Promise<void>;
-  togglePagePen(): Promise<void>;
+  togglePagePen(expected?: { tabId: number; documentRevision: DocumentRevision }): Promise<void>;
   jumpToMediaMember(userId: string): Promise<void>;
   createMediaGroup?(tabId: number, expectedRevision?: DocumentRevision): Promise<MediaCommandAck>;
   alignMediaGroupOnce(playbackGroupId: string): Promise<void>;
@@ -257,12 +278,21 @@ export interface RoomRuntime {
   closeMediaGroup?(playbackGroupId?: string): Promise<void>;
   takeOverMediaDevice?(playbackGroupId: string): Promise<void>;
   activateLogicalTab?(logicalTabId: string): Promise<void>;
+  removeSharedTab?(logicalTabId: string): Promise<void>;
+  getPendingPagePublication?(tabId: unknown): { logicalTabId: string } | null;
   decideMediaProposal(
     playbackGroupId: string,
     proposalId: string,
     decision: "APPROVE" | "REJECT",
   ): Promise<void>;
-  shareBrowserTab(tabIdInput: unknown): Promise<BrowserObserverResult | undefined>;
+  shareBrowserTab(
+    tabIdInput: unknown,
+    expectedUrl?: string,
+  ): Promise<BrowserObserverResult | undefined>;
+  shareBrowserTabAsNew?(
+    tabId: unknown,
+    expectedUrl?: string,
+  ): Promise<BrowserObserverResult | undefined>;
   confirmBrowserRecovery(): Promise<BrowserActuatorResult | undefined>;
 }
 
@@ -429,6 +459,7 @@ export interface ExtensionPageAccessContext {
   serverTermsVersion: string | null;
   documentRevision: DocumentRevision | null;
   contentCompatibility: ContentCompatibility | null;
+  pendingPublication?: { logicalTabId: string } | null;
 }
 
 type ExtensionAppStatusBase = Omit<ExtensionAppStatus, "room" | "collaboration">;
@@ -571,6 +602,11 @@ export class ExtensionAppController {
             },
       contentCompatibility:
         documentRevision === null || contentCompatibility === null ? null : contentCompatibility,
+      ...(runtime?.getPendingPagePublication === undefined
+        ? {}
+        : {
+            pendingPublication: runtime.getPendingPagePublication(tabId),
+          }),
     };
   }
 
@@ -1201,11 +1237,86 @@ export class ExtensionAppController {
   }
 
   public handleBrowserEvent(eventInput: unknown): Promise<BrowserObserverResult | undefined> {
-    return this.#enqueue(async () => this.#runtime?.handleBrowserEvent(eventInput));
+    return this.#enqueue(async () => {
+      const result = await this.#runtime?.handleBrowserEvent(eventInput);
+      // Native navigation/reload can revalidate an existing binding without
+      // changing room sequence or binding count. Refresh its page access too.
+      this.#emitChanged(["room", "collaboration", "pageAccess"]);
+      return result;
+    });
   }
 
-  public shareBrowserTab(tabIdInput: unknown): Promise<BrowserObserverResult | undefined> {
-    return this.#enqueue(async () => this.#runtime?.shareBrowserTab(tabIdInput));
+  public shareBrowserTab(
+    tabIdInput: unknown,
+    expected?: PageShareExpectedContext,
+  ): Promise<BrowserObserverResult | undefined> {
+    return this.#shareBrowserTab(tabIdInput, expected, false);
+  }
+
+  public shareBrowserTabAsNew(
+    tabId: unknown,
+    expected: PageShareExpectedContext,
+  ): Promise<BrowserObserverResult | undefined> {
+    return this.#shareBrowserTab(tabId, expected, true);
+  }
+
+  #shareBrowserTab(
+    tabIdInput: unknown,
+    expectedInput: PageShareExpectedContext | undefined,
+    asNew: boolean,
+  ): Promise<BrowserObserverResult | undefined> {
+    const tabId = z.number().int().nonnegative().safe().parse(tabIdInput);
+    const expected =
+      expectedInput === undefined ? undefined : PageShareExpectedContextSchema.parse(expectedInput);
+    const captured = this.#captureMediaCommandContext();
+    const capturedRoomId = this.#roomDetail?.id;
+    return this.#enqueue(async () => {
+      const runtime = this.#runtime;
+      if (
+        captured.profileId !== this.#profileId ||
+        captured.runtime !== runtime ||
+        captured.generation !== this.#runtimeGeneration ||
+        capturedRoomId !== this.#roomDetail?.id
+      )
+        throw new Error("PAGE_TOOL_CONTEXT_CHANGED");
+      if (expected !== undefined) {
+        this.#requireAuthenticated();
+        if (
+          expected.profileId !== this.#profileId ||
+          expected.roomId !== this.#roomDetail?.id ||
+          expected.tabId !== tabId ||
+          runtime === undefined
+        )
+          throw new Error("PAGE_TOOL_CONTEXT_CHANGED");
+      }
+      if (asNew) {
+        if (runtime?.shareBrowserTabAsNew === undefined) throw new Error("ROOM_TAB_NOT_AVAILABLE");
+        return expected?.url === undefined
+          ? runtime.shareBrowserTabAsNew(tabId)
+          : runtime.shareBrowserTabAsNew(tabId, expected.url);
+      }
+      return expected?.url === undefined
+        ? runtime?.shareBrowserTab(tabId)
+        : runtime?.shareBrowserTab(tabId, expected.url);
+    });
+  }
+
+  public removeSharedTab(input: {
+    logicalTabId: string;
+    profileId: string;
+    roomId: string;
+  }): Promise<void> {
+    const logicalTabId = LogicalTabIdSchema.parse(input.logicalTabId);
+    const profileId = ServerProfileIdSchema.parse(input.profileId);
+    const roomId = RoomIdSchema.parse(input.roomId);
+    return this.#enqueue(async () => {
+      this.#requireAuthenticated();
+      if (this.#profileId !== profileId || this.#roomDetail?.id !== roomId) {
+        throw new Error("PAGE_TOOL_CONTEXT_CHANGED");
+      }
+      if (this.#runtime?.removeSharedTab === undefined) throw new Error("ROOM_TAB_NOT_AVAILABLE");
+      await this.#runtime.removeSharedTab(logicalTabId);
+    });
   }
 
   public handleActiveTabChanged(tabIdInput: unknown): Promise<void> {
@@ -1393,8 +1504,8 @@ export class ExtensionAppController {
     });
   }
 
-  public toggleDanmakuInput(): Promise<void> {
-    return this.#enqueue(async () => this.#requireRuntime().toggleDanmakuInput());
+  public toggleDanmakuInput(expected?: PageToolExpectedContext): Promise<void> {
+    return this.#togglePageTool("DANMAKU", expected);
   }
 
   public setDanmakuHidden(hiddenInput: unknown): Promise<void> {
@@ -1408,8 +1519,8 @@ export class ExtensionAppController {
     });
   }
 
-  public togglePagePen(): Promise<void> {
-    return this.#enqueue(async () => this.#requireRuntime().togglePagePen());
+  public togglePagePen(expected?: PageToolExpectedContext): Promise<void> {
+    return this.#togglePageTool("DRAWING", expected);
   }
 
   public jumpToMediaMember(userIdInput: unknown): Promise<void> {
@@ -2257,6 +2368,43 @@ export class ExtensionAppController {
     }
   }
 
+  #togglePageTool(
+    feature: "DANMAKU" | "DRAWING",
+    expectedInput?: PageToolExpectedContext,
+  ): Promise<void> {
+    const expected =
+      expectedInput === undefined ? undefined : PageToolExpectedContextSchema.parse(expectedInput);
+    const captured = this.#captureMediaCommandContext();
+    return this.#enqueue(async () => {
+      const runtime = this.#requireRuntime();
+      if (
+        captured.profileId !== this.#profileId ||
+        captured.runtime !== runtime ||
+        captured.generation !== this.#runtimeGeneration
+      )
+        throw new Error("PAGE_TOOL_CONTEXT_CHANGED");
+      if (expected !== undefined) {
+        if (
+          expected.profileId !== this.#profileId ||
+          (expected.roomId !== undefined && expected.roomId !== this.#selection?.roomId)
+        )
+          throw new Error("PAGE_TOOL_CONTEXT_CHANGED");
+        const revision = await runtime.getPageDocumentRevision?.(expected.tabId);
+        if (
+          revision == null ||
+          revision.roomEpoch !== expected.documentRevision.roomEpoch ||
+          revision.tabUpdatedAtSeq !== expected.documentRevision.tabUpdatedAtSeq
+        )
+          throw new Error("PAGE_TOOL_CONTEXT_CHANGED");
+      }
+      if (feature === "DANMAKU") {
+        if (expected === undefined) await runtime.toggleDanmakuInput();
+        else await runtime.toggleDanmakuInput(expected);
+      } else if (expected === undefined) await runtime.togglePagePen();
+      else await runtime.togglePagePen(expected);
+    });
+  }
+
   #captureMediaCommandContext(): MediaCommandRuntimeContext {
     return {
       profileId: this.#profileId,
@@ -2434,13 +2582,17 @@ export class ExtensionAppController {
             this.#runtimeRefreshPending = true;
             continue;
           }
+          const pageAccessChanged =
+            pageAccessRuntimeKey(this.#committedStatus.room) !== pageAccessRuntimeKey(room);
           this.#committedStatus = {
             ...this.#committedStatus,
             room: structuredClone(room),
             collaboration: projectCollaborationSummary(this.#committedStatus.roomDetail, room),
           };
           this.#statusCommitRevision += 1;
-          this.#notifyChanged(["room", "collaboration"]);
+          this.#notifyChanged(
+            pageAccessChanged ? ["room", "collaboration", "pageAccess"] : ["room", "collaboration"],
+          );
         }
       } catch {
         // Keep the previous committed snapshot; a later runtime event can retry.

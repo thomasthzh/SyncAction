@@ -20,6 +20,7 @@ import {
   discoverRoomGroup,
   type BrowserState,
   type BrowserTab,
+  type BrowserChangePolicy,
 } from "./model.js";
 import { canonicalizeSharedUrl } from "./url-policy.js";
 
@@ -102,6 +103,21 @@ export interface BrowserObserverOptions {
   isActuatable: () => boolean;
   now?: () => number;
   createLogicalTabId?: () => string;
+  browserChangePolicy?: BrowserChangePolicy;
+}
+
+export interface PendingTabPublication {
+  readonly browserSessionId: string;
+  readonly tabId: number;
+  readonly logicalTabId: LogicalTabId;
+  readonly roomEpoch: number;
+  readonly baseUpdatedAtSeq: number;
+  readonly baseUrl: string;
+}
+
+export interface ShareTabOptions {
+  expectedUrl?: string;
+  asNew?: boolean;
 }
 
 export type BrowserObserverResult =
@@ -119,8 +135,17 @@ export type BrowserObserverResult =
       operation: DurableOperation;
     }
   | {
+      kind: "LOCAL_STATE_CHANGED";
+      logicalTabId: LogicalTabId;
+      tabId: number;
+    }
+  | {
       kind: "BLOCKED";
-      reason: "REPLICA_NOT_ACTUATABLE" | "ROOM_TAB_LIMIT_REACHED";
+      reason:
+        | "REPLICA_NOT_ACTUATABLE"
+        | "ROOM_TAB_LIMIT_REACHED"
+        | "PAGE_PUBLICATION_STALE"
+        | "PAGE_CONTEXT_CHANGED";
     }
   | {
       kind: "RECOVERY_REQUIRED";
@@ -147,6 +172,8 @@ export class BrowserObserver {
   readonly #isActuatable: () => boolean;
   readonly #now: () => number;
   readonly #createLogicalTabId: () => string;
+  readonly #browserChangePolicy: BrowserChangePolicy;
+  readonly #pendingPublications = new Map<number, PendingTabPublication>();
 
   public constructor(options: BrowserObserverOptions) {
     this.#roomId = RoomIdSchema.parse(options.roomId);
@@ -157,9 +184,23 @@ export class BrowserObserver {
     this.#isActuatable = options.isActuatable;
     this.#now = options.now ?? Date.now;
     this.#createLogicalTabId = options.createLogicalTabId ?? (() => crypto.randomUUID());
+    this.#browserChangePolicy = options.browserChangePolicy ?? "AUTOMATIC";
   }
 
-  public async shareTab(tabIdInput: unknown): Promise<BrowserObserverResult> {
+  public readPendingPublication(tabIdInput: unknown): PendingTabPublication | null {
+    const tabId = BrowserObjectIdSchema.parse(tabIdInput);
+    const pending = this.#pendingPublications.get(tabId);
+    return pending === undefined ? null : structuredClone(pending);
+  }
+
+  public discardPendingPublication(tabIdInput: unknown): void {
+    this.#pendingPublications.delete(BrowserObjectIdSchema.parse(tabIdInput));
+  }
+
+  public async shareTab(
+    tabIdInput: unknown,
+    options: ShareTabOptions = {},
+  ): Promise<BrowserObserverResult> {
     const tabId = BrowserObjectIdSchema.parse(tabIdInput);
     if (!this.#isActuatable()) {
       return { kind: "BLOCKED", reason: "REPLICA_NOT_ACTUATABLE" };
@@ -176,10 +217,14 @@ export class BrowserObserver {
     ) {
       return { kind: "RECOVERY_REQUIRED", reason: "STALE_BROWSER_SESSION" };
     }
-    if (record.bindings.some((binding) => binding.tabId === tabId)) {
+    const existingBinding = record.bindings.find((binding) => binding.tabId === tabId);
+    const browserTab = browserState.tabs.find((tab) => tab.tabId === tabId);
+    if (options.expectedUrl !== undefined && browserTab?.url !== options.expectedUrl) {
+      return { kind: "BLOCKED", reason: "PAGE_CONTEXT_CHANGED" };
+    }
+    if (existingBinding !== undefined && this.#browserChangePolicy === "AUTOMATIC") {
       return { kind: "IGNORED", reason: "NO_CHANGE" };
     }
-    const browserTab = browserState.tabs.find((tab) => tab.tabId === tabId);
     if (browserTab === undefined) {
       return { kind: "IGNORED", reason: "PERSONAL_TAB" };
     }
@@ -201,6 +246,69 @@ export class BrowserObserver {
     if (url === undefined) {
       return { kind: "RECOVERY_REQUIRED", reason: "UNSUPPORTED_ROOM_TAB" };
     }
+    if (options.asNew === true) this.#pendingPublications.delete(tabId);
+    if (this.#browserChangePolicy === "MANUAL") {
+      const optimistic = projectOptimisticState(record);
+      const existing =
+        existingBinding === undefined ? undefined : optimistic.tabs[existingBinding.logicalTabId];
+      if (
+        existingBinding !== undefined &&
+        (existing === undefined || existing.closedAtSeq !== null)
+      ) {
+        return { kind: "BLOCKED", reason: "PAGE_PUBLICATION_STALE" };
+      }
+      if (
+        existingBinding !== undefined &&
+        existing !== undefined &&
+        existing.closedAtSeq === null
+      ) {
+        if (canonicalRoomUrl(existing.url) === url) {
+          return { kind: "IGNORED", reason: "NO_CHANGE" };
+        }
+        this.#rememberPublication(
+          browserState.browserSessionId,
+          browserTab.tabId,
+          existing.id,
+          record,
+          existingBinding.validatedAtServerSeq,
+        );
+        await this.#replica.removeBinding(existing.id);
+      }
+      const pending = this.#pendingPublications.get(tabId);
+      if (pending !== undefined) {
+        const confirmed = record.confirmedSnapshot.tabs.find(
+          (tab) => tab.id === pending.logicalTabId,
+        );
+        if (
+          pending.browserSessionId !== browserState.browserSessionId ||
+          pending.roomEpoch !== record.confirmedSnapshot.roomEpoch ||
+          confirmed === undefined ||
+          confirmed.closedAtSeq !== null ||
+          confirmed.updatedAtSeq !== pending.baseUpdatedAtSeq ||
+          canonicalRoomUrl(confirmed.url) !== pending.baseUrl ||
+          optimistic.tabs[pending.logicalTabId]?.url !== confirmed.url
+        ) {
+          return { kind: "BLOCKED", reason: "PAGE_PUBLICATION_STALE" };
+        }
+        const operation = DurableOperationSchema.parse({
+          type: "tab.navigate",
+          logicalTabId: pending.logicalTabId,
+          url,
+        });
+        await this.#writer.enqueueLocalOperation(operation, async () => {
+          await this.#replica.bindTab({
+            logicalTabId: pending.logicalTabId,
+            tabId,
+            windowId: browserTab.windowId,
+            groupId: browserTab.groupId,
+            browserSessionId: browserState.browserSessionId,
+            validatedAtServerSeq: record.confirmedSnapshot!.serverSeq,
+          });
+        });
+        this.#pendingPublications.delete(tabId);
+        return { kind: "INTENT_RECORDED", operation };
+      }
+    }
     const discovery = discoverRoomGroup(browserState, this.#roomId);
     if (discovery.kind === "AMBIGUOUS") {
       return { kind: "RECOVERY_REQUIRED", reason: "AMBIGUOUS_ROOM_GROUP" };
@@ -209,6 +317,7 @@ export class BrowserObserver {
       return { kind: "RECOVERY_REQUIRED", reason: "UNSAFE_ROOM_GROUP" };
     }
     if (
+      this.#browserChangePolicy !== "MANUAL" &&
       discovery.kind === "FOUND" &&
       discovery.tabs.some((tab) => !record.bindings.some((binding) => binding.tabId === tab.tabId))
     ) {
@@ -275,6 +384,9 @@ export class BrowserObserver {
     }
     if (event.type === "TAB_CREATED") {
       return { kind: "IGNORED", reason: "EARLY_EVENT" };
+    }
+    if (this.#browserChangePolicy === "MANUAL") {
+      return this.#observeManualEvent(event, browserState, browserTab);
     }
     if (!this.#isActuatable()) {
       return { kind: "BLOCKED", reason: "REPLICA_NOT_ACTUATABLE" };
@@ -383,6 +495,27 @@ export class BrowserObserver {
         logicalTabId: consumed.logicalTabId,
       };
     }
+    if (this.#browserChangePolicy === "MANUAL") {
+      this.#pendingPublications.delete(event.tabId);
+      const [browserState, record] = await Promise.all([
+        this.#browserPort.readState().then((state) => BrowserStateSchema.parse(state)),
+        this.#replica.getRecord(),
+      ]);
+      const binding = record.bindings.find((candidate) => candidate.tabId === event.tabId);
+      if (binding === undefined) return { kind: "IGNORED", reason: "PERSONAL_TAB" };
+      if (
+        binding.browserSessionId !== browserState.browserSessionId ||
+        binding.windowId !== event.windowId
+      ) {
+        return { kind: "RECOVERY_REQUIRED", reason: "STALE_BROWSER_SESSION" };
+      }
+      await this.#replica.removeBinding(binding.logicalTabId);
+      return {
+        kind: "LOCAL_STATE_CHANGED",
+        logicalTabId: binding.logicalTabId,
+        tabId: event.tabId,
+      };
+    }
     if (event.isWindowClosing) {
       return { kind: "RECOVERY_REQUIRED", reason: "WINDOW_CLOSING" };
     }
@@ -419,6 +552,84 @@ export class BrowserObserver {
       await this.#replica.removeBinding(binding.logicalTabId);
     });
     return { kind: "INTENT_RECORDED", operation };
+  }
+
+  async #observeManualEvent(
+    event: Exclude<BrowserObserverEvent, { type: "TAB_REMOVED" }>,
+    browserState: BrowserState,
+    browserTab: BrowserTab | undefined,
+  ): Promise<BrowserObserverResult> {
+    const record = await this.#replica.getRecord();
+    const binding = record.bindings.find((candidate) => candidate.tabId === browserTab?.tabId);
+    if (binding === undefined) return { kind: "IGNORED", reason: "PERSONAL_TAB" };
+    if (binding.browserSessionId !== browserState.browserSessionId) {
+      return { kind: "RECOVERY_REQUIRED", reason: "STALE_BROWSER_SESSION" };
+    }
+    if (event.type === "TAB_UPDATED") {
+      const logicalTab = record.confirmedSnapshot?.tabs.find(
+        (tab) => tab.id === binding.logicalTabId,
+      );
+      const optimisticTab =
+        record.confirmedSnapshot === null
+          ? undefined
+          : projectOptimisticState(record).tabs[binding.logicalTabId];
+      if (
+        logicalTab !== undefined &&
+        optimisticTab !== undefined &&
+        canonicalRoomUrl(browserTab?.url) !== canonicalRoomUrl(optimisticTab.url)
+      ) {
+        this.#rememberPublication(
+          browserState.browserSessionId,
+          binding.tabId,
+          binding.logicalTabId,
+          record,
+          binding.validatedAtServerSeq,
+        );
+        await this.#replica.removeBinding(binding.logicalTabId);
+        return {
+          kind: "LOCAL_STATE_CHANGED",
+          logicalTabId: binding.logicalTabId,
+          tabId: binding.tabId,
+        };
+      }
+    }
+    if (browserTab?.windowId !== binding.windowId || browserTab.groupId !== binding.groupId) {
+      this.#rememberPublication(
+        browserState.browserSessionId,
+        binding.tabId,
+        binding.logicalTabId,
+        record,
+        binding.validatedAtServerSeq,
+      );
+      await this.#replica.removeBinding(binding.logicalTabId);
+      return {
+        kind: "LOCAL_STATE_CHANGED",
+        logicalTabId: binding.logicalTabId,
+        tabId: binding.tabId,
+      };
+    }
+    return { kind: "IGNORED", reason: "NO_CHANGE" };
+  }
+
+  #rememberPublication(
+    browserSessionId: string,
+    tabId: number,
+    logicalTabId: LogicalTabId,
+    record: Awaited<ReturnType<DurableReplica["getRecord"]>>,
+    validatedAtServerSeq: number,
+  ): void {
+    const snapshot = record.confirmedSnapshot;
+    const logicalTab = snapshot?.tabs.find((tab) => tab.id === logicalTabId);
+    if (snapshot === null || logicalTab === undefined || logicalTab.closedAtSeq !== null) return;
+    if (this.#pendingPublications.size >= 2_000 && !this.#pendingPublications.has(tabId)) return;
+    this.#pendingPublications.set(tabId, {
+      browserSessionId,
+      tabId,
+      logicalTabId,
+      roomEpoch: snapshot.roomEpoch,
+      baseUpdatedAtSeq: Math.min(logicalTab.updatedAtSeq, validatedAtServerSeq),
+      baseUrl: canonicalizeSharedUrl(logicalTab.url),
+    });
   }
 
   async #observeUnboundRoomTab(

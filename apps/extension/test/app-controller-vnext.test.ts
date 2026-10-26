@@ -1,5 +1,8 @@
 import {
   MediaCommandAckSchema,
+  CanonicalUuidSchema,
+  DeviceIdSchema,
+  LogicalTabIdSchema,
   ServerMetaSchema,
   type Notification,
   type PublicRoomsInvalidated,
@@ -26,8 +29,12 @@ import {
 } from "../src/app-controller.js";
 import type { ExtensionStatus } from "../src/background-controller.js";
 import { ExtensionCommandRouter } from "../src/extension-command-router.js";
-import { projectUiState } from "../src/ui/ui-state-hub.js";
-import type { UiPageAccessSlice } from "../src/ui/ui-protocol.js";
+import { projectUiState, UiStateHub, type UiStateHubPort } from "../src/ui/ui-state-hub.js";
+import {
+  PageToolExpectedContextSchema,
+  PageShareExpectedContextSchema,
+  type UiPageAccessSlice,
+} from "../src/ui/ui-protocol.js";
 import {
   ExtensionProductSessionSchema,
   type ExtensionProductSession,
@@ -725,6 +732,155 @@ describe("ExtensionAppController vNext server hub", () => {
     });
   });
 
+  it("invalidates page access through the real hub when an asynchronous room document becomes ready", async () => {
+    const selected = profile(profileAId, serverAUrl, serverAId, {
+      metadata: metadata(serverAId, { capabilities: [] }),
+    });
+    const sessions = new FakeSessions();
+    sessions.seed(profileAId, serverAUrl, serverAId);
+    const runtime = fakeRuntime([]);
+    const live = runtimeStatus();
+    let documentReady = false;
+    let compatibility: "EXACT" | "MISMATCH" = "EXACT";
+    let runtimeInput!: RoomRuntimeFactoryInput;
+    runtime.getStatus = vi.fn(async () => structuredClone(live));
+    runtime.getPageDocumentRevision = vi.fn(async () =>
+      documentReady ? { roomEpoch: 0, tabUpdatedAtSeq: 1 } : null,
+    );
+    runtime.getPageContentCompatibility = vi.fn(async () => (documentReady ? compatibility : null));
+    const { app } = createApp({
+      profiles: new FakeProfiles([selected], profileAId),
+      sessions,
+      apis: new Map([[serverAUrl, apiFixture("a", selected.metadata!, [])]]),
+      runtimeFactory: (input) => {
+        runtimeInput = input;
+        return runtime;
+      },
+    });
+    await app.start();
+    await app.selectRoom(roomId);
+    const messages: unknown[] = [];
+    const port: UiStateHubPort = {
+      postMessage: (message) => messages.push(message),
+      onMessage: { addListener: () => undefined, removeListener: () => undefined },
+      onDisconnect: { addListener: () => undefined, removeListener: () => undefined },
+    };
+    const readPageAccess = vi.fn(async (): Promise<UiPageAccessSlice> => {
+      const context = await app.getPageAccessContext(42);
+      return {
+        bindings: null,
+        tabId: 42,
+        origin: "https://docs.example",
+        supported: true,
+        browserPermissionGranted: true,
+        termsAccepted: true,
+        serverTermsVersion: context.serverTermsVersion,
+        disclosureVersion: 1,
+        documentRevision: context.documentRevision,
+        contentCompatibility: context.contentCompatibility,
+        enabledFeatures: context.documentRevision === null ? [] : ["DANMAKU"],
+        policySyncPendingCount: 0,
+        reason: context.documentRevision === null ? "ROOM_DOCUMENT_UNAVAILABLE" : null,
+      };
+    });
+    const hub = new UiStateHub({
+      source: {
+        readStatus: () => app.getProjectionStatus(),
+        readProfiles: async () => [selected],
+        readPageAccess,
+        subscribeChanged: (listener) => app.subscribe(listener),
+        execute: async () => undefined,
+      },
+    });
+    try {
+      await hub.attach(port);
+      expect(readPageAccess).toHaveBeenCalledTimes(1);
+      live.serverSeq = 1;
+      live.bindingCount = 1;
+      live.bindingValidationKey = "not-yet-validated";
+      runtimeInput.onStatusChanged?.();
+      await vi.waitFor(() => expect(readPageAccess).toHaveBeenCalledTimes(2));
+      expect((await app.getPageAccessContext(42)).documentRevision).toBeNull();
+      documentReady = true;
+      live.bindingValidationKey = "validated-at-same-room-sequence";
+      runtimeInput.onStatusChanged?.();
+      await vi.waitFor(() =>
+        expect(messages).toContainEqual(
+          expect.objectContaining({
+            type: "ui.state.patch",
+            slice: "pageAccess",
+            value: expect.objectContaining({
+              documentRevision: { roomEpoch: 0, tabUpdatedAtSeq: 1 },
+            }),
+          }),
+        ),
+      );
+      const reads = readPageAccess.mock.calls.length;
+      live.outboxCount = 1;
+      runtimeInput.onStatusChanged?.();
+      await vi.waitFor(() =>
+        expect(messages).toContainEqual(
+          expect.objectContaining({
+            type: "ui.state.patch",
+            slice: "room",
+            value: expect.objectContaining({
+              runtime: expect.objectContaining({ outboxCount: 1 }),
+            }),
+          }),
+        ),
+      );
+      expect(readPageAccess).toHaveBeenCalledTimes(reads);
+      compatibility = "MISMATCH";
+      live.presence = {
+        state: "ONLINE",
+        presences: [],
+        compatibilities: [
+          {
+            userId: CanonicalUuidSchema.parse(userId),
+            deviceId: DeviceIdSchema.parse(deviceId),
+            logicalTabId: LogicalTabIdSchema.parse("50000000-0000-4000-8000-000000000001"),
+            compatibility: "MISMATCH",
+            warning: true,
+          },
+        ],
+        lastAckExpiresAt: Date.now() + 10000,
+        errorCode: null,
+      };
+      runtimeInput.onStatusChanged?.();
+      await vi.waitFor(() =>
+        expect(messages).toContainEqual(
+          expect.objectContaining({
+            type: "ui.state.patch",
+            slice: "pageAccess",
+            value: expect.objectContaining({ contentCompatibility: "MISMATCH" }),
+          }),
+        ),
+      );
+      const compatibilityReads = readPageAccess.mock.calls.length;
+      live.presence.lastAckExpiresAt = Date.now() + 20000;
+      runtimeInput.onStatusChanged?.();
+      await vi.waitFor(() =>
+        expect(messages).toContainEqual(
+          expect.objectContaining({
+            type: "ui.state.patch",
+            slice: "room",
+            value: expect.objectContaining({
+              runtime: expect.objectContaining({
+                presence: expect.objectContaining({
+                  lastAckExpiresAt: live.presence?.lastAckExpiresAt,
+                }),
+              }),
+            }),
+          }),
+        ),
+      );
+      expect(readPageAccess).toHaveBeenCalledTimes(compatibilityReads);
+    } finally {
+      hub.dispose();
+      await app.stop();
+    }
+  });
+
   it("refreshes runtime snapshots independently and discards a late reply after switching profiles", async () => {
     const first = profile(profileAId, serverAUrl, serverAId, {
       metadata: metadata(serverAId, { capabilities: [] }),
@@ -1224,6 +1380,136 @@ describe("ExtensionAppController vNext server hub", () => {
     expect(api.getHealth).toHaveBeenCalledTimes(2);
     expect(runtimeEvents).toEqual(["runtime:start"]);
   });
+
+  it("scopes explicit page removal and sharing a conflicted draft as new to the selected server and room", async () => {
+    const meta = metadata(serverAId, { capabilities: [] });
+    const selected = profile(profileAId, serverAUrl, serverAId, { metadata: meta });
+    const sessions = new FakeSessions();
+    sessions.seed(profileAId, serverAUrl, serverAId);
+    const runtime = fakeRuntime([]);
+    runtime.removeSharedTab = vi.fn(async () => undefined);
+    runtime.shareBrowserTabAsNew = vi.fn(async () => ({
+      kind: "IGNORED" as const,
+      reason: "NO_CHANGE" as const,
+    }));
+    const { app } = createApp({
+      profiles: new FakeProfiles([selected], profileAId),
+      sessions,
+      apis: new Map([[serverAUrl, apiFixture("a", meta, [])]]),
+      runtimeFactory: () => runtime,
+    });
+    await app.start();
+    await app.selectRoom(roomId);
+    const logicalTabId = "50000000-0000-4000-8000-000000000001";
+    const expected = PageShareExpectedContextSchema.parse({
+      profileId: profileAId,
+      roomId,
+      tabId: 42,
+    });
+    await app.removeSharedTab({ ...expected, logicalTabId });
+    await app.shareBrowserTabAsNew(42, expected);
+    expect(runtime.removeSharedTab).toHaveBeenCalledWith(logicalTabId);
+    expect(runtime.shareBrowserTabAsNew).toHaveBeenCalledWith(42);
+    for (const stale of [
+      { ...expected, profileId: profileBId },
+      { ...expected, roomId: "50000000-0000-4000-8000-000000000099" },
+    ]) {
+      await expect(app.removeSharedTab({ ...stale, logicalTabId })).rejects.toThrow(
+        "PAGE_TOOL_CONTEXT_CHANGED",
+      );
+      await expect(
+        app.shareBrowserTabAsNew(42, PageShareExpectedContextSchema.parse(stale)),
+      ).rejects.toThrow("PAGE_TOOL_CONTEXT_CHANGED");
+    }
+    expect(runtime.removeSharedTab).toHaveBeenCalledTimes(1);
+    expect(runtime.shareBrowserTabAsNew).toHaveBeenCalledTimes(1);
+    await app.stop();
+  });
+
+  it.each(["shareBrowserTab", "shareBrowserTabAsNew"] as const)(
+    "rejects a queued %s after switching server instead of publishing into the next runtime",
+    async (method) => {
+      const a = profile(profileAId, serverAUrl, serverAId);
+      const b = profile(profileBId, serverBUrl, serverBId);
+      const sessions = new FakeSessions();
+      sessions.seed(profileAId, serverAUrl, serverAId);
+      sessions.seed(profileBId, serverBUrl, serverBId);
+      const runtime = fakeRuntime([]);
+      runtime.shareBrowserTab = vi.fn(async () => ({
+        kind: "IGNORED" as const,
+        reason: "NO_CHANGE" as const,
+      }));
+      runtime.shareBrowserTabAsNew = vi.fn(async () => ({
+        kind: "IGNORED" as const,
+        reason: "NO_CHANGE" as const,
+      }));
+      const { app } = createApp({
+        profiles: new FakeProfiles([a, b], profileAId),
+        sessions,
+        apis: new Map([
+          [serverAUrl, apiFixture("a", metadata(serverAId), [])],
+          [serverBUrl, apiFixture("b", metadata(serverBId), [])],
+        ]),
+        runtimeFactory: () => runtime,
+      });
+      await app.start();
+      await app.selectRoom(roomId);
+      const expected = PageShareExpectedContextSchema.parse({
+        profileId: profileAId,
+        roomId,
+        tabId: 42,
+        url: "https://news.example/article",
+      });
+      await app[method](42, expected);
+      expect(runtime[method]).toHaveBeenCalledWith(42, expected.url);
+      const switching = app.selectServer(profileBId);
+      const sharing = app[method](42, expected);
+      await Promise.all([switching, expect(sharing).rejects.toThrow("PAGE_TOOL_CONTEXT_CHANGED")]);
+      expect(runtime[method]).toHaveBeenCalledTimes(1);
+      await app.stop();
+    },
+  );
+
+  it.each(["toggleDanmakuInput", "togglePagePen"] as const)(
+    "rejects a resumed %s when its room, profile or document changed",
+    async (method) => {
+      const meta = metadata(serverAId, { capabilities: [] });
+      const selected = profile(profileAId, serverAUrl, serverAId, { metadata: meta });
+      const sessions = new FakeSessions();
+      sessions.seed(profileAId, serverAUrl, serverAId);
+      const runtime = fakeRuntime([]);
+      runtime.getPageDocumentRevision = vi.fn(async () => ({ roomEpoch: 0, tabUpdatedAtSeq: 1 }));
+      runtime[method] = vi.fn(async () => undefined);
+      const { app } = createApp({
+        profiles: new FakeProfiles([selected], profileAId),
+        sessions,
+        apis: new Map([[serverAUrl, apiFixture("a", meta, [])]]),
+        runtimeFactory: () => runtime,
+      });
+      await app.start();
+      await app.selectRoom(roomId);
+      const expected = {
+        profileId: profileAId,
+        roomId: room().id,
+        tabId: 42,
+        documentRevision: { roomEpoch: 0, tabUpdatedAtSeq: 1 },
+      };
+      await app[method](expected);
+      expect(runtime[method]).toHaveBeenCalledWith(expected);
+      for (const changed of [
+        { ...expected, profileId: profileBId },
+        { ...expected, roomId: requestId },
+        { ...expected, documentRevision: { roomEpoch: 0, tabUpdatedAtSeq: 2 } },
+      ]) {
+        await expect(app[method](PageToolExpectedContextSchema.parse(changed))).rejects.toThrow(
+          "PAGE_TOOL_CONTEXT_CHANGED",
+        );
+      }
+      expect(runtime[method]).toHaveBeenCalledTimes(1);
+      await app[method]();
+      expect(runtime[method]).toHaveBeenLastCalledWith();
+    },
+  );
 
   it("routes first-group creation through the real app and preserves media failures", async () => {
     const meta = metadata(serverAId, { capabilities: [] });

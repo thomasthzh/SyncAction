@@ -34,6 +34,7 @@ import {
 import type { DurableReplica } from "@syncaction/replica";
 import { z } from "zod";
 import { type AnnotationReplica, type AnnotationReplicaRecord } from "./annotation-replica.js";
+import { isConfirmedPageDocument } from "./confirmed-page-document.js";
 import {
   CollaborationPageContextSchema,
   DrawingDraftControlMessageSchema,
@@ -1552,7 +1553,7 @@ export class DrawingController {
         candidate.closedAtSeq === null &&
         snapshot.order.includes(candidate.id),
     );
-    if (binding === undefined || tab === undefined) {
+    if (binding === undefined || tab === undefined || !isConfirmedPageDocument(record, tab.id)) {
       return null;
     }
     return CollaborationPageContextSchema.parse({

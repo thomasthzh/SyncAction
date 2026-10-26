@@ -140,6 +140,7 @@ const previewUpdate = {
 };
 
 class FakeApi implements ChromiumPageCollaborationApi {
+  public webNavigation: ChromiumPageCollaborationApi["webNavigation"];
   public granted = false;
   public readonly grantedOrigins = new Set<string>();
   public readonly trace: string[] = [];
@@ -217,7 +218,7 @@ class FakeApi implements ChromiumPageCollaborationApi {
       }
       return [
         {
-          frameId: details.target.frameIds[0]!,
+          frameId: details.target.frameIds?.[0] ?? 0,
           documentId: `document-${String(this.executions.length)}`,
         },
       ];
@@ -1547,6 +1548,9 @@ describe("ChromePageCollaborationPort", () => {
     await port.ensureInjected(7);
     api.messages.length = 0;
     api.sendImplementation = async (_tabId, message) => {
+      if (readType(message) === "syncaction.page.announce") {
+        return undefined;
+      }
       expect(message).toEqual({
         type: "syncaction.annotation.anchor-signature.request",
         controller: "drawing",
@@ -1563,6 +1567,11 @@ describe("ChromePageCollaborationPort", () => {
       port.resolveElementAnchorSignature(7, exactContext, [{ tagName: "html", nthOfType: 1 }]),
     ).resolves.toEqual(contentSignature);
     expect(api.messages).toEqual([
+      {
+        tabId: 7,
+        message: { type: "syncaction.page.announce" },
+        options: undefined,
+      },
       {
         tabId: 7,
         message: {
@@ -1591,6 +1600,218 @@ describe("ChromePageCollaborationPort", () => {
     ]);
     expect(api.containsCalls[0]).toEqual(["https://frame.example/*"]);
     expect(api.messages[0]?.options).toEqual({ frameId: 3, documentId: "document-1" });
+  });
+
+  it("injects already-loaded child documents only with root consent and each frame's two permissions", async () => {
+    const allowed = new Set([
+      "https://example.com",
+      "https://frame.example",
+      "https://no-host.example",
+    ]);
+    for (const origin of [
+      "https://example.com",
+      "https://frame.example",
+      "https://browser-only.example",
+    ]) {
+      api.grantedOrigins.add(`${origin}/*`);
+    }
+    const frames = [
+      { frameId: 0, url: "https://example.com/article?private=1", documentId: "document-1" },
+      { frameId: 1, url: "https://example.com/embedded", documentId: "same-origin-child" },
+      { frameId: 2, url: "https://frame.example/player", documentId: "cross-origin-child" },
+      { frameId: 3, url: "https://browser-only.example/player", documentId: "no-consent-child" },
+      { frameId: 4, url: "https://no-host.example/player", documentId: "no-host-child" },
+      { frameId: 5, url: "about:blank", documentId: "unsupported-child" },
+      {
+        frameId: 6,
+        url: "https://example.com/prerender",
+        documentId: "prerender-child",
+        documentLifecycle: "prerender",
+      },
+    ];
+    const enumerate = vi.fn(async () => frames);
+    api.webNavigation = { getAllFrames: enumerate };
+    const query = vi.fn(async () => [...api.tabsById.values()]);
+    api.queryImplementation = query;
+    api.executeImplementation = async ({ target }) => {
+      const documentId = target.documentIds?.[0];
+      const frame =
+        documentId === undefined
+          ? frames[0]!
+          : frames.find((frame) => frame.documentId === documentId)!;
+      return [{ frameId: frame.frameId, documentId: frame.documentId }];
+    };
+    const reports = vi.fn();
+    const port = new ChromePageCollaborationPort(api, {
+      onCapability: reports,
+      originAccess: {
+        listAllowedOrigins: async () => [...allowed],
+        isOriginAllowed: async (origin) => allowed.has(origin),
+      },
+    });
+
+    await expect(port.ensureInjected(7)).resolves.toBe(true);
+
+    expect(enumerate).toHaveBeenCalledExactlyOnceWith({ tabId: 7 });
+    expect(query).not.toHaveBeenCalled();
+    expect(reports).not.toHaveBeenCalled();
+    expect(api.executions).toEqual([
+      { target: { tabId: 7, frameIds: [0] }, files: ["page-collaboration.js"] },
+      {
+        target: { tabId: 7, documentIds: ["same-origin-child"] },
+        files: ["page-collaboration.js"],
+      },
+      {
+        target: { tabId: 7, documentIds: ["cross-origin-child"] },
+        files: ["page-collaboration.js"],
+      },
+    ]);
+    await expect(port.verifyInjected(7, 1)).resolves.toBe(true);
+    await expect(port.verifyInjected(7, 2)).resolves.toBe(true);
+    for (const frameId of [3, 4, 5, 6])
+      await expect(port.verifyInjected(7, frameId)).resolves.toBe(false);
+    port.registerPageToolFrame(7, 0, "top");
+    await port.togglePagePen(7, exactContext);
+    expect(
+      api.messages
+        .filter((entry) => readType(entry.message) === "syncaction.drawing.command")
+        .map((entry) => entry.options),
+    ).toEqual([
+      { frameId: 0, documentId: "document-1" },
+      { frameId: 1, documentId: "same-origin-child" },
+      { frameId: 2, documentId: "cross-origin-child" },
+    ]);
+  });
+
+  it("does not enumerate children of an unconsented or browser-denied root", async () => {
+    const enumerate = vi.fn(async () => []);
+    api.webNavigation = { getAllFrames: enumerate };
+    api.granted = true;
+    const port = new ChromePageCollaborationPort(api, {
+      originAccess: { listAllowedOrigins: async () => [], isOriginAllowed: async () => false },
+    });
+    await expect(port.ensureInjected(7)).resolves.toBe(false);
+    api.granted = false;
+    const withoutHost = new ChromePageCollaborationPort(api);
+    await expect(withoutHost.ensureInjected(7)).resolves.toBe(false);
+    expect(enumerate).not.toHaveBeenCalled();
+    expect(api.executions).toEqual([]);
+  });
+
+  it("isolates child injection failures and pins each injection to its enumerated document", async () => {
+    api.granted = true;
+    const frames = [
+      { frameId: 0, url: "https://example.com/article?private=1", documentId: "document-1" },
+      { frameId: 3, url: "https://frame.example/player", documentId: "replaced-child" },
+      { frameId: 4, url: "https://example.com/stable", documentId: "stable-child" },
+    ];
+    api.webNavigation = { getAllFrames: async () => frames };
+    api.executeImplementation = async ({ target }) => {
+      const documentId = target.documentIds?.[0];
+      if (documentId === "replaced-child") throw new Error("No document with id replaced-child");
+      return [
+        { frameId: documentId === undefined ? 0 : 4, documentId: documentId ?? "document-1" },
+      ];
+    };
+    const port = new ChromePageCollaborationPort(api);
+
+    await expect(port.ensureInjected(7)).resolves.toBe(true);
+
+    expect(api.executions).toContainEqual({
+      target: { tabId: 7, documentIds: ["replaced-child"] },
+      files: ["page-collaboration.js"],
+    });
+    await expect(port.verifyInjected(7, 3)).resolves.toBe(false);
+    await expect(port.verifyInjected(7, 4)).resolves.toBe(true);
+  });
+
+  it("keeps a working root when current-frame enumeration is unavailable", async () => {
+    api.granted = true;
+    api.webNavigation = {
+      getAllFrames: async () => {
+        throw new Error("Frame enumeration unavailable");
+      },
+    };
+    const port = new ChromePageCollaborationPort(api);
+    await expect(port.ensureInjected(7)).resolves.toBe(true);
+    expect(api.executions).toHaveLength(1);
+  });
+
+  it.each([undefined, []])(
+    "keeps the top document when frame enumeration returns no current document: %j",
+    async (frames) => {
+      api.granted = true;
+      api.webNavigation = { getAllFrames: async () => frames };
+      const port = new ChromePageCollaborationPort(api);
+      await expect(port.ensureInjected(7)).resolves.toBe(true);
+      expect(api.executions).toHaveLength(1);
+    },
+  );
+
+  it.each(["navigation", "dispose"] as const)(
+    "does not inject discovered children after root %s",
+    async (change) => {
+      api.granted = true;
+      let finish:
+        ((frames: Array<{ frameId: number; url: string; documentId: string }>) => void) | undefined;
+      const enumerate = vi.fn(
+        () =>
+          new Promise<Array<{ frameId: number; url: string; documentId: string }>>((resolve) => {
+            finish = resolve;
+          }),
+      );
+      api.webNavigation = { getAllFrames: enumerate };
+      const port = new ChromePageCollaborationPort(api);
+      const injecting = port.ensureInjected(7);
+      await vi.waitFor(() => expect(enumerate).toHaveBeenCalledOnce());
+      if (change === "navigation")
+        api.tabsById.set(7, { id: 7, url: "https://other.example/changed" });
+      else await port.dispose(7);
+      finish!([
+        { frameId: 0, url: "https://example.com/article?private=1", documentId: "document-1" },
+        { frameId: 3, url: "https://frame.example/player", documentId: "child" },
+      ]);
+      await expect(injecting).resolves.toBe(false);
+      expect(api.executions).toHaveLength(1);
+    },
+  );
+
+  it("bounds child injection concurrency and stops queued work after root disposal", async () => {
+    api.granted = true;
+    const frames = [
+      { frameId: 0, url: "https://example.com/article?private=1", documentId: "document-1" },
+      ...Array.from({ length: 9 }, (_, index) => ({
+        frameId: index + 1,
+        url: `https://example.com/frame-${index}`,
+        documentId: `child-${index}`,
+      })),
+    ];
+    api.webNavigation = { getAllFrames: async () => frames };
+    const finish: Array<() => void> = [];
+    let active = 0,
+      maximum = 0;
+    api.executeImplementation = async ({ target }) => {
+      const documentId = target.documentIds?.[0];
+      if (documentId === undefined) return [{ frameId: 0, documentId: "document-1" }];
+      active += 1;
+      maximum = Math.max(maximum, active);
+      await new Promise<void>((resolve) => finish.push(resolve));
+      active -= 1;
+      return [
+        { frameId: frames.find((frame) => frame.documentId === documentId)!.frameId, documentId },
+      ];
+    };
+    const port = new ChromePageCollaborationPort(api);
+    const injecting = port.ensureInjected(7);
+    await vi.waitFor(() => expect(finish).toHaveLength(4));
+    await port.dispose(7);
+    for (const resolve of finish) resolve();
+
+    await expect(injecting).resolves.toBe(false);
+    expect(maximum).toBe(4);
+    expect(api.executions).toHaveLength(5);
+    for (let frameId = 1; frameId <= 9; frameId++)
+      expect(port.pageToolRootGeneration(7, frameId)).toBeNull();
   });
 
   it("registers one all-frame runtime only for exact granted collaboration origins", async () => {
@@ -1882,6 +2103,141 @@ describe("ChromePageCollaborationPort", () => {
         message: { type: "syncaction.page.ready" },
       }),
     ).resolves.toBe(true);
+  });
+
+  it("starts a new root after a same-URL reload and restores freshly announced child frames", async () => {
+    api.granted = true;
+    const port = new ChromePageCollaborationPort(api);
+    await port.ensureInjected(7, 0);
+    await port.ensureInjected(7, 3, "https://frame.example/player");
+    port.registerPageToolFrame(7, 0, "top");
+    port.registerPageToolFrame(7, 3, childFrameKey);
+    const oldRootGeneration = port.pageToolRootGeneration(7, 0);
+    // A freshly loaded iframe can become ready before the top frame on reload.
+    await expect(
+      port.validateOutboundMessage({
+        tabId: 7,
+        frameId: 3,
+        documentUrl: "https://frame.example/player",
+        documentId: "child-after-reload",
+        documentLifecycle: "active",
+        message: { type: "syncaction.page.ready" },
+      }),
+    ).resolves.toBe(true);
+    port.registerPageToolFrame(7, 3, childFrameKey);
+    expect(port.pageToolRootGeneration(7, 0)).toBe(oldRootGeneration);
+    api.messages.length = 0;
+
+    await expect(
+      port.validateOutboundMessage({
+        tabId: 7,
+        frameId: 0,
+        documentUrl: "https://example.com/article?private=1",
+        documentId: "top-after-reload",
+        documentLifecycle: "active",
+        message: { type: "syncaction.page.ready" },
+      }),
+    ).resolves.toBe(true);
+
+    expect(port.pageToolRootGeneration(7, 0)).not.toBe(oldRootGeneration);
+    expect(port.pageToolRootGeneration(7, 3)).toBeNull();
+    await expect(port.verifyInjected(7, 3)).resolves.toBe(false);
+    expect(api.messages).toContainEqual({
+      tabId: 7,
+      message: { type: "syncaction.page.announce" },
+      options: undefined,
+    });
+
+    port.registerPageToolFrame(7, 0, "top");
+    await port.setContext(7, context);
+    expect(api.messages.at(-1)?.options).toEqual({ frameId: 0, documentId: "top-after-reload" });
+    await expect(
+      port.validateOutboundMessage({
+        tabId: 7,
+        frameId: 3,
+        documentUrl: "https://frame.example/player",
+        documentId: "child-after-reload",
+        documentLifecycle: "active",
+        message: { type: "syncaction.page.ready" },
+      }),
+    ).resolves.toBe(true);
+    port.registerPageToolFrame(7, 3, childFrameKey);
+    await port.setDanmakuHidden(7, childContext, true);
+    expect(api.messages.at(-1)?.options).toEqual({ frameId: 3, documentId: "child-after-reload" });
+  });
+
+  it("invalidates old children when reinjection observes a new top document at the same URL", async () => {
+    api.granted = true;
+    const port = new ChromePageCollaborationPort(api);
+    await port.ensureInjected(7, 0);
+    await port.ensureInjected(7, 3, "https://frame.example/player");
+    const oldRootGeneration = port.pageToolRootGeneration(7, 0);
+    api.executeImplementation = async () => [{ frameId: 0, documentId: "top-after-reload" }];
+
+    await expect(port.ensureInjected(7, 0)).resolves.toBe(true);
+
+    expect(port.pageToolRootGeneration(7, 0)).not.toBe(oldRootGeneration);
+    await expect(port.verifyInjected(7, 3)).resolves.toBe(false);
+  });
+
+  it("keeps the current root and children for duplicate readiness and child-only document changes", async () => {
+    api.granted = true;
+    const port = new ChromePageCollaborationPort(api);
+    await port.ensureInjected(7, 0);
+    await port.ensureInjected(7, 3, "https://frame.example/player");
+    await port.ensureInjected(7, 4, "https://other-frame.example/player");
+    const rootGeneration = port.pageToolRootGeneration(7, 0);
+    api.messages.length = 0;
+
+    for (const message of [
+      {
+        frameId: 0,
+        documentUrl: "https://example.com/article?private=1",
+        documentId: "document-1",
+      },
+      { frameId: 0, documentUrl: "https://example.com/article?private=1", documentId: null },
+      { frameId: 3, documentUrl: "https://frame.example/player", documentId: "child-reloaded" },
+    ]) {
+      await expect(
+        port.validateOutboundMessage({
+          tabId: 7,
+          ...message,
+          documentLifecycle: "active",
+          message: { type: "syncaction.page.ready" },
+        }),
+      ).resolves.toBe(true);
+      expect(port.pageToolRootGeneration(7, 0)).toBe(rootGeneration);
+      await expect(port.verifyInjected(7, 4)).resolves.toBe(true);
+    }
+    expect(api.messages).toEqual([]);
+    port.registerPageToolFrame(7, 3, childFrameKey);
+    await port.setDanmakuHidden(7, childContext, true);
+    expect(api.messages.at(-1)?.options).toEqual({ frameId: 3, documentId: "child-reloaded" });
+  });
+
+  it("pins a newly available top document ID without treating an unknown previous ID as a reload", async () => {
+    api.granted = true;
+    api.executeImplementation = async ({ target }) => [{ frameId: target.frameIds?.[0] ?? 0 }];
+    const port = new ChromePageCollaborationPort(api);
+    await port.ensureInjected(7, 0);
+    await port.ensureInjected(7, 3, "https://frame.example/player");
+    const rootGeneration = port.pageToolRootGeneration(7, 0);
+
+    await expect(
+      port.validateOutboundMessage({
+        tabId: 7,
+        frameId: 0,
+        documentUrl: "https://example.com/article?private=1",
+        documentId: "newly-known-top",
+        documentLifecycle: "active",
+        message: { type: "syncaction.page.ready" },
+      }),
+    ).resolves.toBe(true);
+
+    expect(port.pageToolRootGeneration(7, 0)).toBe(rootGeneration);
+    await expect(port.verifyInjected(7, 3)).resolves.toBe(true);
+    await port.setContext(7, context);
+    expect(api.messages.at(-1)?.options).toEqual({ frameId: 0, documentId: "newly-known-top" });
   });
 
   it("retries against the latest document when navigation happens during injection", async () => {

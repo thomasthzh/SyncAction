@@ -112,6 +112,73 @@ function createRouter(input?: {
   return { router, calls, browser, pageCollaborationPort, commandBindings, originConsents };
 }
 
+it.each(["DANMAKU_TOGGLE", "PEN_TOGGLE"] as const)(
+  "binds resumed %s to the exact active page before dispatch",
+  async (name) => {
+    const expectedContext = {
+      profileId: "server-a",
+      roomId,
+      tabId: 42,
+      documentRevision: { roomEpoch: 0, tabUpdatedAtSeq: 1 },
+      url: "https://news.example/article",
+    };
+    const ready = createRouter();
+    await ready.router.execute(command(name, { expectedContext }));
+    expect(ready.calls).toEqual([
+      {
+        method: name === "DANMAKU_TOGGLE" ? "toggleDanmakuInput" : "togglePagePen",
+        args: [expectedContext],
+      },
+    ]);
+    for (const tab of [
+      { id: 43, url: expectedContext.url },
+      { id: 42, url: expectedContext.url, pendingUrl: "https://news.example/changed" },
+    ]) {
+      const changed = createRouter({ tab });
+      await expect(changed.router.execute(command(name, { expectedContext }))).rejects.toThrow(
+        "PAGE_TOOL_CONTEXT_CHANGED",
+      );
+      expect(changed.calls).toEqual([]);
+    }
+  },
+);
+
+it.each(["CURRENT_TAB_SHARE", "CURRENT_TAB_SHARE_AS_NEW"] as const)(
+  "locks %s to the active tab and exact current or pending URL before dispatch",
+  async (name) => {
+    const expectedContext = {
+      profileId: "server-a",
+      roomId,
+      tabId: 42,
+      url: "https://news.example/article",
+    };
+    const ready = createRouter();
+    await ready.router.execute(command(name, { expectedContext }));
+    expect(ready.calls).toEqual([
+      {
+        method: name === "CURRENT_TAB_SHARE" ? "shareBrowserTab" : "shareBrowserTabAsNew",
+        args: [42, expectedContext],
+      },
+    ]);
+    const withoutUrl = createRouter();
+    await withoutUrl.router.execute(
+      command(name, { expectedContext: { profileId: "server-a", roomId, tabId: 42 } }),
+    );
+    expect(withoutUrl.calls[0]?.args).toEqual([42, expectedContext]);
+    for (const tab of [
+      { id: 43, url: expectedContext.url },
+      { id: 42, url: "https://news.example/changed" },
+      { id: 42, url: expectedContext.url, pendingUrl: "https://news.example/changed" },
+    ]) {
+      const changed = createRouter({ tab });
+      await expect(changed.router.execute(command(name, { expectedContext }))).rejects.toThrow(
+        "PAGE_TOOL_CONTEXT_CHANGED",
+      );
+      expect(changed.calls).toEqual([]);
+    }
+  },
+);
+
 const cases: Array<{
   name: UiCommand["name"];
   payload?: unknown;
@@ -208,6 +275,12 @@ const cases: Array<{
     method: "activateLogicalTab",
     args: [logicalTabId],
   },
+  {
+    name: "ROOM_TAB_REMOVE",
+    payload: { logicalTabId, profileId: "server-a", roomId },
+    method: "removeSharedTab",
+    args: [{ logicalTabId, profileId: "server-a", roomId }],
+  },
   { name: "ROOM_JOIN_OPEN", payload: { roomId }, method: "joinOpenRoom", args: [roomId] },
   {
     name: "ROOM_JOIN_REQUEST",
@@ -261,6 +334,12 @@ const cases: Array<{
   },
   { name: "ROOM_DISSOLVE", method: "dissolveRoom", args: [] },
   { name: "CURRENT_TAB_SHARE", method: "shareBrowserTab", args: [42] },
+  {
+    name: "CURRENT_TAB_SHARE_AS_NEW",
+    payload: { expectedContext: { profileId: "server-a", roomId, tabId: 42 } },
+    method: "shareBrowserTabAsNew",
+    args: [42, { profileId: "server-a", roomId, tabId: 42, url: "https://news.example/article" }],
+  },
   { name: "BROWSER_RECOVERY_CONFIRM", method: "confirmBrowserRecovery", args: [] },
   { name: "DANMAKU_TOGGLE", method: "toggleDanmakuInput", args: [] },
   {

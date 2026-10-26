@@ -8,6 +8,7 @@ import type {
 import type { ReplicaRecord } from "@syncaction/replica";
 import type { ActiveTabPresenceStatus } from "./active-tab-presence.js";
 import type { MediaPageContext } from "./page-collaboration/messages.js";
+import { isConfirmedPageDocument } from "./confirmed-page-document.js";
 
 export interface MediaRoute {
   tabId: number;
@@ -69,7 +70,7 @@ export function resolveMediaRoute(
       candidate.closedAtSeq === null &&
       snapshot.order.includes(candidate.id),
   );
-  if (tab === undefined) {
+  if (tab === undefined || !isConfirmedPageDocument(record, tab.id)) {
     return null;
   }
   return {

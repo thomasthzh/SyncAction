@@ -225,6 +225,7 @@ export default defineBackground(() => {
           },
           browserPort,
           browserSessionId,
+          browserChangePolicy: "MANUAL",
           pagePort: pageCollaborationPort,
           annotationReplica: new AnnotationReplica({
             area: localArea,
@@ -293,6 +294,7 @@ export default defineBackground(() => {
               serverTermsVersion: profile.metadata?.termsVersion ?? null,
               documentRevision: null,
               contentCompatibility: null,
+              pendingPublication: null,
             }
           : await app.getPageAccessContext(tabId);
       const pendingRecords = await originConsents.listForProfile(pageContext.profileId);
@@ -335,8 +337,10 @@ export default defineBackground(() => {
       const access = UiPageAccessSliceSchema.parse({
         bindings,
         tabId,
+        url: supported ? (tab?.pendingUrl ?? tab?.url ?? null) : null,
         documentRevision: pageContext.documentRevision,
         contentCompatibility: pageContext.contentCompatibility,
+        pendingPublication: pageContext.pendingPublication ?? null,
         origin: supported ? origin : null,
         supported,
         browserPermissionGranted: grant.browserPermissionGranted,

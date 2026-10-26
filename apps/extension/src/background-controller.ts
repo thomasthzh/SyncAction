@@ -17,6 +17,7 @@ import {
   type BrowserPort,
   type BrowserObserverResult,
   type BrowserActuatorResult,
+  type BrowserChangePolicy,
 } from "@syncaction/browser-sync";
 import {
   DurableReplica,
@@ -72,6 +73,7 @@ import {
 } from "./page-collaboration/messages.js";
 import { RoomBrowserController, type RoomBrowserStatus } from "./room-browser-controller.js";
 import { parsePublicServerOrigin } from "./server-origin.js";
+import { isConfirmedPageDocument } from "./confirmed-page-document.js";
 import type {
   CollaborationTransport,
   MediaTransport,
@@ -123,6 +125,7 @@ export interface ExtensionStatus {
   outboxCount: number;
   pendingConfirmationCount: number;
   bindingCount: number;
+  bindingValidationKey?: string | undefined;
   browser: RoomBrowserStatus | null;
   presence: ActiveTabPresenceStatus | null;
   pointer: PointerControllerStatus | null;
@@ -146,6 +149,7 @@ export interface BackgroundControllerOptions {
   enableVolatilePointer?: boolean;
   enableContentCompatibility?: boolean;
   onStatusChanged?: () => void;
+  browserChangePolicy?: BrowserChangePolicy;
 }
 
 export class BackgroundController {
@@ -164,6 +168,7 @@ export class BackgroundController {
   readonly #enableVolatilePointer: boolean;
   readonly #enableContentCompatibility: boolean;
   readonly #onStatusChanged: (() => void) | undefined;
+  readonly #browserChangePolicy: BrowserChangePolicy;
   #config: ExtensionRuntimeConfig | undefined;
   #replica: DurableReplica | undefined;
   #coordinator: ReplicaCoordinator | undefined;
@@ -190,6 +195,7 @@ export class BackgroundController {
     this.#enableVolatilePointer = options.enableVolatilePointer ?? true;
     this.#enableContentCompatibility = options.enableContentCompatibility ?? true;
     this.#onStatusChanged = options.onStatusChanged;
+    this.#browserChangePolicy = options.browserChangePolicy ?? "AUTOMATIC";
     this.#browserSessionId =
       options.browserSessionId === undefined
         ? undefined
@@ -273,6 +279,7 @@ export class BackgroundController {
     if (this.#browserPort !== undefined) {
       const ledger = new EffectLedger();
       const actuator = new BrowserActuator({
+        browserChangePolicy: this.#browserChangePolicy,
         roomId: parsed.data.roomId,
         replica: this.#replica,
         browser: this.#browserPort,
@@ -281,6 +288,7 @@ export class BackgroundController {
         isActuatable: () => coordinator.isActuatable(),
       });
       const observer = new BrowserObserver({
+        browserChangePolicy: this.#browserChangePolicy,
         roomId: parsed.data.roomId,
         replica: this.#replica,
         browser: this.#browserPort,
@@ -289,6 +297,7 @@ export class BackgroundController {
         isActuatable: () => coordinator.isActuatable(),
       });
       roomBrowserController = new RoomBrowserController({
+        browserChangePolicy: this.#browserChangePolicy,
         observer,
         actuator,
       });
@@ -296,6 +305,7 @@ export class BackgroundController {
     }
     if (this.#browserSessionId !== undefined && isPresenceTransport(transport)) {
       presenceController = new ActiveTabPresenceController({
+        onStatusChanged: () => this.#notifyStatusChanged(),
         roomId: parsed.data.roomId,
         browserSessionId: this.#browserSessionId,
         userId: parsed.data.userId,
@@ -499,7 +509,14 @@ export class BackgroundController {
 
   public async handleBrowserEvent(eventInput: unknown): Promise<BrowserObserverResult | undefined> {
     const result = await this.#roomBrowserController?.handleBrowserEvent(eventInput);
-    if (result?.kind === "INTENT_RECORDED" || result?.kind === "EFFECT_CONSUMED") {
+    if (
+      result?.kind === "INTENT_RECORDED" ||
+      result?.kind === "EFFECT_CONSUMED" ||
+      result?.kind === "LOCAL_STATE_CHANGED" ||
+      (this.#browserChangePolicy === "MANUAL" &&
+        result?.kind === "IGNORED" &&
+        result.reason === "NO_CHANGE")
+    ) {
       await this.#presenceController?.handleBindingsChanged();
       await this.#pointerController?.handleBindingsChanged();
       await this.#mediaController?.handleBindingsChanged();
@@ -510,10 +527,46 @@ export class BackgroundController {
     return result;
   }
 
-  public async shareBrowserTab(tabIdInput: unknown): Promise<BrowserObserverResult | undefined> {
-    const result = await this.#roomBrowserController?.shareBrowserTab(tabIdInput);
-    await this.handleActiveTabChanged(tabIdInput);
+  public async shareBrowserTab(
+    tabIdInput: unknown,
+    expectedUrl?: string,
+  ): Promise<BrowserObserverResult | undefined> {
+    const result = await this.#roomBrowserController?.shareBrowserTab(tabIdInput, expectedUrl);
+    if (result?.kind !== "BLOCKED" || result.reason !== "PAGE_CONTEXT_CHANGED")
+      await this.handleActiveTabChanged(tabIdInput);
     return result;
+  }
+
+  public getPendingPagePublication(tabId: unknown): { logicalTabId: string } | null {
+    const pending = this.#roomBrowserController?.readPendingPublication(tabId);
+    return pending == null ? null : { logicalTabId: pending.logicalTabId };
+  }
+
+  public async shareBrowserTabAsNew(
+    tabId: unknown,
+    expectedUrl?: string,
+  ): Promise<BrowserObserverResult | undefined> {
+    const result = await this.#roomBrowserController?.shareBrowserTabAsNew(tabId, expectedUrl);
+    if (result?.kind !== "BLOCKED" || result.reason !== "PAGE_CONTEXT_CHANGED")
+      await this.handleActiveTabChanged(tabId);
+    return result;
+  }
+
+  public async removeSharedTab(logicalTabIdInput: unknown): Promise<void> {
+    const logicalTabId = LogicalTabIdSchema.parse(logicalTabIdInput);
+    const record = await this.#replica?.getRecord();
+    if (this.#state !== "SYNCED" || record?.mode !== "SYNCED" || this.#coordinator === undefined) {
+      throw new Error("ROOM_TAB_NOT_AVAILABLE");
+    }
+    if (
+      !record.confirmedSnapshot?.tabs.some(
+        (tab) => tab.id === logicalTabId && tab.closedAtSeq === null,
+      )
+    ) {
+      throw new Error("ROOM_TAB_NOT_AVAILABLE");
+    }
+    await this.#coordinator.enqueueLocalOperation({ type: "tab.close", logicalTabId });
+    this.#notifyStatusChanged();
   }
 
   public async confirmBrowserRecovery(): Promise<BrowserActuatorResult | undefined> {
@@ -581,8 +634,11 @@ export class BackgroundController {
     }
   }
 
-  public async toggleDanmakuInput(): Promise<void> {
-    const route = await this.#requirePageToolRoute();
+  public async toggleDanmakuInput(expected?: {
+    tabId: number;
+    documentRevision: DocumentRevision;
+  }): Promise<void> {
+    const route = await this.#requirePageToolRoute(expected);
     if (this.#pagePort?.toggleDanmakuInput === undefined) {
       throw new Error("PAGE_TOOL_UNAVAILABLE");
     }
@@ -636,8 +692,11 @@ export class BackgroundController {
     this.#notifyStatusChanged();
   }
 
-  public async togglePagePen(): Promise<void> {
-    const route = await this.#requirePageToolRoute();
+  public async togglePagePen(expected?: {
+    tabId: number;
+    documentRevision: DocumentRevision;
+  }): Promise<void> {
+    const route = await this.#requirePageToolRoute(expected);
     if (this.#pagePort?.togglePagePen === undefined) {
       throw new Error("PAGE_TOOL_UNAVAILABLE");
     }
@@ -948,6 +1007,18 @@ export class BackgroundController {
       outboxCount: record.outbox.length,
       pendingConfirmationCount: record.pendingConfirmations.length,
       bindingCount: record.bindings.length,
+      bindingValidationKey: JSON.stringify(
+        [...record.bindings]
+          .sort((left, right) => left.logicalTabId.localeCompare(right.logicalTabId))
+          .map((binding) => [
+            binding.logicalTabId,
+            binding.tabId,
+            binding.windowId,
+            binding.groupId,
+            binding.browserSessionId,
+            binding.validatedAtServerSeq,
+          ]),
+      ),
       browser: this.#roomBrowserController?.getStatus() ?? null,
       presence: this.#presenceController?.getStatus() ?? null,
       pointer: this.#pointerController?.getStatus() ?? null,
@@ -965,6 +1036,16 @@ export class BackgroundController {
     if (this.#state !== "SYNCED" || replica === undefined || navigation === undefined) {
       throw new Error("ROOM_TAB_NOT_AVAILABLE");
     }
+    if (this.#browserChangePolicy === "MANUAL") {
+      const result = await this.#roomBrowserController?.openSharedTab(logicalTabId);
+      if (result?.kind !== "SYNCHRONIZED") throw new Error("ROOM_TAB_NOT_AVAILABLE");
+      await this.#presenceController?.handleBindingsChanged();
+      await this.#pointerController?.handleBindingsChanged();
+      await this.#mediaController?.handleBindingsChanged();
+      await this.#danmakuController?.handleBindingsChanged();
+      await this.#drawingController?.handleBindingsChanged();
+      this.#notifyStatusChanged();
+    }
     const record = await replica.getRecord();
     const snapshot = record.confirmedSnapshot;
     const binding = record.bindings.find(
@@ -981,6 +1062,7 @@ export class BackgroundController {
       snapshot === null ||
       binding === undefined ||
       tab === undefined ||
+      !isConfirmedPageDocument(record, tab.id) ||
       binding.validatedAtServerSeq !== snapshot.serverSeq
     ) {
       throw new Error("ROOM_TAB_NOT_AVAILABLE");
@@ -1003,7 +1085,10 @@ export class BackgroundController {
     }
   }
 
-  async #requirePageToolRoute(): Promise<{
+  async #requirePageToolRoute(expected?: {
+    tabId: number;
+    documentRevision: DocumentRevision;
+  }): Promise<{
     tabId: number;
     context: CollaborationPageContext;
   }> {
@@ -1035,9 +1120,18 @@ export class BackgroundController {
       snapshot === null ||
       binding === undefined ||
       tab === undefined ||
+      !isConfirmedPageDocument(record, tab.id) ||
       binding.validatedAtServerSeq !== snapshot.serverSeq
     ) {
       throw new Error("PAGE_TOOL_UNAVAILABLE");
+    }
+    if (
+      expected !== undefined &&
+      (expected.tabId !== tabId ||
+        expected.documentRevision.roomEpoch !== snapshot.roomEpoch ||
+        expected.documentRevision.tabUpdatedAtSeq !== tab.updatedAtSeq)
+    ) {
+      throw new Error("PAGE_TOOL_CONTEXT_CHANGED");
     }
     return {
       tabId,

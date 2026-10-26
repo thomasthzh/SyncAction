@@ -113,19 +113,47 @@ describe("task-scoped permission and connection UI", () => {
     },
   );
 
-  it("keeps task, site scope and data disclosure visible while technical details are collapsed", () => {
+  it("keeps the task and concise disclosure visible while full data and permission details are collapsed", () => {
     const root = permission(vi.fn());
     expect(root.querySelector(".permission-task")?.textContent).toContain("加入原播放组");
     expect(root.querySelector(".permission-task")?.closest("details")).toBeNull();
     expect(root.querySelector(".permission-scope")?.textContent).toContain("https://video.example");
-    expect(root.querySelector(".permission-scope")?.textContent).toContain("授权覆盖此网站的页面");
+    expect(root.querySelector(".permission-scope")?.textContent).toContain("换房间无需重复授权");
     const details = root.querySelector<HTMLDetailsElement>(".permission-technical-details")!;
     expect(details.open).toBe(false);
     expect(details.textContent).toContain("https://video.example/*");
     expect(details.textContent).toContain("2026-08-01");
-    expect(root.querySelector(".permission-disclosure")?.closest("details")).toBeNull();
+    expect(root.querySelector(".permission-disclosure")?.closest("details")).toBe(details);
+    expect(root.querySelector(".permission-summary-copy")?.closest("details")).toBeNull();
+    expect(root.querySelector(".permission-summary-copy")?.textContent).toContain("不发送 Cookie");
     expect(root.querySelector(".agreement-row")?.closest("details")).toBeNull();
     expect(root.querySelector(".permission-disclosure")?.textContent).toContain("不会发送 Cookie");
+  });
+
+  it("leaves a failed preflight with an enabled retry rather than a permanent checking state", async () => {
+    const confirm = vi.fn();
+    const retry = vi.fn();
+    const root = renderPanel(
+      <PermissionDialog
+        feature="DRAWING"
+        origin="https://video.example"
+        browserPermission="https://video.example/*"
+        termsVersion="2026-08-01"
+        privacyPageUrl="privacy.html"
+        ready={false}
+        externalErrorCode="PAGE_PERMISSION_UNAVAILABLE"
+        onConfirm={confirm}
+        onRetry={retry}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(root.textContent).not.toContain("正在检查");
+    expect((root.querySelector('input[name="agreement"]') as HTMLInputElement).disabled).toBe(true);
+    const button = byRole(root, "button", "重新检查") as HTMLButtonElement;
+    expect(button.disabled).toBe(false);
+    await click(button);
+    expect(retry).toHaveBeenCalledOnce();
+    expect(confirm).not.toHaveBeenCalled();
   });
 
   it("keeps native permission confirmation synchronous and prevents duplicate submission, then retries the same task", async () => {

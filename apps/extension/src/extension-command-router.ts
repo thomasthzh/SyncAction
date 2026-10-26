@@ -21,6 +21,7 @@ export type ExtensionCommandAppPort = Pick<
   | "updateRoom"
   | "selectRoom"
   | "activateLogicalTab"
+  | "removeSharedTab"
   | "joinOpenRoom"
   | "requestRoomJoin"
   | "decideJoinRequest"
@@ -34,6 +35,7 @@ export type ExtensionCommandAppPort = Pick<
   | "transferOwnership"
   | "dissolveRoom"
   | "shareBrowserTab"
+  | "shareBrowserTabAsNew"
   | "confirmBrowserRecovery"
   | "handleActiveTabChanged"
   | "handlePagePermissionBoundaryChanged"
@@ -182,6 +184,9 @@ export class ExtensionCommandRouter {
       case "ROOM_TAB_ACTIVATE":
         result = await this.#app.activateLogicalTab(command.payload.logicalTabId);
         break;
+      case "ROOM_TAB_REMOVE":
+        result = await this.#app.removeSharedTab(command.payload);
+        break;
       case "ROOM_JOIN_OPEN":
         result = await this.#app.joinOpenRoom(command.payload.roomId);
         break;
@@ -223,15 +228,36 @@ export class ExtensionCommandRouter {
         result = await this.#app.dissolveRoom();
         break;
       case "CURRENT_TAB_SHARE": {
-        const tab = await this.#activeTab();
+        const expected = command.payload?.expectedContext;
+        const tab = await this.#activeMediaTab(expected, "PAGE_TOOL_CONTEXT_CHANGED");
         const url = tab.pendingUrl ?? tab.url;
-        const shared = await this.#app.shareBrowserTab(tab.id);
+        if (expected !== undefined && !SupportedUrlSchema.safeParse(url).success)
+          throw new Error("PAGE_TOOL_CONTEXT_CHANGED");
+        const shared =
+          expected === undefined
+            ? await this.#app.shareBrowserTab(tab.id)
+            : await this.#app.shareBrowserTab(tab.id, {
+                ...expected,
+                ...(url === undefined ? {} : { url }),
+              });
         result =
           (shared?.kind === "INTENT_RECORDED" ||
             (shared?.kind === "IGNORED" && shared.reason === "NO_CHANGE")) &&
           SupportedUrlSchema.safeParse(url).success
             ? { ...shared, sharedPageContext: { tabId: tab.id, url } }
             : shared;
+        break;
+      }
+      case "CURRENT_TAB_SHARE_AS_NEW": {
+        const expected = command.payload.expectedContext;
+        const tab = await this.#activeMediaTab(expected, "PAGE_TOOL_CONTEXT_CHANGED");
+        const url = tab.pendingUrl ?? tab.url;
+        if (!SupportedUrlSchema.safeParse(url).success)
+          throw new Error("PAGE_TOOL_CONTEXT_CHANGED");
+        result = await this.#app.shareBrowserTabAsNew(tab.id, {
+          ...expected,
+          ...(url === undefined ? {} : { url }),
+        });
         break;
       }
       case "BROWSER_RECOVERY_CONFIRM":
@@ -259,13 +285,19 @@ export class ExtensionCommandRouter {
         break;
       }
       case "DANMAKU_TOGGLE":
-        result = await this.#app.toggleDanmakuInput();
+        if (command.payload?.expectedContext !== undefined) {
+          await this.#activeMediaTab(command.payload.expectedContext, "PAGE_TOOL_CONTEXT_CHANGED");
+          result = await this.#app.toggleDanmakuInput(command.payload.expectedContext);
+        } else result = await this.#app.toggleDanmakuInput();
         break;
       case "DANMAKU_VISIBILITY":
         result = await this.#app.setDanmakuHidden(command.payload.hidden);
         break;
       case "PEN_TOGGLE":
-        result = await this.#app.togglePagePen();
+        if (command.payload?.expectedContext !== undefined) {
+          await this.#activeMediaTab(command.payload.expectedContext, "PAGE_TOOL_CONTEXT_CHANGED");
+          result = await this.#app.togglePagePen(command.payload.expectedContext);
+        } else result = await this.#app.togglePagePen();
         break;
       case "MEDIA_MEMBER_JUMP":
         result = await this.#app.jumpToMediaMember(command.payload.userId);
@@ -313,14 +345,17 @@ export class ExtensionCommandRouter {
     return jsonSafeResult(result);
   }
 
-  async #activeMediaTab(expected?: MediaGroupCreateExpectedContext) {
+  async #activeMediaTab(
+    expected?: Pick<MediaGroupCreateExpectedContext, "tabId" | "url">,
+    errorCode = "PAGE_PERMISSION_INTENT_STALE",
+  ) {
     const tab = await this.#activeTab();
     if (
       expected !== undefined &&
       (tab.id !== expected.tabId ||
         (expected.url !== undefined && (tab.pendingUrl ?? tab.url) !== expected.url))
     ) {
-      throw new Error("PAGE_PERMISSION_INTENT_STALE");
+      throw new Error(errorCode);
     }
     return tab;
   }
