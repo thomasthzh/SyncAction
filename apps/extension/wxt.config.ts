@@ -18,7 +18,15 @@ export default defineConfig({
     name: "SyncAction",
     description: "Shared, durable browser tab workspaces.",
     minimum_chrome_version: "116",
-    permissions: ["scripting", "storage", "unlimitedStorage", "tabs", "tabGroups", "sidePanel"],
+    permissions: [
+      "scripting",
+      "storage",
+      "unlimitedStorage",
+      "tabs",
+      "tabGroups",
+      "sidePanel",
+      "webNavigation",
+    ],
     host_permissions: [publicServerHostPermission(publicServerOrigin)],
     optional_host_permissions: ["http://*/*", "https://*/*"],
     icons: {

@@ -120,6 +120,8 @@ export type BrowserGroup = z.infer<typeof BrowserGroupSchema>;
 export type BrowserTab = z.infer<typeof BrowserTabSchema>;
 export type BrowserState = z.infer<typeof BrowserStateSchema>;
 
+export type BrowserChangePolicy = "AUTOMATIC" | "MANUAL";
+
 export type RoomGroupDiscovery =
   | { kind: "MISSING" }
   | { kind: "AMBIGUOUS"; reason: "DUPLICATE_ROOM_GROUP" }

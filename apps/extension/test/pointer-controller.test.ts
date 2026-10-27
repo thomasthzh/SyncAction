@@ -302,6 +302,30 @@ beforeEach(() => {
 });
 
 describe("PointerController binding and local publishing", () => {
+  it("does not route a pending local navigation as the old confirmed document", async () => {
+    expect(await pointers.getContextForTab(7)).not.toBeNull();
+    currentRecord = ReplicaRecordSchema.parse({
+      ...currentRecord,
+      nextOutboxSeq: 2,
+      outbox: [
+        {
+          outboxSeq: 1,
+          enqueuedAtMs: now,
+          envelope: {
+            protocolVersion: 1,
+            roomId,
+            roomEpoch: 2,
+            deviceId,
+            baseServerSeq: 5,
+            clientOpId: "018f8f8e-4b5c-7d6e-8f90-123456789cff",
+            operation: { type: "tab.navigate", logicalTabId, url: "https://example.com/new" },
+          },
+        },
+      ],
+    });
+    await expect(pointers.getContextForTab(7)).resolves.toBeNull();
+  });
+
   it("publishes no positional lease or frame until an exact remote observer exists", async () => {
     observerCompatibilityAllowed = false;
     await pointers.handleActiveTabChanged(7);

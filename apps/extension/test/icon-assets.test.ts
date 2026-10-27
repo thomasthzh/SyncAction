@@ -270,7 +270,15 @@ describe("extension icon manifest contract", () => {
 
     expect(config.manifest).toBeTypeOf("object");
     expect(config.manifest).toMatchObject({
-      permissions: ["scripting", "storage", "unlimitedStorage", "tabs", "tabGroups", "sidePanel"],
+      permissions: [
+        "scripting",
+        "storage",
+        "unlimitedStorage",
+        "tabs",
+        "tabGroups",
+        "sidePanel",
+        "webNavigation",
+      ],
       icons: expectedIcons,
       action: {
         default_icon: expectedIcons,

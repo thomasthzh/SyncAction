@@ -211,6 +211,7 @@ async function applySnapshot(tabs: Array<{ id: string; url: string }>): Promise<
 function actuator(options?: {
   actuatable?: boolean;
   wait?: (milliseconds: number) => Promise<void>;
+  browserChangePolicy?: "AUTOMATIC" | "MANUAL";
 }) {
   return new BrowserActuator({
     roomId,
@@ -222,10 +223,277 @@ function actuator(options?: {
     now: () => 1_000 + effectIndex,
     createEffectId: () => `018f8f8e-4b5c-7d6e-8f90-${String(effectIndex++).padStart(12, "0")}`,
     ...(options?.wait === undefined ? {} : { wait: options.wait }),
+    ...(options?.browserChangePolicy === undefined
+      ? {}
+      : { browserChangePolicy: options.browserChangePolicy }),
   });
 }
 
 describe("one-effect-at-a-time browser actuator", () => {
+  it("focuses an already bound same-address page during loading without creating a duplicate", async () => {
+    const manual = actuator({ browserChangePolicy: "MANUAL", wait: async () => undefined });
+    await manual.openSharedTab(firstId);
+    const binding = (await replica.getRecord()).bindings[0]!;
+    browser.state.tabs.find((tab) => tab.tabId === binding.tabId)!.status = "loading";
+    expect(await manual.openSharedTab(firstId)).toEqual({
+      kind: "SYNCHRONIZED",
+      effectsApplied: 0,
+    });
+    expect(browser.createCount).toBe(1);
+    expect((await replica.getRecord()).bindings[0]?.tabId).toBe(binding.tabId);
+  });
+  it("does not restore unbound shared pages in manual mode, and opens only the explicitly selected page", async () => {
+    const manual = actuator({ browserChangePolicy: "MANUAL", wait: async () => undefined });
+    expect(await manual.reconcile({ confirmedRecovery: false })).toEqual({
+      kind: "SYNCHRONIZED",
+      effectsApplied: 0,
+    });
+    expect(browser.createCount).toBe(0);
+    expect(await manual.openSharedTab(secondId)).toEqual({
+      kind: "SYNCHRONIZED",
+      effectsApplied: 1,
+    });
+    expect(browser.createCount).toBe(1);
+    expect((await replica.getRecord()).bindings.map(({ logicalTabId }) => logicalTabId)).toEqual([
+      secondId,
+    ]);
+    expect(await manual.reconcile({ confirmedRecovery: false })).toEqual({
+      kind: "SYNCHRONIZED",
+      effectsApplied: 0,
+    });
+    expect(browser.createCount).toBe(1);
+    expect(await manual.openSharedTab(secondId)).toEqual({
+      kind: "SYNCHRONIZED",
+      effectsApplied: 0,
+    });
+    expect(browser.createCount).toBe(1);
+  });
+
+  it("forgets a missing local tab in manual mode without reopening it or deleting the shared object", async () => {
+    await actuator().reconcile({ confirmedRecovery: false });
+    const firstBinding = (await replica.getRecord()).bindings.find(
+      ({ logicalTabId }) => logicalTabId === firstId,
+    )!;
+    await browser.closeTab(firstBinding.tabId);
+    const count = browser.createCount;
+    await actuator({ browserChangePolicy: "MANUAL" }).reconcile({ confirmedRecovery: false });
+    expect(browser.createCount).toBe(count);
+    expect(
+      (await replica.getRecord()).bindings.some(({ logicalTabId }) => logicalTabId === firstId),
+    ).toBe(false);
+    expect((await replica.getRecord()).confirmedSnapshot?.order).toContain(firstId);
+  });
+
+  it("follows an explicit remote publication only while the verified local document is unchanged", async () => {
+    await actuator().reconcile({ confirmedRecovery: false });
+    const manual = actuator({ browserChangePolicy: "MANUAL" });
+    await manual.reconcile({ confirmedRecovery: false });
+    await replica.applyCommitted({
+      type: "op.committed",
+      protocolVersion: 1,
+      clientOpId: "018f8f8e-4b5c-7d6e-8f90-123456789ae0",
+      roomId,
+      roomEpoch: 0,
+      deviceId,
+      serverSeq: 3,
+      operation: {
+        type: "tab.navigate",
+        logicalTabId: firstId,
+        url: "https://example.com/published",
+      },
+    });
+    expect(await manual.reconcile({ confirmedRecovery: false })).toEqual({
+      kind: "SYNCHRONIZED",
+      effectsApplied: 1,
+    });
+    expect(browser.navigateCount).toBe(1);
+    const binding = (await replica.getRecord()).bindings.find(
+      ({ logicalTabId }) => logicalTabId === firstId,
+    )!;
+    expect(browser.state.tabs.find(({ tabId }) => tabId === binding.tabId)?.url).toBe(
+      "https://example.com/published",
+    );
+    expect(binding.validatedAtServerSeq).toBe(3);
+
+    browser.state.tabs.find(({ tabId }) => tabId === binding.tabId)!.url =
+      "https://example.com/private-draft";
+    await replica.applyCommitted({
+      type: "op.committed",
+      protocolVersion: 1,
+      clientOpId: "018f8f8e-4b5c-7d6e-8f90-123456789ae1",
+      roomId,
+      roomEpoch: 0,
+      deviceId,
+      serverSeq: 4,
+      operation: {
+        type: "tab.navigate",
+        logicalTabId: firstId,
+        url: "https://example.com/next-published",
+      },
+    });
+    await manual.reconcile({ confirmedRecovery: false });
+    expect(browser.navigateCount).toBe(1);
+    expect(browser.state.tabs.find(({ tabId }) => tabId === binding.tabId)?.url).toBe(
+      "https://example.com/private-draft",
+    );
+    expect(
+      (await replica.getRecord()).bindings.some(({ logicalTabId }) => logicalTabId === firstId),
+    ).toBe(false);
+  });
+
+  it("does not undo a local reorder in manual mode", async () => {
+    await actuator().reconcile({ confirmedRecovery: false });
+    const firstBinding = (await replica.getRecord()).bindings.find(
+      ({ logicalTabId }) => logicalTabId === firstId,
+    )!;
+    await browser.moveTab({ tabId: firstBinding.tabId, windowId: 1, index: 2 });
+    const count = browser.moveCount;
+    await actuator({ browserChangePolicy: "MANUAL" }).reconcile({ confirmedRecovery: false });
+    expect(browser.moveCount).toBe(count);
+  });
+
+  it("does not overwrite an unverified local page after a background restart", async () => {
+    await actuator().reconcile({ confirmedRecovery: false });
+    const firstBinding = (await replica.getRecord()).bindings.find(
+      ({ logicalTabId }) => logicalTabId === firstId,
+    )!;
+    await replica.applyCommitted({
+      type: "op.committed",
+      protocolVersion: 1,
+      clientOpId: "018f8f8e-4b5c-7d6e-8f90-123456789ae0",
+      roomId,
+      roomEpoch: 0,
+      deviceId,
+      serverSeq: 3,
+      operation: { type: "tab.navigate", logicalTabId: firstId, url: "https://example.com/remote" },
+    });
+    const manual = actuator({ browserChangePolicy: "MANUAL" });
+    await manual.reconcile({ confirmedRecovery: false });
+    expect(browser.navigateCount).toBe(0);
+    expect(browser.state.tabs.find(({ tabId }) => tabId === firstBinding.tabId)?.url).toBe(
+      "https://example.com/first",
+    );
+    expect(
+      (await replica.getRecord()).bindings.some(({ logicalTabId }) => logicalTabId === firstId),
+    ).toBe(false);
+  });
+
+  it("never validates a pending optimistic URL against an unrelated confirmed room revision", async () => {
+    await actuator().reconcile({ confirmedRecovery: false });
+    const firstBinding = (await replica.getRecord()).bindings.find(
+      ({ logicalTabId }) => logicalTabId === firstId,
+    )!;
+    browser.state.tabs.find(({ tabId }) => tabId === firstBinding.tabId)!.url =
+      "https://example.com/pending";
+    await replica.enqueueLocalOperation({
+      type: "tab.navigate",
+      logicalTabId: firstId,
+      url: "https://example.com/pending",
+    });
+    await replica.applyCommitted({
+      type: "op.committed",
+      protocolVersion: 1,
+      clientOpId: "018f8f8e-4b5c-7d6e-8f90-123456789ae0",
+      roomId,
+      roomEpoch: 0,
+      deviceId,
+      serverSeq: 3,
+      operation: { type: "tab.updateMetadata", logicalTabId: secondId, title: "Unrelated title" },
+    });
+    await actuator({ browserChangePolicy: "MANUAL" }).reconcile({ confirmedRecovery: false });
+    expect(
+      (await replica.getRecord()).bindings.find(({ logicalTabId }) => logicalTabId === firstId)
+        ?.validatedAtServerSeq,
+    ).toBe(2);
+    expect(
+      (await replica.getRecord()).bindings.find(({ logicalTabId }) => logicalTabId === secondId)
+        ?.validatedAtServerSeq,
+    ).toBe(3);
+    expect(browser.navigateCount).toBe(0);
+  });
+
+  it.each(["AUTOMATIC", "MANUAL"] as const)(
+    "refreshes proven bindings after an unrelated room revision in %s mode",
+    async (browserChangePolicy) => {
+      await actuator().reconcile({ confirmedRecovery: false });
+      const current = actuator({ browserChangePolicy });
+      await replica.applyCommitted({
+        type: "op.committed",
+        protocolVersion: 1,
+        clientOpId: "018f8f8e-4b5c-7d6e-8f90-123456789ae0",
+        roomId,
+        roomEpoch: 0,
+        deviceId,
+        serverSeq: 3,
+        operation: {
+          type: "tab.move",
+          logicalTabId: secondId,
+          predecessor: firstId,
+          successor: null,
+        },
+      });
+      expect(
+        (await replica.getRecord()).bindings.every(
+          ({ validatedAtServerSeq }) => validatedAtServerSeq === 2,
+        ),
+      ).toBe(true);
+      const thirdId = "018f8f8e-4b5c-7d6e-8f90-123456789ab9";
+      expect(await current.reconcile({ confirmedRecovery: false })).toEqual({
+        kind: "SYNCHRONIZED",
+        effectsApplied: 0,
+      });
+      expect(
+        (await replica.getRecord()).bindings.every(
+          ({ validatedAtServerSeq }) => validatedAtServerSeq === 3,
+        ),
+      ).toBe(true);
+      await replica.applyCommitted({
+        type: "op.committed",
+        protocolVersion: 1,
+        clientOpId: "018f8f8e-4b5c-7d6e-8f90-123456789ae1",
+        roomId,
+        roomEpoch: 0,
+        deviceId,
+        serverSeq: 4,
+        operation: {
+          type: "tab.create",
+          logicalTabId: thirdId,
+          url: "https://example.com/third",
+          after: secondId,
+        },
+      });
+      await current.reconcile({ confirmedRecovery: false });
+      expect(
+        (await replica.getRecord()).bindings.find(({ logicalTabId }) => logicalTabId === firstId)
+          ?.validatedAtServerSeq,
+      ).toBe(4);
+      await replica.applyCommitted({
+        type: "op.committed",
+        protocolVersion: 1,
+        clientOpId: "018f8f8e-4b5c-7d6e-8f90-123456789ae2",
+        roomId,
+        roomEpoch: 0,
+        deviceId,
+        serverSeq: 5,
+        operation: { type: "tab.close", logicalTabId: thirdId },
+      });
+      await current.reconcile({ confirmedRecovery: false });
+      expect(
+        (await replica.getRecord()).bindings.find(({ logicalTabId }) => logicalTabId === firstId)
+          ?.validatedAtServerSeq,
+      ).toBe(5);
+      expect(await current.reconcile({ confirmedRecovery: false })).toEqual({
+        kind: "SYNCHRONIZED",
+        effectsApplied: 0,
+      });
+      expect(
+        (await replica.getRecord()).bindings.every(
+          ({ validatedAtServerSeq }) => validatedAtServerSeq === 5,
+        ),
+      ).toBe(true);
+    },
+  );
+
   it("restores a missing room group, persists bindings, and leaves personal tabs unchanged", async () => {
     const result = await actuator().reconcile({ confirmedRecovery: false });
     const state = await browser.readState();

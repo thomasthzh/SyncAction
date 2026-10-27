@@ -222,6 +222,49 @@
   text-align: left;
 }
 
+.bottom-action-dock > .page-tool-preparation {
+  display: grid;
+  gap: 8px;
+}
+
+.shared-tab-row__actions {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+}
+
+.shared-tab-row__remove-confirm {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--sa-surface-soft, #f4f7f8);
+}
+
+.shared-tab-row__remove-confirm p {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.bottom-action-dock > .dock-pending-publication {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--sa-text-muted);
+  font-size: 12px;
+}
+
+.page-tool-preparation p {
+  margin: 0;
+}
+
+.page-tool-preparation__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .dock-context {
   grid-area: context;
   min-width: 0;

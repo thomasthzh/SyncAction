@@ -27,6 +27,7 @@ import {
   type PageCapabilityReport,
 } from "./page-collaboration/capability.js";
 import type { PointerMessage, PointerTransport } from "./socket-transport.js";
+import { isConfirmedPageDocument } from "./confirmed-page-document.js";
 
 const LocalTabIdSchema = z.number().int().nonnegative().safe();
 const BrowserSessionIdSchema = z.string().uuid();
@@ -436,7 +437,7 @@ export class PointerController {
     const logicalTab = snapshot.tabs.find(
       (candidate) => candidate.id === binding.logicalTabId && candidate.closedAtSeq === null,
     );
-    if (logicalTab === undefined) {
+    if (logicalTab === undefined || !isConfirmedPageDocument(record, logicalTab.id)) {
       return null;
     }
     return {

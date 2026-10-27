@@ -463,6 +463,35 @@ async function activate(): Promise<void> {
 }
 
 describe("DrawingController content-bound annotations", () => {
+  it("pauses an existing drawing route until a local navigation is confirmed", async () => {
+    await activate();
+    expect(controller.getStatus().ready).toBe(true);
+    const savedSnapshot = currentRecord.confirmedSnapshot!;
+    currentRecord = ReplicaRecordSchema.parse({
+      ...currentRecord,
+      nextOutboxSeq: 2,
+      outbox: [
+        {
+          outboxSeq: 1,
+          enqueuedAtMs: now,
+          envelope: {
+            protocolVersion: 1,
+            roomId,
+            roomEpoch: savedSnapshot.roomEpoch,
+            deviceId,
+            baseServerSeq: savedSnapshot.serverSeq,
+            clientOpId: "018f8f8e-4b5c-7d6e-8f90-123456789fff",
+            operation: { type: "tab.navigate", logicalTabId, url: "https://example.com/new" },
+          },
+        },
+      ],
+    });
+    await controller.handleBindingsChanged();
+    expect(controller.getStatus().ready).toBe(false);
+    await controller.handleStrokeFinal(12, 0, finalMessage()).catch(() => undefined);
+    expect(transport.submissions).toEqual([]);
+  });
+
   it("rejects a final stroke while the local page signature is unknown", async () => {
     currentContentSignature = null;
     await activate();

@@ -587,7 +587,7 @@ class RevocablePageApi implements ChromiumPageCollaborationApi {
   readonly scripting: ChromiumPageCollaborationApi["scripting"] = {
     executeScript: async ({ target }) => [
       {
-        frameId: target.frameIds[0]!,
+        frameId: target.frameIds?.[0] ?? 0,
         documentId: "fixture-document",
       },
     ],

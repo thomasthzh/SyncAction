@@ -51,6 +51,96 @@ const ownerDeviceId = DeviceIdSchema.parse("00000000-0000-4000-8000-000000000544
 afterEach(() => unmountPanel());
 
 describe("vNext active room", () => {
+  it("removes a shared page only after the plugin confirmation, scoped to the selected room and server", async () => {
+    const store = roomStore();
+    const root = renderPanel(<App store={store} now={() => nowMs} />);
+    await click(root.querySelector<HTMLElement>("#room-workspace-tab-pages")!);
+    const row = root.querySelector<HTMLElement>(`[data-page-id="${videoPageId}"]`)!;
+    await click(byRole(row, "button", "移除共享页面 发布会回放"));
+    expect(store.commandCalls).toEqual([]);
+    await click(byRole(row, "button", "保留"));
+    expect(row.querySelector('[aria-label^="确认移除"]')).toBeNull();
+    await click(byRole(row, "button", "移除共享页面 发布会回放"));
+    await click(byRole(row, "button", "确认移除"));
+    expect(store.commandCalls).toEqual([
+      {
+        name: "ROOM_TAB_REMOVE",
+        payload: {
+          logicalTabId: videoPageId,
+          profileId: store.shell.value.selectedProfileId,
+          roomId: store.room.value.selectedRoomId,
+        },
+      },
+    ]);
+  });
+
+  it("shows an unsubmitted local navigation and offers an explicit update action", async () => {
+    const store = roomStore();
+    store.update({
+      pageAccess: {
+        ...store.pageAccess.value,
+        tabId: 42,
+        origin: "https://video.example",
+        supported: true,
+        documentRevision: null,
+        pendingPublication: { logicalTabId: videoPageId },
+      },
+    });
+    store.responder = async () =>
+      success({ kind: "INTENT_RECORDED", operation: { type: "tab.navigate" } });
+    const root = renderPanel(<App store={store} now={() => nowMs} />);
+    expect(root.textContent).toContain("有更新待提交");
+    expect(store.commandCalls).toEqual([]);
+    await click(byRole(root, "button", "提交页面更新"));
+    expect(store.commandCalls).toEqual([
+      {
+        name: "CURRENT_TAB_SHARE",
+        payload: {
+          expectedContext: {
+            profileId: store.shell.value.selectedProfileId,
+            roomId: store.room.value.selectedRoomId,
+            tabId: 42,
+          },
+        },
+      },
+    ]);
+    expect(root.textContent).toContain("页面更新已提交");
+  });
+
+  it("keeps a conflicting local update and shares it as new only by explicit choice", async () => {
+    const store = roomStore();
+    store.update({
+      pageAccess: {
+        ...store.pageAccess.value,
+        tabId: 42,
+        origin: "https://video.example",
+        supported: true,
+        documentRevision: null,
+        pendingPublication: { logicalTabId: videoPageId },
+      },
+    });
+    store.responder = async (command) =>
+      command.name === "CURRENT_TAB_SHARE"
+        ? success({ kind: "BLOCKED", reason: "PAGE_PUBLICATION_STALE" })
+        : success({ kind: "INTENT_RECORDED", operation: { type: "tab.create" } });
+    const root = renderPanel(<App store={store} now={() => nowMs} />);
+    await click(byRole(root, "button", "提交页面更新"));
+    expect(store.commandCalls).toHaveLength(1);
+    expect(root.textContent).toContain("原页面已被更新或移除");
+    await click(byRole(root, "button", "作为新页面分享"));
+    expect(store.commandCalls.at(-1)).toEqual({
+      name: "CURRENT_TAB_SHARE_AS_NEW",
+      payload: {
+        expectedContext: {
+          profileId: store.shell.value.selectedProfileId,
+          roomId: store.room.value.selectedRoomId,
+          tabId: 42,
+        },
+      },
+    });
+    expect(root.textContent).toContain("当前页面已作为新页面提交分享");
+  });
+
   it("keeps room identity, playback, shared pages, and clustered members in one surface", async () => {
     const store = roomStore();
     store.update({
@@ -126,7 +216,7 @@ describe("vNext active room", () => {
     expect(groupCard.textContent).toContain("对齐一次");
     expect(groupCard.textContent).toContain("加入播放组");
 
-    await click(byRole(videoRow, "button", "跳转"));
+    await click(byRole(videoRow, "button", "打开"));
     expect(store.commandCalls.at(-1)).toEqual({
       name: "ROOM_TAB_ACTIVATE",
       payload: { logicalTabId: videoPageId },
@@ -922,8 +1012,27 @@ describe("vNext active room", () => {
     expect(dock.querySelectorAll(".dock-tool__label")).toHaveLength(4);
     expect(dock.querySelectorAll('[role="tooltip"]')).toHaveLength(4);
 
+    await act(async () =>
+      store.update({
+        pageAccess: {
+          ...store.pageAccess.value,
+          tabId: 42,
+          origin: "https://video.example",
+          supported: true,
+        },
+      }),
+    );
     await click(byRole(dock, "button", "分享当前页"));
-    expect(store.commandCalls.at(-1)).toEqual({ name: "CURRENT_TAB_SHARE" });
+    expect(store.commandCalls.at(-1)).toEqual({
+      name: "CURRENT_TAB_SHARE",
+      payload: {
+        expectedContext: {
+          profileId: store.shell.value.selectedProfileId,
+          roomId: store.room.value.selectedRoomId,
+          tabId: 42,
+        },
+      },
+    });
 
     await click(byRole(dock, "button", "退出房间"));
     expect(root.textContent).toContain("退出联合研究室");

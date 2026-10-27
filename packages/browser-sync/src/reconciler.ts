@@ -8,6 +8,7 @@ import {
   type BrowserGroup,
   type BrowserState,
   type BrowserTab,
+  type BrowserChangePolicy,
 } from "./model.js";
 import { canonicalizeSharedUrl } from "./url-policy.js";
 
@@ -81,6 +82,16 @@ export interface BrowserReconciliationInput {
   record: ReplicaRecord;
   browserState: BrowserState;
   confirmedRecovery: boolean;
+  browserChangePolicy?: BrowserChangePolicy;
+  validatedDocuments?: readonly ValidatedBrowserDocument[];
+}
+
+export interface ValidatedBrowserDocument {
+  readonly logicalTabId: string;
+  readonly tabId: number;
+  readonly browserSessionId: string;
+  readonly url: string;
+  readonly updatedAtSeq: number;
 }
 
 interface CanonicalTab {
@@ -117,6 +128,15 @@ export function nextReconciliation(input: BrowserReconciliationInput): BrowserRe
   const hasStaleBindings = record.bindings.some(
     (binding) => binding.browserSessionId !== browserState.browserSessionId,
   );
+  if (input.browserChangePolicy === "MANUAL" && !input.confirmedRecovery) {
+    if (hasStaleBindings) return { kind: "BLOCKED", reason: "STALE_BINDINGS" };
+    return reconcileManualBindings(
+      input,
+      allLogicalTabs,
+      browserState,
+      discovery.kind === "FOUND" ? discovery.group : null,
+    );
+  }
   if (
     discovery.kind === "FOUND" &&
     (hasStaleBindings || record.bindings.length === 0) &&
@@ -152,6 +172,89 @@ export function nextReconciliation(input: BrowserReconciliationInput): BrowserRe
     discovery.group,
     discovery.tabs,
   );
+}
+
+function reconcileManualBindings(
+  input: BrowserReconciliationInput,
+  logicalTabs: readonly CanonicalTab[],
+  browserState: BrowserState,
+  group: BrowserGroup | null,
+): BrowserReconciliation {
+  for (const binding of input.record.bindings) {
+    const local = browserState.tabs.find((tab) => tab.tabId === binding.tabId);
+    const canonical = logicalTabs.find((tab) => tab.id === binding.logicalTabId);
+    const forget = (): BrowserReconciliation => ({
+      kind: "EFFECT",
+      effect: effectBase(input, { kind: "FORGET_BINDING", logicalTabId: binding.logicalTabId }),
+    });
+    if (local === undefined || canonical === undefined || local.windowId !== binding.windowId)
+      return forget();
+    const baseline = input.validatedDocuments?.find(
+      (document) =>
+        document.logicalTabId === binding.logicalTabId &&
+        document.tabId === binding.tabId &&
+        document.browserSessionId === browserState.browserSessionId,
+    );
+    if (canonical.closedAtSeq !== null) {
+      if (
+        local.status !== "complete" ||
+        !urlsEqual(local.url, canonical.url) ||
+        group === null ||
+        local.groupId !== group.groupId
+      )
+        return forget();
+      return {
+        kind: "EFFECT",
+        effect: effectBase(input, {
+          kind: "CLOSE",
+          logicalTabId: canonical.id,
+          tabId: local.tabId,
+        }),
+      };
+    }
+    if (local.status !== "complete") {
+      if (urlsEqual(local.url, canonical.url)) continue;
+      return forget();
+    }
+    if (!urlsEqual(local.url, canonical.url)) {
+      const confirmed = input.record.confirmedSnapshot?.tabs.find((tab) => tab.id === canonical.id);
+      if (
+        baseline !== undefined &&
+        urlsEqual(local.url, baseline.url) &&
+        confirmed !== undefined &&
+        confirmed.closedAtSeq === null &&
+        confirmed.updatedAtSeq > baseline.updatedAtSeq &&
+        urlsEqual(confirmed.url, canonical.url) &&
+        group !== null &&
+        local.groupId === group.groupId
+      ) {
+        return {
+          kind: "EFFECT",
+          effect: effectBase(input, {
+            kind: "NAVIGATE",
+            logicalTabId: canonical.id,
+            tabId: local.tabId,
+            url: canonical.url,
+          }),
+        };
+      }
+      return forget();
+    }
+    if (binding.groupId === null && local.groupId === null) {
+      return {
+        kind: "EFFECT",
+        effect: effectBase(input, {
+          kind: "GROUP",
+          logicalTabId: canonical.id,
+          tabId: local.tabId,
+          groupId: group?.groupId ?? null,
+        }),
+      };
+    }
+    if (group === null || local.groupId !== group.groupId || binding.groupId !== group.groupId)
+      return forget();
+  }
+  return { kind: "NOOP" };
 }
 
 function reconcileMissingGroup(

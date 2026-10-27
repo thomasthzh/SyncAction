@@ -30,6 +30,7 @@ import { z } from "zod";
 import type { DanmakuControllerPagePort } from "../danmaku-controller.js";
 import type { DrawingControllerPagePort } from "../drawing-controller.js";
 import type { MediaPagePort } from "../media-controller.js";
+import { stableMediaFrameKey } from "./frame-identity.js";
 import {
   PointerPageContextSchema,
   type PointerIdentity,
@@ -104,7 +105,9 @@ export interface ChromiumPageCollaborationApi {
   };
   scripting: {
     executeScript(details: {
-      target: { tabId: number; frameIds: number[] };
+      target: { tabId: number } & (
+        { frameIds: number[]; documentIds?: never } | { documentIds: string[]; frameIds?: never }
+      );
       files: string[];
     }): Promise<Array<{ frameId?: number; documentId?: string }>>;
     getRegisteredContentScripts(filter?: {
@@ -114,6 +117,20 @@ export interface ChromiumPageCollaborationApi {
     updateContentScripts(scripts: RegisteredPageContentScript[]): Promise<void>;
     unregisterContentScripts(filter: { ids?: string[] | undefined }): Promise<void>;
   };
+  webNavigation?:
+    | {
+        getAllFrames(details: { tabId: number }): Promise<
+          | Array<{
+              frameId: number;
+              url: string;
+              documentId?: string;
+              documentLifecycle?: string;
+              errorOccurred?: boolean;
+            }>
+          | undefined
+        >;
+      }
+    | undefined;
 }
 
 export interface RegisteredPageContentScript {
@@ -157,6 +174,8 @@ const PROTECTED_HTTPS_HOSTS = new Set([
   "microsoftedge.microsoft.com",
 ]);
 const REGISTERED_PAGE_SCRIPT_ID = "syncaction-page-collaboration";
+const LOADED_FRAME_CONCURRENCY = 4;
+const MAX_LOADED_CHILD_FRAMES = 128;
 
 export function isProtectedPageUrl(urlInput: unknown): boolean {
   if (typeof urlInput !== "string") {
@@ -367,7 +386,12 @@ export class ChromePageCollaborationPort
         await existing.promise.catch(() => false);
         continue;
       }
-      const promise = this.#inject(tabId, frameId, rootDocumentUrl, frameDocumentUrl);
+      const promise = (async () => {
+        const injected = await this.#inject(tabId, frameId, rootDocumentUrl, frameDocumentUrl);
+        return injected && frameId === 0
+          ? this.#injectLoadedChildFrames(tabId, rootDocumentUrl)
+          : injected;
+      })();
       const pending = { identity, promise };
       this.#pendingInjections.set(key, pending);
       try {
@@ -437,9 +461,7 @@ export class ChromePageCollaborationPort
       frame !== undefined &&
       (frame.originPattern !== documentOriginPattern ||
         !sameDocumentUrl(frame.documentUrl, message.documentUrl) ||
-        (frame.documentId !== null &&
-          message.documentId !== null &&
-          frame.documentId !== message.documentId));
+        (message.documentId !== null && frame.documentId !== message.documentId));
     if (
       (tracked === undefined ||
         frame === undefined ||
@@ -1340,6 +1362,7 @@ export class ChromePageCollaborationPort
     frameId: number,
     rootDocumentUrl: string,
     frameDocumentUrl: string,
+    discovered?: { documentId: string; rootIsCurrent: () => boolean },
   ): Promise<boolean> {
     const rootOriginPattern = originPatternForUrl(rootDocumentUrl);
     const frameOriginPattern = originPatternForUrl(frameDocumentUrl);
@@ -1347,21 +1370,30 @@ export class ChromePageCollaborationPort
       this.#reportCapability(tabId, frameId, "DEGRADED", "PROTECTED_PAGE");
       return false;
     }
-    const [rootAllowed, frameAllowed, framePermitted] = await Promise.all([
+    const [rootAllowed, frameAllowed, framePermitted, rootPermitted] = await Promise.all([
       this.#isOriginPatternAllowed(rootOriginPattern),
       this.#isOriginPatternAllowed(frameOriginPattern),
       this.#api.permissions.contains({ origins: [frameOriginPattern] }),
+      this.#api.permissions.contains({ origins: [rootOriginPattern] }),
     ]);
-    if (!rootAllowed || !frameAllowed || !framePermitted) {
-      this.#reportCapability(tabId, frameId, "DEGRADED", "ORIGIN_PERMISSION_REQUIRED");
+    if (!rootAllowed || !frameAllowed || !framePermitted || !rootPermitted) {
+      // An unconsented embedded origin is an expected discovery result, not
+      // a failure of the current page's explicitly requested tool.
+      if (discovered === undefined) {
+        this.#reportCapability(tabId, frameId, "DEGRADED", "ORIGIN_PERMISSION_REQUIRED");
+      }
       return false;
     }
+    if (discovered !== undefined && !discovered.rootIsCurrent()) return false;
     const rootEpoch = this.#permissionEpoch(rootOriginPattern);
     const frameEpoch = this.#permissionEpoch(frameOriginPattern);
     let results: Array<{ frameId?: number; documentId?: string }>;
     try {
       results = await this.#api.scripting.executeScript({
-        target: { tabId, frameIds: [frameId] },
+        target:
+          discovered === undefined
+            ? { tabId, frameIds: [frameId] }
+            : { tabId, documentIds: [discovered.documentId] },
         files: ["page-collaboration.js"],
       });
     } catch {
@@ -1369,6 +1401,15 @@ export class ChromePageCollaborationPort
       return false;
     }
     const result = results.find((candidate) => candidate.frameId === frameId) ?? results[0];
+    if (
+      discovered !== undefined &&
+      (result?.frameId !== frameId ||
+        result.documentId !== discovered.documentId ||
+        !discovered.rootIsCurrent())
+    ) {
+      await this.#disposeInjectionResult(tabId, frameId, result);
+      return false;
+    }
     let currentRootDocumentUrl: string;
     try {
       const currentTab = await this.#api.tabs.get(tabId);
@@ -1379,9 +1420,11 @@ export class ChromePageCollaborationPort
     }
     const permissionStillValid =
       sameDocumentUrl(currentRootDocumentUrl, rootDocumentUrl) &&
+      (discovered === undefined || discovered.rootIsCurrent()) &&
       rootEpoch === this.#permissionEpoch(rootOriginPattern) &&
       frameEpoch === this.#permissionEpoch(frameOriginPattern) &&
       (await this.#api.permissions.contains({ origins: [frameOriginPattern] })) &&
+      (await this.#api.permissions.contains({ origins: [rootOriginPattern] })) &&
       (await this.#isOriginPatternAllowed(rootOriginPattern)) &&
       (await this.#isOriginPatternAllowed(frameOriginPattern));
     if (!permissionStillValid) {
@@ -1410,6 +1453,91 @@ export class ChromePageCollaborationPort
       },
     });
     return true;
+  }
+
+  async #injectLoadedChildFrames(tabId: number, rootDocumentUrl: string): Promise<boolean> {
+    const navigation = this.#api.webNavigation;
+    if (navigation === undefined) return true;
+    const tracked = this.#trackedTabs.get(tabId);
+    const rootDocumentId = tracked?.frames.get(0)?.documentId;
+    if (tracked === undefined || typeof rootDocumentId !== "string") return true;
+    const rootIsCurrent = () =>
+      this.#trackedTabs.get(tabId) === tracked &&
+      tracked.frames.get(0)?.documentId === rootDocumentId;
+    let frames: Awaited<ReturnType<typeof navigation.getAllFrames>>;
+    try {
+      frames = await navigation.getAllFrames({ tabId });
+    } catch {
+      // Older/unsupported hosts can still use the injected top document and
+      // registered content scripts for future frame navigations.
+      return rootIsCurrent();
+    }
+    if (!rootIsCurrent()) return false;
+    const currentTab = await this.#api.tabs.get(tabId).catch(() => null);
+    if (
+      currentTab === null ||
+      !sameDocumentUrl(currentTab.url ?? currentTab.pendingUrl, rootDocumentUrl)
+    )
+      return false;
+    const root = frames?.find((frame) => frame.frameId === 0);
+    if (root?.documentId === undefined) return rootIsCurrent();
+    if (root.documentId !== rootDocumentId || !sameDocumentUrl(root.url, rootDocumentUrl))
+      return false;
+    const seen = new Set<number>();
+    const children = (frames ?? [])
+      .filter((frame) => {
+        if (
+          !FrameIdSchema.safeParse(frame.frameId).success ||
+          frame.frameId === 0 ||
+          seen.has(frame.frameId) ||
+          frame.errorOccurred ||
+          (frame.documentLifecycle !== undefined && frame.documentLifecycle !== "active") ||
+          typeof frame.documentId !== "string" ||
+          frame.documentId.length === 0 ||
+          originPatternForUrl(frame.url) === null
+        )
+          return false;
+        seen.add(frame.frameId);
+        return true;
+      })
+      .slice(0, MAX_LOADED_CHILD_FRAMES);
+    let next = 0;
+    await Promise.all(
+      Array.from({ length: Math.min(LOADED_FRAME_CONCURRENCY, children.length) }, async () => {
+        while (rootIsCurrent()) {
+          const frame = children[next++];
+          if (frame === undefined) return;
+          const previous = tracked.frames.get(frame.frameId);
+          const alreadyInjected =
+            previous !== undefined &&
+            previous.documentId === frame.documentId &&
+            sameDocumentUrl(previous.documentUrl, frame.url);
+          try {
+            const injected =
+              alreadyInjected ||
+              (await this.#inject(tabId, frame.frameId, rootDocumentUrl, frame.url, {
+                documentId: frame.documentId!,
+                rootIsCurrent,
+              }));
+            if (!injected || !rootIsCurrent()) continue;
+            const key = await stableMediaFrameKey(frame.frameId, frame.url);
+            if (
+              key !== null &&
+              rootIsCurrent() &&
+              tracked.frames.get(frame.frameId)?.documentId === frame.documentId
+            ) {
+              // Ready handlers may still be queued behind the top injection.
+              // Make the first tool command include this exact child now.
+              this.registerPageToolFrame(tabId, frame.frameId, key);
+            }
+          } catch {
+            // A disappearing or inaccessible child cannot block the other
+            // explicitly permitted documents in this tab.
+          }
+        }
+      }),
+    );
+    return rootIsCurrent();
   }
 
   async #disposeInjectionResult(
@@ -1480,10 +1608,22 @@ export class ChromePageCollaborationPort
     },
   ): void {
     let tracked = this.#trackedTabs.get(tabId);
+    const previousRootDocumentId = tracked?.frames.get(0)?.documentId;
+    const rootDocumentChanged =
+      frameId === 0 &&
+      typeof previousRootDocumentId === "string" &&
+      input.frame.documentId !== null &&
+      previousRootDocumentId !== input.frame.documentId;
+    const sameUrlReload =
+      rootDocumentChanged &&
+      tracked !== undefined &&
+      tracked.rootOriginPattern === input.rootOriginPattern &&
+      sameDocumentUrl(tracked.rootDocumentUrl, input.rootDocumentUrl);
     if (
       tracked === undefined ||
       tracked.rootOriginPattern !== input.rootOriginPattern ||
-      !sameDocumentUrl(tracked.rootDocumentUrl, input.rootDocumentUrl)
+      !sameDocumentUrl(tracked.rootDocumentUrl, input.rootDocumentUrl) ||
+      rootDocumentChanged
     ) {
       tracked = {
         rootOriginPattern: input.rootOriginPattern,
@@ -1499,6 +1639,14 @@ export class ChromePageCollaborationPort
     tracked.frames.set(frameId, input.frame);
     if (replacedFrameKey !== null) {
       this.#recoverUniqueFrameKey(tabId, replacedFrameKey, tracked.rootGeneration);
+    }
+    if (sameUrlReload) {
+      // Reload keeps the URL but replaces every frame. Ask already-injected
+      // children to reannounce in the new generation, including children whose
+      // first ready message arrived before the new top frame's ready message.
+      void this.#api.tabs
+        .sendMessage(tabId, PageAnnounceMessageSchema.parse({ type: "syncaction.page.announce" }))
+        .catch(() => undefined);
     }
   }
 

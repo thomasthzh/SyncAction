@@ -98,6 +98,8 @@ const BrowserStatusReasonSchema = z.enum([
   "BROWSER_API_FAILURE",
   "POST_EFFECT_MISMATCH",
   "CIRCUIT_BREAKER",
+  "PAGE_PUBLICATION_STALE",
+  "PAGE_CONTEXT_CHANGED",
 ]);
 
 const RoomBrowserStatusSchema = z
@@ -254,6 +256,7 @@ export const ExtensionStatusUiSchema = z
     outboxCount: NonNegativeIntegerSchema,
     pendingConfirmationCount: NonNegativeIntegerSchema,
     bindingCount: NonNegativeIntegerSchema,
+    bindingValidationKey: z.string().max(8_192).optional(),
     browser: RoomBrowserStatusSchema.nullable(),
     presence: PresenceStatusSchema.nullable(),
     pointer: PointerStatusSchema.nullable(),
@@ -499,7 +502,13 @@ export const UiPageAccessSliceSchema = z
     tabId: NonNegativeIntegerSchema.nullable(),
     documentRevision: DocumentRevisionSchema.nullable(),
     contentCompatibility: ContentCompatibilitySchema.nullable(),
+    pendingPublication: z
+      .object({ logicalTabId: LogicalTabIdSchema })
+      .strict()
+      .nullable()
+      .optional(),
     origin: PageOriginSchema.nullable(),
+    url: SupportedUrlSchema.nullable().optional(),
     supported: z.boolean(),
     browserPermissionGranted: z.boolean(),
     termsAccepted: z.boolean(),
@@ -681,6 +690,7 @@ export const UiCommandNameSchema = z.enum([
   "ROOM_UPDATE",
   "ROOM_SELECT",
   "ROOM_TAB_ACTIVATE",
+  "ROOM_TAB_REMOVE",
   "ROOM_JOIN_OPEN",
   "ROOM_JOIN_REQUEST",
   "JOIN_REQUEST_DECIDE",
@@ -694,6 +704,7 @@ export const UiCommandNameSchema = z.enum([
   "ROOM_OWNERSHIP_TRANSFER",
   "ROOM_DISSOLVE",
   "CURRENT_TAB_SHARE",
+  "CURRENT_TAB_SHARE_AS_NEW",
   "BROWSER_RECOVERY_CONFIRM",
   "PAGE_PERMISSION_REFRESH",
   "PAGE_PERMISSION_REMOVE",
@@ -713,7 +724,7 @@ export const UiCommandNameSchema = z.enum([
 
 export type UiCommandName = z.infer<typeof UiCommandNameSchema>;
 
-export const MediaGroupCreateExpectedContextSchema = z
+export const PageToolExpectedContextSchema = z
   .object({
     profileId: ServerProfileIdSchema,
     tabId: NonNegativeIntegerSchema,
@@ -723,7 +734,18 @@ export const MediaGroupCreateExpectedContextSchema = z
   })
   .strict();
 
-export type MediaGroupCreateExpectedContext = z.infer<typeof MediaGroupCreateExpectedContextSchema>;
+export type PageToolExpectedContext = z.infer<typeof PageToolExpectedContextSchema>;
+export const PageShareExpectedContextSchema = z
+  .object({
+    profileId: ServerProfileIdSchema,
+    roomId: RoomIdSchema,
+    tabId: NonNegativeIntegerSchema,
+    url: SupportedUrlSchema.optional(),
+  })
+  .strict();
+export type PageShareExpectedContext = z.infer<typeof PageShareExpectedContextSchema>;
+export const MediaGroupCreateExpectedContextSchema = PageToolExpectedContextSchema;
+export type MediaGroupCreateExpectedContext = PageToolExpectedContext;
 
 const CommandBaseFields = {
   type: z.literal("ui.command"),
@@ -860,6 +882,16 @@ export const UiCommandSchema = z.discriminatedUnion("name", [
   commandWithPayload("ROOM_UPDATE", RoomMutationPayloadSchema),
   commandWithPayload("ROOM_SELECT", z.object({ roomId: RoomIdSchema }).strict()),
   commandWithPayload("ROOM_TAB_ACTIVATE", z.object({ logicalTabId: LogicalTabIdSchema }).strict()),
+  commandWithPayload(
+    "ROOM_TAB_REMOVE",
+    z
+      .object({
+        logicalTabId: LogicalTabIdSchema,
+        profileId: ServerProfileIdSchema,
+        roomId: RoomIdSchema,
+      })
+      .strict(),
+  ),
   commandWithPayload("ROOM_JOIN_OPEN", z.object({ roomId: RoomIdSchema }).strict()),
   commandWithPayload("ROOM_JOIN_REQUEST", z.object({ roomId: RoomIdSchema }).strict()),
   commandWithPayload(
@@ -893,7 +925,14 @@ export const UiCommandSchema = z.discriminatedUnion("name", [
   commandWithPayload("ROOM_MEMBER_REMOVE", z.object({ userId: CanonicalUuidSchema }).strict()),
   commandWithPayload("ROOM_OWNERSHIP_TRANSFER", z.object({ userId: CanonicalUuidSchema }).strict()),
   commandWithoutPayload("ROOM_DISSOLVE"),
-  commandWithoutPayload("CURRENT_TAB_SHARE"),
+  commandWithPayload(
+    "CURRENT_TAB_SHARE",
+    z.object({ expectedContext: PageShareExpectedContextSchema }).strict().optional(),
+  ),
+  commandWithPayload(
+    "CURRENT_TAB_SHARE_AS_NEW",
+    z.object({ expectedContext: PageShareExpectedContextSchema }).strict(),
+  ),
   commandWithoutPayload("BROWSER_RECOVERY_CONFIRM"),
   commandWithoutPayload("PAGE_PERMISSION_REFRESH"),
   commandWithPayload(
@@ -901,9 +940,15 @@ export const UiCommandSchema = z.discriminatedUnion("name", [
     z.object({ origin: ExactPageOriginSchema }).strict(),
   ),
   commandWithoutPayload("POLICY_ACCEPTANCE_RECORD"),
-  commandWithoutPayload("DANMAKU_TOGGLE"),
+  commandWithPayload(
+    "DANMAKU_TOGGLE",
+    z.object({ expectedContext: PageToolExpectedContextSchema }).strict().optional(),
+  ),
   commandWithPayload("DANMAKU_VISIBILITY", z.object({ hidden: z.boolean() }).strict()),
-  commandWithoutPayload("PEN_TOGGLE"),
+  commandWithPayload(
+    "PEN_TOGGLE",
+    z.object({ expectedContext: PageToolExpectedContextSchema }).strict().optional(),
+  ),
   commandWithPayload(
     "MEDIA_GROUP_CREATE",
     z.object({ expectedContext: MediaGroupCreateExpectedContextSchema }).strict().optional(),

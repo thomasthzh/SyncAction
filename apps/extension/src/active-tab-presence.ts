@@ -21,6 +21,7 @@ import {
 import type { DurableReplica } from "@syncaction/replica";
 import { ContentCompatibilityController } from "./content-compatibility-controller.js";
 import type { PresenceTransport } from "./socket-transport.js";
+import { isConfirmedPageDocument } from "./confirmed-page-document.js";
 
 const HEARTBEAT_MS = 10_000;
 
@@ -54,6 +55,7 @@ export interface ActiveTabPresenceOptions {
   transport: PresenceTransport;
   requestRoomSync?: () => void | Promise<void>;
   onRemotePresenceChanged?: (logicalTabIds: readonly string[]) => void | Promise<void>;
+  onStatusChanged?: () => void;
   now?: () => number;
   scheduler?: PresenceScheduler;
 }
@@ -68,6 +70,7 @@ export class ActiveTabPresenceController {
   readonly #requestRoomSync: (() => void | Promise<void>) | undefined;
   readonly #onRemotePresenceChanged:
     ((logicalTabIds: readonly string[]) => void | Promise<void>) | undefined;
+  readonly #onStatusChanged: (() => void) | undefined;
   readonly #now: () => number;
   readonly #scheduler: PresenceScheduler;
   #synchronized = false;
@@ -83,6 +86,7 @@ export class ActiveTabPresenceController {
   #roomSyncRequested = false;
   #lastAckExpiresAt: number | null = null;
   #errorCode: string | null = null;
+  #lastStatusKey = "";
 
   public constructor(options: ActiveTabPresenceOptions) {
     this.#roomId = RoomIdSchema.parse(options.roomId);
@@ -101,12 +105,14 @@ export class ActiveTabPresenceController {
     this.#transport = options.transport;
     this.#requestRoomSync = options.requestRoomSync;
     this.#onRemotePresenceChanged = options.onRemotePresenceChanged;
+    this.#onStatusChanged = options.onStatusChanged;
     this.#now = options.now ?? Date.now;
     this.#scheduler = options.scheduler ?? {
       setInterval: (callback, intervalMs) => setInterval(callback, intervalMs),
       clearInterval: (handle) => clearInterval(handle as ReturnType<typeof setInterval>),
     };
     this.#transport.setPresenceHandler((message) => this.handleMessage(message));
+    this.#lastStatusKey = this.#statusKey();
   }
 
   public setSynchronized(synchronized: boolean): Promise<void> {
@@ -125,6 +131,7 @@ export class ActiveTabPresenceController {
       this.#roomSyncRequested = false;
       this.#lastAckExpiresAt = null;
       this.#errorCode = null;
+      this.#notifyStatusChanged();
       return this.whenIdle();
     }
     const generation = this.#generation;
@@ -176,6 +183,7 @@ export class ActiveTabPresenceController {
         binding === undefined ||
         binding.validatedAtServerSeq !== snapshot.serverSeq ||
         tab === undefined ||
+        !isConfirmedPageDocument(record, tab.id) ||
         report.contentContext.documentRevision.roomEpoch !== snapshot.roomEpoch ||
         report.contentContext.documentRevision.tabUpdatedAtSeq !== tab.updatedAtSeq
       ) {
@@ -308,6 +316,7 @@ export class ActiveTabPresenceController {
         this.#awaitingV2Snapshot = false;
         this.#roomSyncRequested = false;
         this.#scheduleRemotePresenceChanged(changedLogicalTabs);
+        this.#notifyStatusChanged();
       }
       return;
     }
@@ -317,6 +326,7 @@ export class ActiveTabPresenceController {
         const changedLogicalTabs = this.#remoteLogicalTabIdsFromDelta(delta.data);
         this.#applyDelta(delta.data);
         this.#scheduleRemotePresenceChanged(changedLogicalTabs);
+        this.#notifyStatusChanged();
       }
       return;
     }
@@ -340,6 +350,7 @@ export class ActiveTabPresenceController {
     this.#awaitingV2Snapshot = false;
     this.#roomSyncRequested = false;
     this.#scheduleRemotePresenceChanged(changedLogicalTabs);
+    this.#notifyStatusChanged();
   }
 
   public getStatus(): ActiveTabPresenceStatus {
@@ -394,7 +405,8 @@ export class ActiveTabPresenceController {
           (candidate) =>
             candidate.browserSessionId === this.#browserSessionId &&
             candidate.tabId === this.#activeTabId &&
-            activeLogicalTabs.has(candidate.logicalTabId),
+            activeLogicalTabs.has(candidate.logicalTabId) &&
+            isConfirmedPageDocument(record, candidate.logicalTabId),
         );
         const snapshot = record.confirmedSnapshot;
         const tab = snapshot?.tabs.find(
@@ -431,7 +443,35 @@ export class ActiveTabPresenceController {
         }
         this.#errorCode = presenceErrorCode(cause);
       }
+      this.#notifyStatusChanged();
     });
+  }
+
+  #statusKey(): string {
+    const status = this.getStatus();
+    return JSON.stringify([
+      status.state,
+      status.errorCode,
+      status.presences.map((member) => [
+        member.userId,
+        member.deviceId,
+        member.logicalTabId,
+        member.username,
+        member.displayName,
+      ]),
+      status.compatibilities,
+    ]);
+  }
+
+  #notifyStatusChanged(): void {
+    const key = this.#statusKey();
+    if (key === this.#lastStatusKey) return;
+    this.#lastStatusKey = key;
+    try {
+      this.#onStatusChanged?.();
+    } catch {
+      // UI observers must not interrupt presence delivery or the durable replica.
+    }
   }
 
   #stopHeartbeat(): void {

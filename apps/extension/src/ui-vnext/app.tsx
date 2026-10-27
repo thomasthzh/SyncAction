@@ -49,6 +49,7 @@ export type Overlay =
   | {
       kind: "PAGE_PERMISSION";
       intentKey: string;
+      expectedUrl?: string;
       feature: PageFeature;
       intent: PermissionIntent | null;
       preflightErrorCode: string | null;
@@ -463,6 +464,7 @@ export function App({
     openOverlay({
       kind: "PAGE_PERMISSION",
       intentKey,
+      ...(expectedUrl === undefined ? {} : { expectedUrl }),
       feature,
       intent: null,
       preflightErrorCode: null,
@@ -690,6 +692,7 @@ export function App({
           privacyPageUrl={privacyPageUrl}
           ready={overlay.intent !== null}
           externalErrorCode={overlay.preflightErrorCode}
+          onRetry={() => openPagePermission(overlay.intentKey, overlay.expectedUrl)}
           onConfirm={(agreed) => confirmPagePermission(overlay.intent, agreed)}
           onClose={() => closeOverlay()}
         />

@@ -205,6 +205,7 @@ beforeEach(async () => {
 function createObserver(
   isActuatable = () => true,
   operationWriter: LocalOperationWriter = writer,
+  browserChangePolicy: "AUTOMATIC" | "MANUAL" = "AUTOMATIC",
 ): BrowserObserver {
   return new BrowserObserver({
     roomId,
@@ -215,6 +216,7 @@ function createObserver(
     isActuatable,
     now: () => 1_100,
     createLogicalTabId: () => thirdId,
+    browserChangePolicy,
   });
 }
 
@@ -269,6 +271,199 @@ function beginEffect(
 }
 
 describe("browser observer", () => {
+  describe("manual publication", () => {
+    beforeEach(() => {
+      observer = createObserver(() => true, writer, "MANUAL");
+    });
+
+    it.each([false, true])(
+      "checks the fresh URL before publication or discarding a draft (asNew=%s)",
+      async (asNew) => {
+        const draftUrl = "https://example.com/draft";
+        browser.state.tabs.find(({ tabId }) => tabId === 10)!.url = draftUrl;
+        await observer.observe({ type: "TAB_UPDATED", tabId: 10 });
+        const pending = observer.readPendingPublication(10);
+        const before = await replica.getRecord();
+        browser.state.tabs.find(({ tabId }) => tabId === 10)!.url =
+          "https://example.com/another-page";
+        expect(await observer.shareTab(10, { expectedUrl: draftUrl, asNew })).toEqual({
+          kind: "BLOCKED",
+          reason: "PAGE_CONTEXT_CHANGED",
+        });
+        expect(writer.operations).toEqual([]);
+        expect(observer.readPendingPublication(10)).toEqual(pending);
+        expect(await replica.getRecord()).toEqual(before);
+      },
+    );
+
+    it("never publishes a new grouped tab from ordinary browser events", async () => {
+      browser.setTabs([...browser.state.tabs, tab(12, 7, 3, "https://example.com/third")]);
+      await observer.observe({ type: "TAB_CREATED", tabId: 12, url: "https://example.com/third" });
+      await observer.observe({ type: "TAB_UPDATED", tabId: 12 });
+      expect(writer.operations).toEqual([]);
+      expect((await replica.getRecord()).bindings).toHaveLength(2);
+      expect(await observer.shareTab(12)).toMatchObject({
+        kind: "INTENT_RECORDED",
+        operation: { type: "tab.create", logicalTabId: thirdId },
+      });
+    });
+
+    it.each([false, true])(
+      "forgets a local close without deleting the shared object (windowClosing=%s)",
+      async (isWindowClosing) => {
+        browser.setTabs(browser.state.tabs.filter(({ tabId }) => tabId !== 10));
+        expect(
+          await observer.observe({ type: "TAB_REMOVED", tabId: 10, windowId: 1, isWindowClosing }),
+        ).toMatchObject({ kind: "LOCAL_STATE_CHANGED", logicalTabId: firstId, tabId: 10 });
+        expect(writer.operations).toEqual([]);
+        expect((await replica.getRecord()).bindings).not.toContainEqual(binding(firstId, 10));
+        expect((await replica.getOptimisticState()).order).toEqual([firstId, secondId]);
+      },
+    );
+
+    it("detaches a locally navigated document immediately, then explicitly updates the same object", async () => {
+      browser.state.tabs.find(({ tabId }) => tabId === 10)!.url = "https://example.com/draft";
+      browser.state.tabs.find(({ tabId }) => tabId === 10)!.status = "loading";
+      expect(await observer.observe({ type: "TAB_UPDATED", tabId: 10 })).toMatchObject({
+        kind: "LOCAL_STATE_CHANGED",
+        logicalTabId: firstId,
+        tabId: 10,
+      });
+      expect(writer.operations).toEqual([]);
+      expect((await replica.getRecord()).bindings).not.toContainEqual(binding(firstId, 10));
+      expect(observer.readPendingPublication(10)).toMatchObject({
+        tabId: 10,
+        logicalTabId: firstId,
+        roomEpoch: 0,
+        baseUpdatedAtSeq: 1,
+        baseUrl: "https://example.com/first",
+      });
+      browser.state.tabs.find(({ tabId }) => tabId === 10)!.status = "complete";
+      expect(await observer.shareTab(10)).toMatchObject({
+        kind: "INTENT_RECORDED",
+        operation: {
+          type: "tab.navigate",
+          logicalTabId: firstId,
+          url: "https://example.com/draft",
+        },
+      });
+      expect(writer.operations).toHaveLength(1);
+      expect((await replica.getRecord()).bindings).toContainEqual(binding(firstId, 10));
+      expect((await replica.getOptimisticState()).order).toEqual([firstId, secondId]);
+      expect(observer.readPendingPublication(10)).toBeNull();
+    });
+
+    it("rejects an old local draft when another participant has updated its shared object", async () => {
+      browser.state.tabs.find(({ tabId }) => tabId === 10)!.url = "https://example.com/local";
+      await observer.observe({ type: "TAB_UPDATED", tabId: 10 });
+      await repository.update(roomId, (record) => ({
+        ...record,
+        confirmedSnapshot: {
+          ...record.confirmedSnapshot!,
+          serverSeq: 3,
+          tabs: record.confirmedSnapshot!.tabs.map((tab) =>
+            tab.id === firstId
+              ? { ...tab, url: "https://example.com/remote", updatedAtSeq: 3 }
+              : tab,
+          ),
+        },
+      }));
+      expect(await observer.shareTab(10)).toEqual({
+        kind: "BLOCKED",
+        reason: "PAGE_PUBLICATION_STALE",
+      });
+      expect(writer.operations).toEqual([]);
+      expect(
+        Object.values((await replica.getOptimisticState()).tabs).find((tab) => tab?.id === firstId)
+          ?.url,
+      ).toBe("https://example.com/remote");
+    });
+
+    it("requires an explicit discard before publishing a conflicted draft as a new page", async () => {
+      browser.state.tabs.find(({ tabId }) => tabId === 10)!.url = "https://example.com/draft";
+      await observer.observe({ type: "TAB_UPDATED", tabId: 10 });
+      await repository.update(roomId, (record) => ({
+        ...record,
+        confirmedSnapshot: {
+          ...record.confirmedSnapshot!,
+          serverSeq: 3,
+          order: record.confirmedSnapshot!.order.filter((id) => id !== firstId),
+          tabs: record.confirmedSnapshot!.tabs.map((tab) =>
+            tab.id === firstId ? { ...tab, closedAtSeq: 3, updatedAtSeq: 3 } : tab,
+          ),
+        },
+      }));
+      expect(await observer.shareTab(10)).toEqual({
+        kind: "BLOCKED",
+        reason: "PAGE_PUBLICATION_STALE",
+      });
+      expect(writer.operations).toEqual([]);
+      expect(observer.readPendingPublication(10)).not.toBeNull();
+      observer.discardPendingPublication(10);
+      expect(await observer.shareTab(10)).toMatchObject({
+        kind: "INTENT_RECORDED",
+        operation: { type: "tab.create", logicalTabId: thirdId, url: "https://example.com/draft" },
+      });
+      expect((await replica.getOptimisticState()).order).toEqual([secondId, thirdId]);
+    });
+
+    it("does not overwrite a remote revision which arrived before the delayed local navigation event", async () => {
+      browser.state.tabs.find(({ tabId }) => tabId === 10)!.url = "https://example.com/local";
+      await repository.update(roomId, (record) => ({
+        ...record,
+        confirmedSnapshot: {
+          ...record.confirmedSnapshot!,
+          serverSeq: 3,
+          tabs: record.confirmedSnapshot!.tabs.map((tab) =>
+            tab.id === firstId
+              ? { ...tab, url: "https://example.com/remote", updatedAtSeq: 3 }
+              : tab,
+          ),
+        },
+      }));
+      await observer.observe({ type: "TAB_UPDATED", tabId: 10 });
+      expect(await observer.shareTab(10)).toEqual({
+        kind: "BLOCKED",
+        reason: "PAGE_PUBLICATION_STALE",
+      });
+      expect(writer.operations).toEqual([]);
+    });
+
+    it("clears a pending publication when that local tab is closed", async () => {
+      browser.state.tabs.find(({ tabId }) => tabId === 10)!.url = "https://example.com/local";
+      await observer.observe({ type: "TAB_UPDATED", tabId: 10 });
+      expect(observer.readPendingPublication(10)).not.toBeNull();
+      browser.setTabs(browser.state.tabs.filter(({ tabId }) => tabId !== 10));
+      await observer.observe({
+        type: "TAB_REMOVED",
+        tabId: 10,
+        windowId: 1,
+        isWindowClosing: false,
+      });
+      expect(observer.readPendingPublication(10)).toBeNull();
+      expect(writer.operations).toEqual([]);
+    });
+
+    it("ignores local title and order changes and still consumes actuator feedback", async () => {
+      browser.state.tabs.find(({ tabId }) => tabId === 10)!.title = "My private title";
+      await observer.observe({ type: "TAB_UPDATED", tabId: 10 });
+      await observer.observe({ type: "TAB_MOVED", tabId: 10, windowId: 1, index: 2 });
+      expect(writer.operations).toEqual([]);
+      expect((await replica.getRecord()).bindings).toHaveLength(2);
+      beginEffect(0, firstId, {
+        type: "TAB_NAVIGATED",
+        tabId: 10,
+        url: "https://example.com/remote",
+      });
+      browser.state.tabs.find(({ tabId }) => tabId === 10)!.url = "https://example.com/remote";
+      expect(await observer.observe({ type: "TAB_UPDATED", tabId: 10 })).toMatchObject({
+        kind: "EFFECT_CONSUMED",
+      });
+      expect(observer.readPendingPublication(10)).toBeNull();
+      expect((await replica.getRecord()).bindings).toHaveLength(2);
+    });
+  });
+
   it("waits past onCreated, then persists and binds one proven shared tab", async () => {
     browser.setTabs([
       tab(50, null, 0, "https://personal.example/"),

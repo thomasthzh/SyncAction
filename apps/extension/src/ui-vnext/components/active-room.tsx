@@ -379,7 +379,7 @@ export function ActiveRoom({
         <header class="section-heading">
           <div>
             <h2 id="shared-page-heading">共享页面</h2>
-            <p class="section-description">房间里的页面，打开不会自动加入播放组</p>
+            <p class="section-description">在插件内提交或移除共享。浏览器关页不影响房间列表。</p>
           </div>
           <span>
             {collaboration.capacity.openTabCount}
@@ -417,11 +417,33 @@ export function ActiveRoom({
                 currentUserId={currentUserId}
                 isMediaPage={mediaPageIds.has(row.pageKey)}
                 onActivate={(pageId) =>
-                  void store.command({
-                    name: "ROOM_TAB_ACTIVATE",
-                    payload: { logicalTabId: LogicalTabIdSchema.parse(pageId) },
-                  })
+                  void feedback.run("page", () =>
+                    store.command({
+                      name: "ROOM_TAB_ACTIVATE",
+                      payload: { logicalTabId: LogicalTabIdSchema.parse(pageId) },
+                    }),
+                  )
                 }
+                onRemove={async (pageId) => {
+                  if (shell.selectedProfileId === null || room.selectedRoomId === null)
+                    return false;
+                  const profileId = shell.selectedProfileId;
+                  const roomId = room.selectedRoomId;
+                  const result = await feedback.run(
+                    "page",
+                    () =>
+                      store.command({
+                        name: "ROOM_TAB_REMOVE",
+                        payload: {
+                          logicalTabId: LogicalTabIdSchema.parse(pageId),
+                          profileId,
+                          roomId,
+                        },
+                      }),
+                    "已提交移除共享页面",
+                  );
+                  return result?.ok === true;
+                }}
                 onMediaMemberJump={(userId) =>
                   void store.command({
                     name: "MEDIA_MEMBER_JUMP",

@@ -6,7 +6,7 @@ import {
   type DocumentRevision,
   type PageCompatibilityReport,
 } from "@syncaction/protocol";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   PageContentCompatibilityReporter,
   type CompatibilityMutationObserver,
@@ -60,6 +60,9 @@ let reports: PageCompatibilityReport[];
 let now: number;
 let pageUrl: string;
 let reporter: PageContentCompatibilityReporter;
+let viewport: { widthCssPx: number; heightCssPx: number };
+
+afterEach(() => reporter.dispose());
 
 beforeEach(() => {
   document.documentElement.innerHTML = "<body><main></main><h1></h1><button></button></body>";
@@ -71,11 +74,12 @@ beforeEach(() => {
   reports = [];
   now = 10_000;
   pageUrl = "https://example.com/article#private-fragment";
+  viewport = { widthCssPx: 1_280, heightCssPx: 720 };
   reporter = new PageContentCompatibilityReporter({
     document,
     roomId,
     readPageUrl: () => pageUrl,
-    readViewport: () => ({ widthCssPx: 1_280, heightCssPx: 720 }),
+    readViewport: () => viewport,
     emit: async (report) => {
       reports.push(report);
     },
@@ -91,6 +95,33 @@ beforeEach(() => {
 });
 
 describe("PageContentCompatibilityReporter", () => {
+  it("refreshes a resized viewport without mutations, coalesces the burst, and stops on dispose", async () => {
+    await reporter.setContext({ logicalTabId, documentRevision: revision });
+    const original = reports[0]!.contentContext.contentSignature;
+    viewport = { widthCssPx: 960, heightCssPx: 720 };
+    window.dispatchEvent(new Event("resize"));
+    window.dispatchEvent(new Event("resize"));
+    window.dispatchEvent(new Event("resize"));
+    expect(reports).toHaveLength(1);
+    expect(scheduler.delayMs).toBe(5_000);
+    now += 5_000;
+    scheduler.run();
+    await reporter.whenIdle();
+    expect(reports).toHaveLength(2);
+    expect(reports[1]!.contentContext.contentSignature).not.toEqual(original);
+    window.dispatchEvent(new Event("resize"));
+    now += 5_000;
+    scheduler.run();
+    await reporter.whenIdle();
+    expect(reports).toHaveLength(2);
+    reporter.dispose();
+    viewport = { widthCssPx: 1_280, heightCssPx: 720 };
+    window.dispatchEvent(new Event("resize"));
+    expect(scheduler.callback).toBeUndefined();
+    scheduler.run();
+    await reporter.whenIdle();
+    expect(reports).toHaveLength(2);
+  });
   it("reports an authorized document once and recomputes for canonical or media identity changes", async () => {
     await reporter.setContext({ logicalTabId, documentRevision: revision });
 

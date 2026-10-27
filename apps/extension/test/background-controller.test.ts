@@ -881,6 +881,102 @@ describe("BackgroundController", () => {
     });
   });
 
+  it("keeps manual navigation pending until the committed document, then restores collaboration", async () => {
+    const browserPort = new MutableBrowserPort();
+    const activated: number[] = [];
+    const controller = new BackgroundController({
+      persistence,
+      configStore: new StaticConfigStore(config),
+      transportFactory: () => transport,
+      browserPort,
+      browserSessionId: "018f8f8e-4b5c-7d6e-8f90-123456789ab5",
+      browserChangePolicy: "MANUAL",
+      pagePort: new FakePointerPagePort(),
+      mediaNavigationPort: {
+        activateTab: async (id) => {
+          activated.push(id);
+        },
+      },
+    });
+    await controller.start();
+    await controller.whenIdle();
+    expect(browserPort.createCount).toBe(0);
+    await controller.activateLogicalTab(logicalTabId);
+    await controller.handleActiveTabChanged(20);
+    expect(activated).toEqual([20]);
+    expect(await controller.getPageDocumentRevision(20)).toEqual({
+      roomEpoch: 0,
+      tabUpdatedAtSeq: 1,
+    });
+    browserPort.state.tabs.find((tab) => tab.tabId === 20)!.url = "https://example.com/local-draft";
+    await controller.handleBrowserEvent({ type: "TAB_UPDATED", tabId: 20 });
+    expect(transport.submissions).toEqual([]);
+    expect(controller.getPendingPagePublication(20)?.logicalTabId).toBe(logicalTabId);
+    expect(await controller.getPageDocumentRevision(20)).toBeNull();
+
+    await controller.shareBrowserTab(20);
+    await controller.whenIdle();
+    const submission = transport.submissions.at(-1)!;
+    expect(submission.operation).toEqual({
+      type: "tab.navigate",
+      logicalTabId,
+      url: "https://example.com/local-draft",
+    });
+    expect(await controller.getPageDocumentRevision(20)).toBeNull();
+    await expect(controller.toggleDanmakuInput()).rejects.toThrow("PAGE_TOOL_UNAVAILABLE");
+    transport.handlers?.onCommitted(
+      CommittedOperationSchema.parse({
+        type: "op.committed",
+        protocolVersion: 1,
+        clientOpId: submission.clientOpId,
+        roomId,
+        roomEpoch: 0,
+        deviceId,
+        serverSeq: 2,
+        operation: submission.operation,
+      }),
+    );
+    await controller.whenIdle();
+    await vi.waitFor(async () =>
+      expect(await controller.getPageDocumentRevision(20)).toEqual({
+        roomEpoch: 0,
+        tabUpdatedAtSeq: 2,
+      }),
+    );
+    await controller.removeSharedTab(logicalTabId);
+    expect(transport.submissions.at(-1)?.operation).toEqual({ type: "tab.close", logicalTabId });
+    expect(await controller.getPageDocumentRevision(20)).toBeNull();
+    await controller.stop();
+  });
+
+  it("keeps the room page when an ordinary browser tab is closed in manual mode", async () => {
+    const browserPort = new MutableBrowserPort();
+    const controller = new BackgroundController({
+      persistence,
+      configStore: new StaticConfigStore(config),
+      transportFactory: () => transport,
+      browserPort,
+      browserSessionId: "018f8f8e-4b5c-7d6e-8f90-123456789ab5",
+      browserChangePolicy: "MANUAL",
+      mediaNavigationPort: { activateTab: async () => undefined },
+    });
+    await controller.start();
+    await controller.activateLogicalTab(logicalTabId);
+    await browserPort.closeTab(20);
+    await controller.handleBrowserEvent({
+      type: "TAB_REMOVED",
+      tabId: 20,
+      windowId: 1,
+      isWindowClosing: false,
+    });
+    expect(transport.submissions).toEqual([]);
+    expect((await controller.getStatus()).tabs.map((tab) => tab.logicalTabId)).toEqual([
+      logicalTabId,
+    ]);
+    expect(browserPort.createCount).toBe(1);
+    await controller.stop();
+  });
+
   it("activates only an existing current-session logical-tab binding without creating a tab", async () => {
     const browserPort = new MutableBrowserPort();
     const activated: number[] = [];
@@ -967,6 +1063,67 @@ describe("BackgroundController", () => {
       type: "presence.update",
       logicalTabId,
     });
+    await controller.stop();
+  });
+
+  it("publishes UI invalidations for self and unbound member presence without page effects", async () => {
+    const onStatusChanged = vi.fn();
+    const controller = new BackgroundController({
+      persistence,
+      configStore: new StaticConfigStore(config),
+      transportFactory: () => transport,
+      browserSessionId: "018f8f8e-4b5c-7d6e-8f90-123456789ab5",
+      onStatusChanged,
+    });
+    await controller.start();
+    await controller.whenIdle();
+    onStatusChanged.mockClear();
+    const ownPresence = {
+      userId,
+      username: "owner",
+      displayName: "Owner",
+      deviceId,
+      logicalTabId: null,
+      contentContext: null,
+      expiresAt: Date.now() + 30_000,
+    };
+    transport.presenceHandler?.(
+      PresenceSnapshotV2MessageSchema.parse({
+        type: "presence.snapshot.v2",
+        protocolVersion: 1,
+        roomId,
+        presenceSeq: 1,
+        presences: [ownPresence],
+      }),
+    );
+    await controller.whenIdle();
+    expect(onStatusChanged).toHaveBeenCalledOnce();
+    expect((await controller.getStatus()).presence?.presences).toEqual([
+      expect.objectContaining({ userId, logicalTabId: null }),
+    ]);
+    onStatusChanged.mockClear();
+    transport.presenceHandler?.(
+      PresenceSnapshotV2MessageSchema.parse({
+        type: "presence.snapshot.v2",
+        protocolVersion: 1,
+        roomId,
+        presenceSeq: 2,
+        presences: [{ ...ownPresence, expiresAt: Date.now() + 40_000 }],
+      }),
+    );
+    await controller.whenIdle();
+    expect(onStatusChanged).not.toHaveBeenCalled();
+    transport.presenceHandler?.(
+      PresenceSnapshotV2MessageSchema.parse({
+        type: "presence.snapshot.v2",
+        protocolVersion: 1,
+        roomId,
+        presenceSeq: 3,
+        presences: [],
+      }),
+    );
+    await controller.whenIdle();
+    expect(onStatusChanged).toHaveBeenCalledOnce();
     await controller.stop();
   });
 
@@ -1347,6 +1504,22 @@ describe("BackgroundController", () => {
       { tabId: 20, context: expectedContext, hidden: true },
     ]);
     expect(pagePort.penToggles).toEqual([{ tabId: 20, context: expectedContext }]);
+
+    for (const action of ["toggleDanmakuInput", "togglePagePen"] as const) {
+      await expect(
+        controller[action]({ tabId: 99, documentRevision: expectedContext.documentRevision }),
+      ).rejects.toThrow("PAGE_TOOL_CONTEXT_CHANGED");
+      await expect(
+        controller[action]({ tabId: 20, documentRevision: { roomEpoch: 0, tabUpdatedAtSeq: 2 } }),
+      ).rejects.toThrow("PAGE_TOOL_CONTEXT_CHANGED");
+    }
+    expect(pagePort.danmakuToggles).toHaveLength(1);
+    expect(pagePort.penToggles).toHaveLength(1);
+    await controller.togglePagePen({
+      tabId: 20,
+      documentRevision: expectedContext.documentRevision,
+    });
+    expect(pagePort.penToggles).toHaveLength(2);
 
     await controller.handleActiveTabChanged(99);
     await expect(controller.toggleDanmakuInput()).rejects.toThrow("PAGE_TOOL_UNAVAILABLE");

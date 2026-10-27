@@ -220,6 +220,8 @@ export interface PageContentCompatibilityReporterOptions {
   createMutationObserver?: (callback: () => void) => CompatibilityMutationObserver;
   addPageShowListener?: (listener: EventListener) => void;
   removePageShowListener?: (listener: EventListener) => void;
+  addResizeListener?: (listener: EventListener) => void;
+  removeResizeListener?: (listener: EventListener) => void;
 }
 
 export class PageContentCompatibilityReporter {
@@ -234,6 +236,8 @@ export class PageContentCompatibilityReporter {
   readonly #observer: CompatibilityMutationObserver;
   readonly #removePageShowListener: (listener: EventListener) => void;
   readonly #pageShowListener: EventListener;
+  readonly #resizeListener: EventListener;
+  readonly #removeResizeListener: (listener: EventListener) => void;
   #context:
     | {
         logicalTabId: LogicalTabId;
@@ -282,6 +286,16 @@ export class PageContentCompatibilityReporter {
       }
     };
     addPageShowListener(this.#pageShowListener);
+    const addResizeListener =
+      options.addResizeListener ??
+      ((listener: EventListener) =>
+        this.#document.defaultView?.addEventListener("resize", listener));
+    this.#removeResizeListener =
+      options.removeResizeListener ??
+      ((listener: EventListener) =>
+        this.#document.defaultView?.removeEventListener("resize", listener));
+    this.#resizeListener = () => this.#scheduleMutationReport();
+    addResizeListener(this.#resizeListener);
   }
 
   public setContext(contextInput: PageCompatibilityReporterContext): Promise<void> {
@@ -334,6 +348,7 @@ export class PageContentCompatibilityReporter {
       this.#mutationTimer = undefined;
     }
     this.#removePageShowListener(this.#pageShowListener);
+    this.#removeResizeListener(this.#resizeListener);
     this.#context = undefined;
     this.#media = null;
   }

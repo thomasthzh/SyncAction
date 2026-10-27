@@ -18,6 +18,13 @@ const ERROR_LABELS: Readonly<Record<string, string>> = {
   SHARE_NOT_READY: "房间尚未准备好，当前页面未分享，请等待连接恢复后重试",
   SHARE_RECOVERY_REQUIRED: "当前页面未分享，请先检查房间的恢复提示和页面状态",
   SHARE_RESULT_UNKNOWN: "尚未确认分享结果，请检查共享页面列表后重试",
+  ROOM_DOCUMENT_UNAVAILABLE: "当前页面尚未共享到房间，请先分享当前页再启用页面协作",
+  PAGE_TOOL_CONTEXT_CHANGED: "页面、房间或服务器已变化，请从当前页面重新启用",
+  PAGE_PUBLICATION_STALE:
+    "房间中的原页面已被更新或移除。请打开最新共享页面后再继续，当前改动尚未提交。",
+  ROOM_TAB_NOT_AVAILABLE: "共享页面已变化或连接尚未准备好，请重新打开页面后再试",
+  PAGE_DOCUMENT_PREPARING: "页面协作仍在准备，请稍后从当前页面重试",
+  PAGE_TOOL_RESULT_UNCONFIRMED: "尚未确认操作结果，请先检查当前页面后再决定是否重试",
   ROOM_CAPACITY_REACHED: "本服务器普通用户同时最多创建 5 个房间",
   ROOM_NOT_FOUND: "房间不存在或已关闭",
   ROOM_OWNER_REQUIRED: "只有房主可以执行此操作",

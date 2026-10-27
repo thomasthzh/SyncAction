@@ -22,6 +22,7 @@ import {
   type PageCapabilityReport,
 } from "./page-collaboration/messages.js";
 import type { CollaborationTransport, DanmakuMessageHandler } from "./socket-transport.js";
+import { isConfirmedPageDocument } from "./confirmed-page-document.js";
 
 const LocalTabIdSchema = z.number().int().nonnegative().safe();
 const FrameIdSchema = z.number().int().nonnegative().safe();
@@ -637,7 +638,7 @@ export class DanmakuController {
         candidate.closedAtSeq === null &&
         snapshot.order.includes(candidate.id),
     );
-    if (binding === undefined || tab === undefined) {
+    if (binding === undefined || tab === undefined || !isConfirmedPageDocument(record, tab.id)) {
       return null;
     }
     return CollaborationPageContextSchema.parse({
