@@ -181,14 +181,9 @@ const emptyDiagnostics = {
   },
 };
 
-/**
- * @param {{ root: HTMLElement; document: Document; api?: AdminApi }} options
- */
-export function createConsoleApp(options) {
-  const { root, document: documentObject } = options;
-  const api = options.api ?? createAdminApi();
-  /** @type {ConsoleState} */
-  const state = {
+/** @returns {ConsoleState} */
+function createConsoleState() {
+  return {
     authenticated: false,
     principal: null,
     onboarding: null,
@@ -228,6 +223,41 @@ export function createConsoleApp(options) {
     refreshedAt: null,
     activationDraft: "",
   };
+}
+
+/**
+ * @param {{ root: HTMLElement; document: Document; api?: AdminApi }} options
+ */
+export function createConsoleApp(options) {
+  const { root, document: documentObject } = options;
+  const state = createConsoleState();
+  const api = new Proxy(options.api ?? createAdminApi(), {
+    get(client, name) {
+      const method = Reflect.get(client, name);
+      if (typeof method !== "function") return method;
+      /** @param {unknown[]} args */
+      async function guardedRequest(...args) {
+        const operationGeneration = generation;
+        const signal = args.at(-1);
+        const current = () =>
+          isLive(operationGeneration) &&
+          !(typeof signal === "object" && signal !== null && "aborted" in signal && signal.aborted);
+        try {
+          if (!current()) throw new DOMException("Administrator session changed", "AbortError");
+          const result = await method.apply(client, args);
+          if (!current()) throw new DOMException("Administrator session changed", "AbortError");
+          return result;
+        } catch (error) {
+          if (!current()) throw new DOMException("Administrator session changed", "AbortError");
+          if (name !== "login" && isSessionRejection(error, name)) {
+            clearSession(state.authenticated ? sessionRejectionMessage(error) : null);
+          }
+          throw error;
+        }
+      }
+      return guardedRequest;
+    },
+  });
   const dom = createConsoleDom(documentObject);
   const { sectionHeading, formField, actionButton, messageBanner, node, textNode } = dom;
   const {
@@ -248,6 +278,20 @@ export function createConsoleApp(options) {
   const activeControllers = new Set();
   /** @type {Promise<void>} */
   let authoritativeRefreshTail = Promise.resolve();
+
+  /** @param {string | null} [message] */
+  function clearSession(message = null) {
+    generation += 1;
+    for (const controller of activeControllers) controller.abort();
+    activeControllers.clear();
+    transientReadController = null;
+    authoritativeRefreshTail = Promise.resolve();
+    Object.assign(state, createConsoleState());
+    state.error = message;
+    render();
+    const username = root.querySelector('input[name="username"]');
+    if (isFocusableElement(username)) username.focus();
+  }
 
   /** @param {Event} event */
   const clickHandler = (event) => void handleClick(/** @type {MouseEvent} */ (event));
@@ -279,14 +323,7 @@ export function createConsoleApp(options) {
       if (!isLive(operationGeneration, controller) || isAbort(error)) {
         return;
       }
-      if (isUnauthorized(error)) {
-        state.authenticated = false;
-        state.principal = null;
-        state.onboarding = null;
-        state.totpEnrollment = null;
-      } else {
-        state.error = errorMessage(error);
-      }
+      state.error = errorMessage(error);
     } finally {
       releaseController(controller);
     }
@@ -304,10 +341,7 @@ export function createConsoleApp(options) {
     activeControllers.clear();
     transientReadController = null;
     authoritativeRefreshTail = Promise.resolve();
-    state.pendingActions.clear();
-    state.totpEnrollment = null;
-    state.oneTimeActivation = null;
-    state.activationDraft = "";
+    Object.assign(state, createConsoleState());
     root.removeEventListener("click", clickHandler);
     root.removeEventListener("submit", submitHandler);
     root.removeEventListener("change", changeHandler);
@@ -319,17 +353,26 @@ export function createConsoleApp(options) {
    * @param {AbortSignal} signal
    */
   async function loadAuthenticatedState(signal) {
+    const operationGeneration = generation;
+    function requireCurrent() {
+      if (!isLive(operationGeneration) || signal.aborted) {
+        throw new DOMException("Administrator session changed", "AbortError");
+      }
+    }
     const onboardingResult = /** @type {AdminOnboardingSnapshot} */ (await api.onboarding(signal));
-    state.authenticated = true;
-    state.onboarding = onboardingResult.onboarding;
+    requireCurrent();
     const onboardingRequired =
       onboardingResult.onboarding.passwordChangeRequired ||
       onboardingResult.onboarding.totpEnrollmentRequired;
     if (onboardingRequired) {
-      state.principal = null;
-      state.totpEnrollment = onboardingResult.onboarding.totpEnrollmentRequired
+      const enrollment = onboardingResult.onboarding.totpEnrollmentRequired
         ? /** @type {TotpEnrollment} */ (await api.totpEnrollment(signal))
         : null;
+      requireCurrent();
+      state.authenticated = true;
+      state.onboarding = onboardingResult.onboarding;
+      state.principal = null;
+      state.totpEnrollment = enrollment;
       state.users = [];
       state.pendingUsers = [];
       state.pendingTotal = 0;
@@ -340,9 +383,13 @@ export function createConsoleApp(options) {
       return;
     }
 
-    state.totpEnrollment = null;
     const principalResult = await api.me(signal);
+    requireCurrent();
     const snapshot = await fetchConsoleData(signal);
+    requireCurrent();
+    state.authenticated = true;
+    state.onboarding = onboardingResult.onboarding;
+    state.totpEnrollment = null;
     state.principal = /** @type {AdminPrincipal} */ (principalResult);
     applyConsoleSnapshot(snapshot);
   }
@@ -706,8 +753,10 @@ export function createConsoleApp(options) {
       } catch (error) {
         if (isLive(operationGeneration) && !isAbort(error)) state.error = errorMessage(error);
       } finally {
-        state.pendingActions.delete("refresh-data");
-        if (isLive(operationGeneration)) render();
+        if (isLive(operationGeneration)) {
+          state.pendingActions.delete("refresh-data");
+          render();
+        }
       }
       return;
     }
@@ -741,15 +790,18 @@ export function createConsoleApp(options) {
       return;
     }
     if (action === "copy-activation-key" && state.oneTimeActivation !== null) {
+      const operationGeneration = generation;
       try {
         const clipboard = documentObject.defaultView?.navigator.clipboard;
         if (clipboard === undefined) {
           throw new Error("Clipboard unavailable");
         }
         await clipboard.writeText(state.oneTimeActivation.activationKey);
+        if (!isLive(operationGeneration)) return;
         state.notice = "完整密钥已复制；关闭卡片后无法再次查看";
         state.error = null;
       } catch {
+        if (!isLive(operationGeneration)) return;
         state.error = "浏览器未允许复制，请手动选中密钥复制";
       }
       render();
@@ -825,20 +877,7 @@ export function createConsoleApp(options) {
         target,
         "logout",
         (signal) => api.logout(signal),
-        () => {
-          state.authenticated = false;
-          state.principal = null;
-          state.onboarding = null;
-          state.totpEnrollment = null;
-          state.users = [];
-          state.pendingUsers = [];
-          state.pendingTotal = 0;
-          state.rooms = [];
-          state.auditEvents = [];
-          state.activationGrants = [];
-          state.oneTimeActivation = null;
-          state.activationDraft = "";
-        },
+        () => clearSession(),
         null,
       );
       return;
@@ -1209,6 +1248,7 @@ export function createConsoleApp(options) {
       }
       writeSucceeded = true;
       onWriteSuccess(result);
+      if (!isLive(operationGeneration, controller)) return;
       state.error = null;
       render();
       if (fetchProjection !== null) {
@@ -1234,8 +1274,8 @@ export function createConsoleApp(options) {
       }
     } finally {
       releaseController(controller);
-      state.pendingActions.delete(key);
       if (isLive(operationGeneration)) {
+        state.pendingActions.delete(key);
         button.disabled = false;
         render();
       }
@@ -1924,12 +1964,28 @@ function isSortDirection(value) {
 
 /**
  * @param {unknown} error
+ * @param {string | symbol} operation
  */
-function isUnauthorized(error) {
+function isSessionRejection(error, operation) {
+  const status =
+    typeof error === "object" && error !== null && "status" in error ? error.status : null;
+  const code = error instanceof Error ? error.message : null;
+  // A failed setup OTP is an input error, not a lost administrator session.
+  if (
+    status === 503 ||
+    (operation === "completeOnboarding" && code === "ADMIN_INVALID_CREDENTIALS")
+  )
+    return false;
   return (
-    (error instanceof AdminApiError && error.status === 401) ||
-    (typeof error === "object" && error !== null && "status" in error && error.status === 401)
+    status === 401 || code === "ADMIN_SESSION_INVALID" || code === "ADMIN_WEBOS_LEASE_INACTIVE"
   );
+}
+
+/** @param {unknown} error */
+function sessionRejectionMessage(error) {
+  return error instanceof Error && error.message === "ADMIN_WEBOS_LEASE_INACTIVE"
+    ? "桌面会话已锁定或失效，请返回万点飞花重新解锁，或使用原管理员登录"
+    : "管理员会话已失效，请重新登录";
 }
 
 /**
@@ -1952,6 +2008,7 @@ function errorMessage(error) {
   const labels = {
     ADMIN_INVALID_CREDENTIALS: "管理员账号、密码或动态验证码无效",
     ADMIN_SESSION_INVALID: "管理员会话已失效，请重新登录",
+    ADMIN_WEBOS_UNAVAILABLE: "暂时无法确认桌面会话，请稍后重试",
     ADMIN_LINK_ALREADY_SET: "普通账号已绑定，不能再次绑定",
     ADMIN_LINK_TARGET_INVALID: "目标普通账号不存在或尚未激活",
     ORDINARY_ROOM_LIMIT_REACHED: "普通房间容量已满",

@@ -777,3 +777,331 @@ function relativeLuminance(hex: string) {
   });
   return red * 0.2126 + green * 0.7152 + blue * 0.0722;
 }
+
+describe("administrator authentication loss", () => {
+  it.each([
+    ["ADMIN_SESSION_INVALID", 401],
+    ["ADMIN_WEBOS_LEASE_INACTIVE", 401],
+    ["ADMIN_WEBOS_LEASE_INACTIVE", 403],
+  ])("clears protected state and cancels detail reads on %s (%s)", async (code, status) => {
+    const members = deferred<unknown>();
+    let detailSignal: AbortSignal | undefined;
+    const api = createApi({
+      listRoomMembers: vi.fn(async (_roomId: string, signal?: AbortSignal) => {
+        detailSignal = signal;
+        return members.promise;
+      }),
+    });
+    const mounted = await mountConsole(api);
+    const state = mounted.app.getState();
+    state.oneTimeActivation = {
+      activationKey: "sak_private-once-only",
+      grant: {} as NonNullable<typeof state.oneTimeActivation>["grant"],
+    };
+    state.totpEnrollment = { secret: "private-setup-secret", otpauthUri: "otpauth://private" };
+    state.activationDraft = "private account note";
+    state.devicesByUserId.set(activeUserA.id, [
+      { deviceId: "private-device", activeSessionCount: 1, lastRotatedAt: "2026-10-01" },
+    ]);
+    state.selectedUserId = activeUserA.id;
+    state.bindingTargetUserId = activeUserB.id;
+    state.userFilters.query = "private user search";
+    state.roomFilters.query = "private room search";
+    click(mounted.window, queryButton(mounted.root, "open-room", activeRoom.roomId));
+    await flushTasks();
+    vi.mocked(api.listUsers).mockRejectedValue(new AdminApiError(code, status, "expired-request"));
+
+    click(mounted.window, mounted.root.querySelector('[data-action="refresh-data"]'));
+    await flushTasks();
+    await flushTasks();
+
+    expect(mounted.root.getAttribute("data-authenticated")).toBe("false");
+    expect(mounted.root.querySelector('[data-form="login"]')).not.toBeNull();
+    expect(mounted.root.textContent).not.toContain(activeRoom.name);
+    expect(mounted.root.textContent).not.toContain(activeUserA.displayName);
+    expect(state.principal).toBeNull();
+    expect(state.onboarding).toBeNull();
+    expect(state.totpEnrollment).toBeNull();
+    expect(state.oneTimeActivation).toBeNull();
+    expect(state.activationDraft).toBe("");
+    expect(state.users).toEqual([]);
+    expect(state.pendingUsers).toEqual([]);
+    expect(state.rooms).toEqual([]);
+    expect(state.auditEvents).toEqual([]);
+    expect(state.activationGrants).toEqual([]);
+    expect(state.diagnostics.counts.activeUsers).toBe(0);
+    expect(state.devicesByUserId.size).toBe(0);
+    expect(state.selectedUserId).toBeNull();
+    expect(state.drawer).toBeNull();
+    expect(state.bindingTargetUserId).toBeNull();
+    expect(state.userFilters.query).toBe("");
+    expect(state.roomFilters.query).toBe("");
+    expect(state.refreshedAt).toBeNull();
+    expect(state.pendingActions.size).toBe(0);
+    expect(detailSignal?.aborted).toBe(true);
+    expect(api.login).not.toHaveBeenCalled();
+    expect(mounted.root.textContent).not.toContain(code);
+
+    const username = mounted.root.querySelector('input[name="username"]');
+    expect(mounted.window.document.activeElement).toBe(username);
+    members.resolve({ members: roomMembers });
+    await flushTasks();
+    expect(state.drawer).toBeNull();
+    expect(mounted.root.getAttribute("data-authenticated")).toBe("false");
+    mounted.app.destroy();
+  });
+
+  it("retains an authenticated workspace when its lease check is unavailable", async () => {
+    const api = createApi();
+    const mounted = await mountConsole(api);
+    vi.mocked(api.listUsers).mockRejectedValue(
+      new AdminApiError("ADMIN_WEBOS_UNAVAILABLE", 503, undefined),
+    );
+    click(mounted.window, mounted.root.querySelector('[data-action="refresh-data"]'));
+    await flushTasks();
+    await flushTasks();
+    expect(mounted.app.getState().authenticated).toBe(true);
+    expect(mounted.app.getState().users).toEqual([activeUserA]);
+    expect(mounted.root.querySelector('[data-form="login"]')).toBeNull();
+    expect(mounted.root.querySelector('[data-region="mutation-error"]')?.textContent).toContain(
+      "稍后重试",
+    );
+    expect(api.logout).not.toHaveBeenCalled();
+    mounted.app.destroy();
+  });
+
+  it("fences late onboarding responses without replacing the new login's fields or focus", async () => {
+    const api = createApi();
+    const mounted = await mountConsole(api);
+    const oldOnboarding = deferred<unknown>();
+    vi.mocked(api.onboarding).mockImplementationOnce(async () => oldOnboarding.promise);
+    const staleStart = mounted.app.start();
+    await flushTasks();
+    vi.mocked(api.listUsers).mockRejectedValue(
+      new AdminApiError("ADMIN_WEBOS_LEASE_INACTIVE", 401, undefined),
+    );
+    click(mounted.window, mounted.root.querySelector('[data-action="refresh-data"]'));
+    await flushTasks();
+    await flushTasks();
+    setInput(mounted.root, "username", "NextAdmin");
+    setInput(mounted.root, "password", "new login draft");
+    const password = mounted.root.querySelector(
+      'input[name="password"]',
+    ) as unknown as HTMLInputElement;
+    password.focus();
+    oldOnboarding.resolve({
+      administrator: { id: "old-admin", username: "OldAdmin", linkedUserId: null },
+      onboarding: { passwordChangeRequired: false, totpEnrollmentRequired: false },
+    });
+    await staleStart;
+    await flushTasks();
+    expect(mounted.app.getState().authenticated).toBe(false);
+    expect(mounted.root.querySelector('input[name="password"]')).toBe(password);
+    expect(password.value).toBe("new login draft");
+    expect(mounted.window.document.activeElement).toBe(password);
+    expect(
+      (mounted.root.querySelector('input[name="username"]') as unknown as HTMLInputElement).value,
+    ).toBe("NextAdmin");
+    mounted.app.destroy();
+  });
+
+  it("does not let an old mutation clear the new session's pending action", async () => {
+    const oldWrite = deferred<unknown>();
+    const newWrite = deferred<unknown>();
+    const api = createApi({ listUsers: vi.fn(async () => ({ users: [pendingUserA] })) });
+    vi.mocked(api.approveUser)
+      .mockImplementationOnce(async () => oldWrite.promise)
+      .mockImplementationOnce(async () => newWrite.promise);
+    const mounted = await mountConsole(api);
+    click(mounted.window, queryButton(mounted.root, "approve-user", pendingUserA.id));
+    await flushTasks();
+    vi.mocked(api.listRoomMembers).mockRejectedValueOnce(
+      new AdminApiError("ADMIN_WEBOS_LEASE_INACTIVE", 401, undefined),
+    );
+    click(mounted.window, queryButton(mounted.root, "open-room", activeRoom.roomId));
+    await flushTasks();
+    setInput(mounted.root, "username", "SyncAdmin");
+    setInput(mounted.root, "password", "administrator horse battery");
+    submit(mounted.window, mounted.root.querySelector('[data-form="login"]'));
+    await flushTasks();
+    await flushTasks();
+    expect(mounted.app.getState().authenticated).toBe(true);
+    click(mounted.window, queryButton(mounted.root, "approve-user", pendingUserA.id));
+    await flushTasks();
+    oldWrite.resolve({});
+    await flushTasks();
+    expect(mounted.app.getState().pendingActions.has(`approve:${pendingUserA.id}`)).toBe(true);
+    expect(queryButton(mounted.root, "approve-user", pendingUserA.id).disabled).toBe(true);
+    newWrite.resolve({});
+    await flushTasks();
+    await flushTasks();
+    expect(mounted.app.getState().pendingActions.size).toBe(0);
+    mounted.app.destroy();
+  });
+
+  it("clears protected data when a successful write's follow-up read rejects the session", async () => {
+    const api = createApi({ listUsers: vi.fn(async () => ({ users: [pendingUserA] })) });
+    const mounted = await mountConsole(api);
+    vi.mocked(api.listUsers).mockRejectedValue(
+      new AdminApiError("ADMIN_SESSION_INVALID", 401, undefined),
+    );
+    click(mounted.window, queryButton(mounted.root, "approve-user", pendingUserA.id));
+    await flushTasks();
+    await flushTasks();
+    expect(api.approveUser).toHaveBeenCalledOnce();
+    expect(mounted.app.getState().authenticated).toBe(false);
+    expect(mounted.app.getState().users).toEqual([]);
+    expect(mounted.app.getState().refreshWarning).toBeNull();
+    expect(mounted.app.getState().notice).toBeNull();
+    expect(mounted.root.querySelector('[data-form="login"]')).not.toBeNull();
+    expect(mounted.root.textContent).not.toContain("账号已批准");
+    mounted.app.destroy();
+  });
+
+  it("ignores a cancelled detail request's late unauthorized response", async () => {
+    const oldDetail = deferred<unknown>();
+    let detailSignal: AbortSignal | undefined;
+    const api = createApi({
+      listRoomMembers: vi.fn(async (_roomId: string, signal?: AbortSignal) => {
+        detailSignal = signal;
+        return oldDetail.promise;
+      }),
+      listUserDevices: vi.fn(async () => ({
+        devices: [{ deviceId: "new-device", activeSessionCount: 1, lastRotatedAt: "2026-10-01" }],
+      })),
+    });
+    const mounted = await mountConsole(api);
+    click(mounted.window, queryButton(mounted.root, "open-room", activeRoom.roomId));
+    await flushTasks();
+    click(mounted.window, mounted.root.querySelector('[data-nav-view="users"]'));
+    click(mounted.window, queryButton(mounted.root, "view-devices", activeUserA.id));
+    await flushTasks();
+    expect(detailSignal?.aborted).toBe(true);
+    oldDetail.reject(new AdminApiError("ADMIN_WEBOS_LEASE_INACTIVE", 401, undefined));
+    await flushTasks();
+    expect(mounted.app.getState().authenticated).toBe(true);
+    expect(mounted.app.getState().selectedUserId).toBe(activeUserA.id);
+    expect(mounted.app.getState().devicesByUserId.get(activeUserA.id)?.[0]?.deviceId).toBe(
+      "new-device",
+    );
+    expect(mounted.root.querySelector('[data-form="login"]')).toBeNull();
+    mounted.app.destroy();
+  });
+
+  it("keeps native invalid-credentials errors on the login form and permits a later native login", async () => {
+    const api = createApi();
+    vi.mocked(api.onboarding).mockRejectedValueOnce(
+      new AdminApiError("ADMIN_SESSION_INVALID", 401, undefined),
+    );
+    vi.mocked(api.login).mockRejectedValueOnce(
+      new AdminApiError("ADMIN_INVALID_CREDENTIALS", 401, undefined),
+    );
+    const mounted = await mountConsole(api);
+    setInput(mounted.root, "username", "SyncAdmin");
+    setInput(mounted.root, "password", "wrong password");
+    submit(mounted.window, mounted.root.querySelector('[data-form="login"]'));
+    await flushTasks();
+    expect(mounted.root.textContent).toContain("管理员账号、密码或动态验证码无效");
+    expect(mounted.app.getState().authenticated).toBe(false);
+    expect(api.login).toHaveBeenCalledOnce();
+    setInput(mounted.root, "username", "SyncAdmin");
+    setInput(mounted.root, "password", "administrator horse battery");
+    submit(mounted.window, mounted.root.querySelector('[data-form="login"]'));
+    await flushTasks();
+    await flushTasks();
+    expect(mounted.app.getState().authenticated).toBe(true);
+    expect(mounted.root.querySelector('[data-form="login"]')).toBeNull();
+    expect(api.logout).not.toHaveBeenCalled();
+    mounted.app.destroy();
+  });
+
+  it("clears the same protected state on normal logout and fences a late device result", async () => {
+    const devices = deferred<unknown>();
+    let deviceSignal: AbortSignal | undefined;
+    const api = createApi({
+      listUserDevices: vi.fn(async (_userId: string, signal?: AbortSignal) => {
+        deviceSignal = signal;
+        return devices.promise;
+      }),
+    });
+    const mounted = await mountConsole(api);
+    click(mounted.window, mounted.root.querySelector('[data-nav-view="users"]'));
+    click(mounted.window, queryButton(mounted.root, "view-devices", activeUserA.id));
+    await flushTasks();
+    click(mounted.window, mounted.root.querySelector('[data-action="logout"]'));
+    await flushTasks();
+    expect(deviceSignal?.aborted).toBe(true);
+    expect(mounted.app.getState().authenticated).toBe(false);
+    expect(mounted.app.getState().users).toEqual([]);
+    expect(mounted.app.getState().diagnostics.counts.activeUsers).toBe(0);
+    expect(mounted.app.getState().pendingActions.size).toBe(0);
+    devices.resolve({
+      devices: [
+        { deviceId: "late-private-device", activeSessionCount: 1, lastRotatedAt: "2026-10-01" },
+      ],
+    });
+    await flushTasks();
+    expect(mounted.app.getState().devicesByUserId.size).toBe(0);
+    expect(mounted.app.getState().selectedUserId).toBeNull();
+    expect(mounted.root.querySelector('[data-form="login"]')).not.toBeNull();
+    mounted.app.destroy();
+  });
+
+  it("fences an onboarding commit when another request rejects after its API guard passes", async () => {
+    const write = deferred<unknown>();
+    const api = createApi({
+      listUsers: vi.fn(async () => ({ users: [pendingUserA] })),
+      approveUser: vi.fn(async () => write.promise),
+    });
+    const mounted = await mountConsole(api);
+    click(mounted.window, queryButton(mounted.root, "approve-user", pendingUserA.id));
+    await flushTasks();
+    vi.mocked(api.onboarding).mockImplementationOnce(() => {
+      const response = Promise.resolve({
+        administrator: { id: "old-admin", username: "OldAdmin", linkedUserId: null },
+        onboarding: { passwordChangeRequired: false, totpEnrollmentRequired: false },
+      });
+      void response.then(() =>
+        write.reject(new AdminApiError("ADMIN_WEBOS_LEASE_INACTIVE", 401, undefined)),
+      );
+      return response;
+    });
+    await mounted.app.start();
+    await flushTasks();
+    expect(mounted.app.getState().authenticated).toBe(false);
+    expect(mounted.app.getState().onboarding).toBeNull();
+    expect(mounted.app.getState().users).toEqual([]);
+    expect(mounted.root.querySelector('[data-form="login"]')).not.toBeNull();
+    mounted.app.destroy();
+  });
+
+  it("fences a complete snapshot commit after every API response has passed its guard", async () => {
+    const write = deferred<unknown>();
+    const api = createApi({
+      listUsers: vi.fn(async () => ({ users: [pendingUserA] })),
+      approveUser: vi.fn(async () => write.promise),
+    });
+    const mounted = await mountConsole(api);
+    click(mounted.window, queryButton(mounted.root, "approve-user", pendingUserA.id));
+    await flushTasks();
+    vi.mocked(api.listUsers).mockImplementation((filters = {}) => {
+      const response = Promise.resolve({ users: [pendingUserA] });
+      if (filters.status === "PENDING") {
+        void response.then(() =>
+          queueMicrotask(() =>
+            write.reject(new AdminApiError("ADMIN_WEBOS_LEASE_INACTIVE", 401, undefined)),
+          ),
+        );
+      }
+      return response;
+    });
+    await mounted.app.start();
+    await flushTasks();
+    expect(mounted.app.getState().principal).toBeNull();
+    expect(mounted.app.getState().users).toEqual([]);
+    expect(mounted.app.getState().rooms).toEqual([]);
+    expect(mounted.app.getState().authenticated).toBe(false);
+    expect(mounted.root.querySelector('[data-form="login"]')).not.toBeNull();
+    mounted.app.destroy();
+  });
+});

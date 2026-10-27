@@ -13,18 +13,18 @@ SyncAction 是面向 Chrome 与 Edge 的多人共享浏览器工作区。成员�
 `https://syncaction.example.com`
 是占位地址，安装后请在扩展顶栏配置实际服务器；服务端必须自行初始化管理员，不含默认账号密码。
 
-## v0.9.15 下载
+## v0.9.16 下载
 
-从 [v0.9.15 Release](https://github.com/thomasthzh/SyncAction/releases/tag/v0.9.15) 下载：
+从 [v0.9.16 Release](https://github.com/thomasthzh/SyncAction/releases/tag/v0.9.16) 下载：
 
 | 资产                                                                                                                     | 用途                                           |
 | ------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------- |
-| [Chrome 客户端](https://github.com/thomasthzh/SyncAction/releases/download/v0.9.15/SyncAction-client-chrome-v0.9.15.zip) | 解压后在 Chrome 加载扩展                       |
-| [Edge 客户端](https://github.com/thomasthzh/SyncAction/releases/download/v0.9.15/SyncAction-client-edge-v0.9.15.zip)     | 解压后在 Edge 加载扩展                         |
-| [服务端](https://github.com/thomasthzh/SyncAction/releases/download/v0.9.15/SyncAction-server-v0.9.15.tar.gz)            | 公共服务、管理员服务、数据库模块和通用部署源码 |
-| [SHA256SUMS.txt](https://github.com/thomasthzh/SyncAction/releases/download/v0.9.15/SHA256SUMS.txt)                      | 三个安装资产的 SHA-256 校验值                  |
+| [Chrome 客户端](https://github.com/thomasthzh/SyncAction/releases/download/v0.9.16/SyncAction-client-chrome-v0.9.16.zip) | 解压后在 Chrome 加载扩展                       |
+| [Edge 客户端](https://github.com/thomasthzh/SyncAction/releases/download/v0.9.16/SyncAction-client-edge-v0.9.16.zip)     | 解压后在 Edge 加载扩展                         |
+| [服务端](https://github.com/thomasthzh/SyncAction/releases/download/v0.9.16/SyncAction-server-v0.9.16.tar.gz)            | 公共服务、管理员服务、数据库模块和通用部署源码 |
+| [SHA256SUMS.txt](https://github.com/thomasthzh/SyncAction/releases/download/v0.9.16/SHA256SUMS.txt)                      | 三个安装资产的 SHA-256 校验值                  |
 
-安装与升级分别见[客户端指南](docs/client.md)、[服务端指南](docs/server.md)，变更见[发布说明](docs/releases/v0.9.15.md)。客户端 ZIP 不是浏览器商店安装包；服务端 tarball 不含客户端。
+安装与升级分别见[客户端指南](docs/client.md)、[服务端指南](docs/server.md)，变更见[发布说明](docs/releases/v0.9.16.md)。客户端 ZIP 不是浏览器商店安装包；服务端 tarball 不含客户端。
 
 ### 本版变化
 
@@ -43,7 +43,7 @@ SyncAction 是面向 Chrome 与 Edge 的多人共享浏览器工作区。成员�
 ## 功能与边界
 
 - 房间、共享标签页和操作日志保存在 PostgreSQL；浏览器重连后可从房间快照恢复。
-- 当前开发分支的共享页面仅通过插件提交、更新或移除；普通浏览器关页不删除房间记录，本地跳转先保留为待提交更新。具体规则见[共享页面设计](docs/design/shared-page-publication.md)。
+- 从 v0.9.16 起，共享页面仅通过插件提交、更新或移除；普通浏览器关页不删除房间记录，本地跳转先保留为待提交更新。具体规则见[共享页面设计](docs/design/shared-page-publication.md)。
 - 客户端用 logical tab ID、ACK、effect ledger、熔断与人工确认保护个人标签页。
 - 房间支持公开加入、申请加入、邀请、消息通知和多个同步播放组。
 - 页面协作按服务器和精确网站分别征得同意与浏览器权限，不上传 DOM、表单内容或截图。

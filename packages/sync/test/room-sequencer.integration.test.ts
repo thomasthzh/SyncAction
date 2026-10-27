@@ -47,6 +47,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await db.deleteFrom("auditEvents").execute();
+  await db.deleteFrom("passwordResetGrants").execute();
   await db.deleteFrom("administrators").execute();
   await db.deleteFrom("rooms").execute();
   await db.deleteFrom("users").execute();
