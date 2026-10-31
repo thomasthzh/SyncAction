@@ -230,6 +230,96 @@ function actuator(options?: {
 }
 
 describe("one-effect-at-a-time browser actuator", () => {
+  it("recovers prior-session pages only after confirmation without touching a reused unrelated tab id", async () => {
+    const manual = actuator({ browserChangePolicy: "MANUAL", wait: async () => undefined });
+    await manual.openSharedTab(firstId);
+    await manual.openSharedTab(secondId);
+    const before = await replica.getRecord();
+    const oldTabId = before.bindings[0]!.tabId;
+    const restartedSessionId = "018f8f8e-4b5c-7d6e-8f90-123456789ab6";
+    browser.state = BrowserStateSchema.parse({
+      ...browser.state,
+      browserSessionId: restartedSessionId,
+      groups: [],
+      tabs: [
+        {
+          tabId: oldTabId,
+          windowId: 1,
+          groupId: null,
+          index: 0,
+          url: "about:blank",
+          title: "New tab",
+          status: "complete",
+          pinned: false,
+        },
+      ],
+    });
+    const reusedTab = structuredClone(browser.state.tabs[0]);
+    expect(await manual.reconcile({ confirmedRecovery: false })).toMatchObject({
+      kind: "BLOCKED",
+      reason: "STALE_BINDINGS",
+      effectsApplied: 0,
+    });
+    expect(await manual.openSharedTab(firstId)).toMatchObject({
+      kind: "BLOCKED",
+      reason: "STALE_BINDINGS",
+      effectsApplied: 0,
+    });
+    expect(browser.createCount).toBe(2);
+    expect(await manual.reconcile({ confirmedRecovery: true })).toEqual({
+      kind: "SYNCHRONIZED",
+      effectsApplied: 4,
+    });
+    const after = await replica.getRecord();
+    expect(browser.state.tabs.find((tab) => tab.tabId === oldTabId)).toEqual(reusedTab);
+    expect(browser.closeCount).toBe(0);
+    expect(browser.navigateCount).toBe(0);
+    expect(browser.moveCount).toBe(0);
+    expect(browser.ungroupCount).toBe(0);
+    expect(browser.groupCount).toBe(4);
+    expect(after.bindings).toHaveLength(2);
+    expect(
+      after.bindings.every(
+        (binding) => binding.browserSessionId === restartedSessionId && binding.tabId !== oldTabId,
+      ),
+    ).toBe(true);
+    expect(after.confirmedSnapshot).toEqual(before.confirmedSnapshot);
+    expect(after.outbox).toEqual(before.outbox);
+    expect(await manual.reconcile({ confirmedRecovery: true })).toEqual({
+      kind: "SYNCHRONIZED",
+      effectsApplied: 0,
+    });
+    expect(browser.createCount).toBe(4);
+  });
+
+  it("does not adopt or mutate a partial unknown room group when forgetting prior-session metadata", async () => {
+    const manual = actuator({ browserChangePolicy: "MANUAL", wait: async () => undefined });
+    await manual.openSharedTab(firstId);
+    await manual.openSharedTab(secondId);
+    const recordBefore = await replica.getRecord();
+    browser.state.browserSessionId = "018f8f8e-4b5c-7d6e-8f90-123456789ab6";
+    browser.state.tabs = browser.state.tabs.filter(
+      (tab) => tab.tabId !== recordBefore.bindings[1]!.tabId,
+    );
+    const stateBefore = structuredClone(browser.state);
+    expect(await manual.reconcile({ confirmedRecovery: true })).toEqual({
+      kind: "BLOCKED",
+      reason: "UNBOUND_ROOM_TAB",
+      effectsApplied: 2,
+    });
+    expect(browser.state).toEqual(stateBefore);
+    expect(browser.createCount).toBe(2);
+    expect(browser.groupCount).toBe(2);
+    expect(browser.closeCount).toBe(0);
+    expect(browser.navigateCount).toBe(0);
+    expect(browser.moveCount).toBe(0);
+    expect(browser.ungroupCount).toBe(0);
+    const after = await replica.getRecord();
+    expect(after.bindings).toEqual([]);
+    expect(after.confirmedSnapshot).toEqual(recordBefore.confirmedSnapshot);
+    expect(after.outbox).toEqual(recordBefore.outbox);
+  });
+
   it("focuses an already bound same-address page during loading without creating a duplicate", async () => {
     const manual = actuator({ browserChangePolicy: "MANUAL", wait: async () => undefined });
     await manual.openSharedTab(firstId);

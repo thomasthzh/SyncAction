@@ -158,6 +158,19 @@ export function nextReconciliation(input: BrowserReconciliationInput): BrowserRe
     };
   }
   if (hasStaleBindings) {
+    if (input.confirmedRecovery) {
+      // A prior browser session's numeric tab IDs cannot authorize effects in
+      // this session. Forget only that metadata after explicit confirmation.
+      return {
+        kind: "EFFECT",
+        effect: effectBase(input, {
+          kind: "FORGET_BINDING",
+          logicalTabId: record.bindings.find(
+            (binding) => binding.browserSessionId !== browserState.browserSessionId,
+          )!.logicalTabId,
+        }),
+      };
+    }
     return { kind: "BLOCKED", reason: "STALE_BINDINGS" };
   }
 

@@ -145,6 +145,97 @@ function browser(options?: {
 }
 
 describe("safe browser reconciliation planning", () => {
+  it("forgets only prior-session binding metadata after explicit recovery confirmation", () => {
+    const stale = record({
+      bindings: [binding(firstId, 10, staleSessionId), binding(secondId, 11, staleSessionId)],
+    });
+    const restarted = browser({
+      group: false,
+      tabs: [{ tabId: 10, groupId: null, index: 0, url: "about:blank" }],
+    });
+    expect(
+      nextReconciliation({
+        actuatable: true,
+        record: stale,
+        browserState: restarted,
+        confirmedRecovery: false,
+        browserChangePolicy: "MANUAL",
+      }),
+    ).toEqual({ kind: "BLOCKED", reason: "STALE_BINDINGS" });
+    expect(
+      nextReconciliation({
+        actuatable: true,
+        record: stale,
+        browserState: restarted,
+        confirmedRecovery: true,
+        browserChangePolicy: "MANUAL",
+      }),
+    ).toMatchObject({
+      kind: "EFFECT",
+      effect: { kind: "FORGET_BINDING", logicalTabId: firstId, confirmedRecovery: true },
+    });
+  });
+
+  it("keeps recovery blocked for an ambiguous group or an unsynchronized replica even after confirmation", () => {
+    const stale = record({ bindings: [binding(firstId, 10, staleSessionId)] });
+    expect(
+      nextReconciliation({
+        actuatable: true,
+        record: stale,
+        browserState: browser({ duplicateGroup: true }),
+        confirmedRecovery: true,
+        browserChangePolicy: "MANUAL",
+      }),
+    ).toEqual({ kind: "BLOCKED", reason: "AMBIGUOUS_ROOM_GROUP" });
+    expect(
+      nextReconciliation({
+        actuatable: false,
+        record: stale,
+        browserState: browser({ group: false }),
+        confirmedRecovery: true,
+        browserChangePolicy: "MANUAL",
+      }),
+    ).toEqual({ kind: "BLOCKED", reason: "REPLICA_NOT_ACTUATABLE" });
+    const unsafe = browser();
+    unsafe.windows[0]!.incognito = true;
+    expect(
+      nextReconciliation({
+        actuatable: true,
+        record: stale,
+        browserState: unsafe,
+        confirmedRecovery: true,
+        browserChangePolicy: "MANUAL",
+      }),
+    ).toEqual({ kind: "BLOCKED", reason: "UNSAFE_ROOM_GROUP" });
+    const existing = browser();
+    expect(
+      nextReconciliation({
+        actuatable: true,
+        record: stale,
+        browserState: existing,
+        confirmedRecovery: true,
+        browserChangePolicy: "MANUAL",
+      }),
+    ).toEqual({
+      kind: "REBUILD_BINDINGS",
+      bindings: [binding(firstId, 10), binding(secondId, 11)],
+    });
+    expect(
+      nextReconciliation({
+        actuatable: true,
+        record: record({ bindings: [binding(firstId, 10)] }),
+        browserState: browser({
+          tabs: [
+            { tabId: 10, groupId: 7, index: 0, url: "https://example.com/first" },
+            { tabId: 12, groupId: 7, index: 1, url: "https://personal.example/unknown" },
+          ],
+        }),
+        confirmedRecovery: true,
+        browserChangePolicy: "MANUAL",
+      }),
+    ).toEqual({ kind: "BLOCKED", reason: "UNBOUND_ROOM_TAB" });
+  });
+
   it("blocks all effects unless the replica is connected and synced", () => {
     expect(
       nextReconciliation({
