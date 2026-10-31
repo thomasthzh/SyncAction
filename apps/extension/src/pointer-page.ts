@@ -20,6 +20,11 @@ import {
   type PointerProjection,
 } from "./pointer-controller.js";
 import { realtimeMetrics, type RealtimeMetrics } from "./realtime-metrics.js";
+import {
+  buildMediaPointerAnchor,
+  isReservedMediaPointerAnchor,
+  matchesMediaPointerAnchor,
+} from "./media-pointer-anchor.js";
 
 const POINTER_STALE_MS = 3_000;
 const POINTER_SNAP_GAP_MS = 250;
@@ -172,6 +177,7 @@ export function locatePointer(
   }
   const pointer = parsed.data;
   if (pointer.anchor !== null) {
+    if (isReservedMediaPointerAnchor(pointer.anchor.path)) return null;
     const target = resolvePointerPath(document, pointer.anchor.path);
     if (target !== null) {
       const rectangle = target.getBoundingClientRect();
@@ -364,8 +370,8 @@ export class PointerPageRuntime {
     }
     const visual = this.#getOrCreateVisual(key, lease.leaseId, lease);
     const projection = PointerProjectionSchema.parse(projectionInput ?? { type: "PAGE" });
-    if (visual.projection.type !== projection.type) {
-      visual.hasPosition = false;
+    if (visual.projection.type !== projection.type || visual.leaseId !== lease.leaseId) {
+      this.#hideVisual(key, visual);
       visual.lastFrameAt = 0;
     }
     visual.projection = projection;
@@ -481,11 +487,17 @@ export class PointerPageRuntime {
           candidate instanceof Element && candidate.getRootNode() === this.#document,
       );
     const principal = this.#principalMedia();
+    const principalRectangle = principal?.element.getBoundingClientRect();
     const mediaAnchor =
       principal === null ||
-      !pointInside(principal.element.getBoundingClientRect(), event.clientX, event.clientY)
+      principalRectangle === undefined ||
+      !pointInside(principalRectangle, event.clientX, event.clientY)
         ? null
-        : buildPointerAnchor(this.#document, principal.element, event.clientX, event.clientY);
+        : buildMediaPointerAnchor(
+            principal.identity,
+            (event.clientX - principalRectangle.left) / principalRectangle.width,
+            (event.clientY - principalRectangle.top) / principalRectangle.height,
+          );
     const sample = PointerLocalSampleSchema.parse({
       type: "pointer.sample",
       documentRevision: context.documentRevision,
@@ -684,7 +696,9 @@ export class PointerPageRuntime {
       anchor === null ||
       principal.identity.provider !== media.provider ||
       principal.identity.mediaKey !== media.mediaKey ||
-      resolvePointerPath(this.#document, anchor.path) !== principal.element
+      (isReservedMediaPointerAnchor(anchor.path)
+        ? !matchesMediaPointerAnchor(anchor, media)
+        : resolvePointerPath(this.#document, anchor.path) !== principal.element)
     )
       return null;
     const rectangle = principal.element.getBoundingClientRect();
@@ -856,7 +870,7 @@ function locateLeaseAnchor(
   window: Window,
   lease: PointerLeaseRecord,
 ): PointerPosition | null {
-  if (lease.anchor === null) {
+  if (lease.anchor === null || isReservedMediaPointerAnchor(lease.anchor.path)) {
     return null;
   }
   const target = resolvePointerPath(document, lease.anchor.path);

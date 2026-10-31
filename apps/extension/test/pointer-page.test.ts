@@ -18,6 +18,7 @@ import {
   type PointerPageScheduler,
 } from "../src/pointer-page.js";
 import type { PointerLocalSample, PointerPageContext } from "../src/pointer-controller.js";
+import { buildMediaPointerAnchor } from "../src/media-pointer-anchor.js";
 
 const roomId = RoomIdSchema.parse("018f8f8e-4b5c-7d6e-8f90-123456789d01");
 const logicalTabId = "018f8f8e-4b5c-7d6e-8f90-123456789d02";
@@ -282,7 +283,7 @@ describe("PointerPageRuntime", () => {
     });
     const lease = {
       ...remoteLease(),
-      anchor: { path: buildPointerPath(document, media)!, x: 0.5, y: 0.25 },
+      anchor: buildMediaPointerAnchor(identity, 0.5, 0.25)!,
     };
     const projection = { type: "MEDIA_ANCHOR_ONLY" as const, media: identity };
     runtime.setContext(context);
@@ -377,12 +378,14 @@ describe("PointerPageRuntime", () => {
     });
     const lease = {
       ...remoteLease(),
-      anchor: { path: buildPointerPath(document, media)!, x: 0.5, y: 0.25 },
+      anchor: buildMediaPointerAnchor(identity, 0.5, 0.25)!,
     };
     const projection = { type: "MEDIA_ANCHOR_ONLY" as const, media: identity };
     runtime.setContext(context);
     runtime.renderLease(lease, projection);
     runtime.renderLease(lease, { type: "PAGE" });
+    expect(runtime.getPointerPosition(remoteUserId, remoteDeviceId)).toBeNull();
+    expect(surface.querySelector<HTMLElement>(".syncaction-pointer")?.hidden).toBe(true);
     runtime.renderFrame(remoteFrame(2, 4_095, 0));
     expect(runtime.getPointerPosition(remoteUserId, remoteDeviceId)).toEqual({
       x: 1_000,
@@ -397,6 +400,154 @@ describe("PointerPageRuntime", () => {
     expect(runtime.getPointerPosition(remoteUserId, remoteDeviceId)).toEqual({
       x: 420,
       y: 240,
+      source: "anchor",
+    });
+    runtime.dispose();
+  });
+
+  it("keeps reserved media leases hidden on PAGE until an eligible viewport frame arrives", () => {
+    const identity = { provider: "BILIBILI" as const, mediaKey: "bilibili:av170001" };
+    const surface = document.createElement("section");
+    document.documentElement.append(surface);
+    const runtime = new PointerPageRuntime({
+      document,
+      window,
+      surface,
+      now: () => now,
+      scheduler: new FakeScheduler(),
+      emitSample: vi.fn(),
+    });
+    const anchor = buildMediaPointerAnchor(identity, 0.5, 0.5)!;
+    expect(resolvePointerPath(document, anchor.path)).toBeNull();
+    expect(locatePointer(document, window, remotePointer({ anchor }))).toBeNull();
+    const unknown = {
+      ...anchor,
+      path: [{ tagName: "syncaction-media-v2-bilibili", nthOfType: 2 }, ...anchor.path.slice(1)],
+    };
+    expect(locatePointer(document, window, remotePointer({ anchor: unknown }))).toBeNull();
+    runtime.setContext(context);
+    const lease = { ...remoteLease(), anchor };
+    runtime.renderLease(lease, { type: "PAGE" });
+    expect(runtime.getPointerPosition(remoteUserId, remoteDeviceId)).toBeNull();
+    runtime.renderFrame(remoteFrame(1, 4_095, 0));
+    expect(runtime.getPointerPosition(remoteUserId, remoteDeviceId)).toEqual({
+      x: 1_000,
+      y: 0,
+      source: "viewport",
+    });
+    runtime.renderLease(
+      { ...lease, leaseId: "018f8f8e-4b5c-7d6e-8f90-123456789d06" },
+      { type: "PAGE" },
+    );
+    expect(runtime.getPointerPosition(remoteUserId, remoteDeviceId)).toBeNull();
+    expect(surface.querySelector<HTMLElement>(".syncaction-pointer")?.hidden).toBe(true);
+    runtime.dispose();
+  });
+
+  it("hides unknown or foreign reserved markers instead of using the principal as a fallback", () => {
+    const media = document.createElement("video");
+    document.body.append(media);
+    media.getBoundingClientRect = () => domRect(100, 150, 640, 360);
+    const identity = { provider: "BILIBILI" as const, mediaKey: "bilibili:av170001" };
+    let currentIdentity = identity;
+    const surface = document.createElement("section");
+    document.documentElement.append(surface);
+    const runtime = new PointerPageRuntime({
+      document,
+      window,
+      surface,
+      now: () => now,
+      scheduler: new FakeScheduler(),
+      emitSample: vi.fn(),
+      getPrincipalMedia: () => ({ element: media, identity: currentIdentity }),
+    });
+    runtime.setContext(context);
+    const anchor = buildMediaPointerAnchor(identity, 0.5, 0.25)!;
+    const projection = { type: "MEDIA_ANCHOR_ONLY" as const, media: identity };
+    const lease = { ...remoteLease(), anchor };
+    runtime.renderLease(lease, projection);
+    expect(runtime.getPointerPosition(remoteUserId, remoteDeviceId)).not.toBeNull();
+    for (const invalid of [
+      {
+        ...anchor,
+        path: [
+          { ...anchor.path[0]!, tagName: "syncaction-media-v2-bilibili" },
+          ...anchor.path.slice(1),
+        ],
+      },
+      { ...anchor, path: [{ ...anchor.path[0]!, nthOfType: 1 }, ...anchor.path.slice(1)] },
+      {
+        ...anchor,
+        path: [
+          anchor.path[0]!,
+          {
+            ...anchor.path[1]!,
+            tagName:
+              anchor.path[1]!.tagName.slice(0, -1) +
+              (anchor.path[1]!.tagName.endsWith("a") ? "b" : "a"),
+          },
+          ...anchor.path.slice(2),
+        ],
+      },
+      buildMediaPointerAnchor({ ...identity, mediaKey: "bilibili:av170002" }, 0.5, 0.25)!,
+    ]) {
+      runtime.renderLease({ ...lease, anchor: invalid }, projection);
+      expect(runtime.getPointerPosition(remoteUserId, remoteDeviceId)).toBeNull();
+      expect(surface.querySelector<HTMLElement>(".syncaction-pointer")?.hidden).toBe(true);
+    }
+    runtime.renderLease(lease, projection);
+    expect(runtime.getPointerPosition(remoteUserId, remoteDeviceId)).not.toBeNull();
+    currentIdentity = { ...identity, mediaKey: "bilibili:av170002" };
+    runtime.renderLease(lease, projection);
+    expect(runtime.getPointerPosition(remoteUserId, remoteDeviceId)).toBeNull();
+    runtime.dispose();
+  });
+
+  it("shares a deeply nested principal video across different receiver DOM structures", () => {
+    let parent: Element = document.body;
+    for (let index = 0; index < 11; index += 1) {
+      const wrapper = document.createElement("div");
+      parent.append(wrapper);
+      parent = wrapper;
+    }
+    let media = document.createElement("video");
+    parent.append(media);
+    media.getBoundingClientRect = () => domRect(100, 150, 640, 360);
+    expect(buildPointerPath(document, media)).toBeNull();
+    const identity = { provider: "BILIBILI" as const, mediaKey: "bilibili:av170001" };
+    const samples: PointerLocalSample[] = [];
+    const surface = document.createElement("section");
+    document.documentElement.append(surface);
+    const runtime = new PointerPageRuntime({
+      document,
+      window,
+      surface,
+      now: () => now,
+      scheduler: new FakeScheduler(),
+      emitSample: (sample) => {
+        samples.push(sample);
+      },
+      getPrincipalMedia: () => ({ element: media, identity }),
+    });
+    runtime.setContext(context);
+    runtime.handlePointerMove(pointerMove(media, 420, 240));
+    const anchor = samples.at(-1)?.mediaAnchor?.anchor;
+    expect(anchor).not.toBeNull();
+    expect(anchor).toBeDefined();
+    expect(anchor!.path.length).toBeLessThanOrEqual(12);
+    const receiverMain = document.createElement("main");
+    const preview = document.createElement("video");
+    media = document.createElement("video");
+    receiverMain.append(preview, media);
+    document.body.replaceChildren(receiverMain);
+    media.getBoundingClientRect = () => domRect(30, 40, 320, 180);
+    runtime.renderLease(
+      { ...remoteLease(), anchor: anchor! },
+      { type: "MEDIA_ANCHOR_ONLY", media: identity },
+    );
+    expect(runtime.getPointerPosition(remoteUserId, remoteDeviceId)).toEqual({
+      x: 190,
+      y: 85,
       source: "anchor",
     });
     runtime.dispose();
@@ -426,7 +577,7 @@ describe("PointerPageRuntime", () => {
     expect(samples.at(-1)?.mediaAnchor).toEqual({
       identity,
       anchor: {
-        path: buildPointerPath(document, media),
+        path: buildMediaPointerAnchor(identity, 0.5, 0.25)!.path,
         x: 0.5,
         y: 0.25,
       },
