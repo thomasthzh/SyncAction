@@ -329,6 +329,70 @@ describe("page collaboration media bridge", () => {
     removeListener.mockRestore();
   });
 
+  it("anchors a stroke from the drawing overlay to the actual principal media", async () => {
+    const attachShadow = vi.spyOn(HTMLElement.prototype, "attachShadow");
+    const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    renderingDependencies.loadDrawing.mockImplementationOnce(async () => vi.fn(() => []));
+    const video = document.createElement("video");
+    Object.defineProperties(video, {
+      duration: { configurable: true, value: 120 },
+      currentTime: { configurable: true, value: 10 },
+      paused: { configurable: true, value: true },
+      readyState: { configurable: true, value: 4 },
+      ended: { configurable: true, value: false },
+      mediaKeys: { configurable: true, value: null },
+    });
+    video.getBoundingClientRect = () => domRect(100, 100, 400, 200);
+    document.body.append(video);
+    (pageCollaborationEntrypoint as unknown as () => void)();
+    try {
+      await dispatchAndWait({
+        type: "syncaction.drawing.command",
+        controller: "drawing",
+        context,
+        action: { type: "TOGGLE_PEN" },
+      });
+      const shadow = attachShadow.mock.results[0]?.value as ShadowRoot;
+      const surface = shadow.querySelector<HTMLElement>('[data-surface="drawing"]')!;
+      await vi.waitFor(() => expect(surface.dataset.active).toBe("true"));
+      surface.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          pointerId: 7,
+          clientX: 200,
+          clientY: 150,
+          pressure: 0.5,
+          bubbles: true,
+        }),
+      );
+      surface.dispatchEvent(
+        new PointerEvent("pointerup", {
+          pointerId: 7,
+          clientX: 400,
+          clientY: 250,
+          pressure: 0.5,
+          bubbles: true,
+        }),
+      );
+      await vi.waitFor(() =>
+        expect(browserHarness.sendMessage).toHaveBeenCalledWith(
+          expect.objectContaining({
+            type: "syncaction.stroke.final",
+            stroke: expect.objectContaining({
+              anchor: expect.objectContaining({ type: "media", provider: "HTML5" }),
+              points: expect.arrayContaining([
+                expect.objectContaining({ x: 0.25, y: 0.25 }),
+                expect.objectContaining({ x: 0.75, y: 0.75 }),
+              ]),
+            }),
+          }),
+        ),
+      );
+    } finally {
+      hasFocus.mockRestore();
+      attachShadow.mockRestore();
+    }
+  });
+
   it("activates the drawing surface only in the document that directly owns focus", async () => {
     const attachShadow = vi.spyOn(HTMLElement.prototype, "attachShadow");
     const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(false);

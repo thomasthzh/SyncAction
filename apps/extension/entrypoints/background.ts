@@ -294,6 +294,7 @@ export default defineBackground(() => {
               serverTermsVersion: profile.metadata?.termsVersion ?? null,
               documentRevision: null,
               contentCompatibility: null,
+              mediaCollaborationAvailable: false,
               pendingPublication: null,
             }
           : await app.getPageAccessContext(tabId);
@@ -318,6 +319,7 @@ export default defineBackground(() => {
         grantEffective: grant.effective,
         documentRevision: pageContext.documentRevision,
         contentCompatibility: pageContext.contentCompatibility,
+        mediaCollaborationAvailable: pageContext.mediaCollaborationAvailable,
       });
       const enabledFeatures = documentFeatureAccess.enabledFeatures;
       const reason =

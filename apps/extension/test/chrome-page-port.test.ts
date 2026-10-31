@@ -976,6 +976,22 @@ describe("ChromePageCollaborationPort", () => {
     ]);
   });
 
+  it("forwards media pointer projection only as an internal exact-document message", async () => {
+    api.granted = true;
+    const port = new ChromePageCollaborationPort(api);
+    await port.ensureInjected(7);
+    const projection = {
+      type: "MEDIA_ANCHOR_ONLY" as const,
+      media: { provider: "YOUTUBE" as const, mediaKey: "youtube:dQw4w9WgXcQ" },
+    };
+    await port.render(7, pointer, 0, projection);
+    expect(api.messages.at(-1)).toEqual({
+      tabId: 7,
+      message: { type: "syncaction.pointer.render", pointer, projection },
+      options: { frameId: 0, documentId: "document-1" },
+    });
+  });
+
   it("sends observe, apply, and cooperative-lock commands through the same exact document", async () => {
     api.granted = true;
     const port = new ChromePageCollaborationPort(api);

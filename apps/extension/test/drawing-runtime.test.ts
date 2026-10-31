@@ -17,6 +17,7 @@ import {
   DrawingPageRuntime,
   resampleDrawingPoints,
   type DrawingPageScheduler,
+  type DrawingPageRuntimeOptions,
   type DrawingPointerSample,
   type DrawingSelectionIntent,
 } from "../src/page-collaboration/drawing-runtime.js";
@@ -70,6 +71,76 @@ describe("drawing geometry", () => {
 });
 
 describe("DrawingPageRuntime", () => {
+  it("anchors pointerdown over a player overlay to selected media and reprojects after resize", () => {
+    const video = document.createElement("video");
+    document.body.append(video);
+    let rectangle = domRect(200, 100, 800, 450);
+    video.getBoundingClientRect = () => rectangle;
+    const mediaIdentity = { provider: "BILIBILI" as const, mediaKey: "bilibili:av170001" };
+    const geometry = vi.fn(getStroke);
+    const mediaAtPoint = vi.fn(() => video);
+    const harness = createHarness({
+      getStroke: geometry,
+      mediaAtPoint,
+      identifyMedia: (element) => (element === video ? mediaIdentity : null),
+      resolveMedia: (provider, mediaKey) =>
+        video.isConnected &&
+        provider === mediaIdentity.provider &&
+        mediaKey === mediaIdentity.mediaKey
+          ? video
+          : null,
+    });
+    harness.runtime.handleCommand({ type: "TOGGLE_PEN" });
+    harness.surface.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        pointerId: 1,
+        clientX: 400,
+        clientY: 212.5,
+        pressure: 0.4,
+      }),
+    );
+    harness.surface.dispatchEvent(
+      new PointerEvent("pointerup", {
+        pointerId: 1,
+        clientX: 800,
+        clientY: 437.5,
+        pressure: 0.8,
+      }),
+    );
+
+    expect(mediaAtPoint).toHaveBeenCalledWith(400, 212.5);
+    expect(harness.finals[0]).toMatchObject({
+      anchor: { type: "media", ...mediaIdentity },
+      points: [
+        { x: 0.25, y: 0.25, pressure: 0.4 },
+        { x: 0.75, y: 0.75, pressure: 0.8 },
+      ],
+    });
+    rectangle = domRect(50, 70, 1200, 675);
+    window.dispatchEvent(new Event("resize"));
+    harness.scheduler.flushAnimationFrames();
+    expect(geometry.mock.calls.at(-1)?.[0]).toEqual([
+      [350, 238.75, 0.4],
+      [950, 576.25, 0.8],
+    ]);
+
+    video.remove();
+    window.dispatchEvent(new Event("resize"));
+    harness.scheduler.flushAnimationFrames();
+    expect(requireStrokePath(harness.surface, strokeId(0)).hasAttribute("hidden")).toBe(true);
+    harness.dispose();
+  });
+
+  it("keeps ordinary element anchoring when no selected media covers pointerdown", () => {
+    const harness = createHarness({ mediaAtPoint: () => null });
+    harness.runtime.handleCommand({ type: "TOGGLE_PEN" });
+    harness.runtime.beginStroke(pointer(1, 240, 190, 0.5, harness.target));
+    harness.runtime.endStroke(pointer(1, 310, 220, 0.5));
+
+    expect(harness.finals[0]?.anchor.type).toBe("element");
+    harness.dispose();
+  });
+
   it("samples a stroke, emits bounded previews/final geometry, and renders pending/error outlines", () => {
     const harness = createHarness();
     harness.runtime.handleCommand({
@@ -511,6 +582,10 @@ function createHarness(
     emitFinal?: (draft: AnnotationStrokeDraft) => void | Promise<void>;
     discardDraft?: (strokeId: string) => void | Promise<void>;
     retryDraft?: (strokeId: string) => void | Promise<void>;
+    getStroke?: typeof getStroke;
+    mediaAtPoint?: (clientX: number, clientY: number) => Element | null;
+    identifyMedia?: DrawingPageRuntimeOptions["identifyMedia"];
+    resolveMedia?: DrawingPageRuntimeOptions["resolveMedia"];
   } = {},
 ) {
   const host = new PageOverlayHost({ document });
@@ -544,9 +619,12 @@ function createHarness(
     currentUserId,
     role: options.role ?? "MEMBER",
     scheduler,
-    getStroke,
+    getStroke: options.getStroke ?? getStroke,
     createId: () => strokeId(nextId++),
     elementAtPoint: () => target,
+    ...(options.mediaAtPoint === undefined ? {} : { mediaAtPoint: options.mediaAtPoint }),
+    ...(options.identifyMedia === undefined ? {} : { identifyMedia: options.identifyMedia }),
+    ...(options.resolveMedia === undefined ? {} : { resolveMedia: options.resolveMedia }),
     now: () => scheduler.now,
     emitPreview: (preview) => {
       previews.push(structuredClone(preview));

@@ -53,6 +53,8 @@ import {
   PageContentCompatibilityReporter,
 } from "../src/page-collaboration/content-signature.js";
 import { PointerPageRuntime, resolvePointerPath } from "../src/pointer-page.js";
+import { discoverMediaAdapter } from "../src/media-adapters/registry.js";
+import type { MediaAdapter } from "../src/media-adapters/types.js";
 
 class PageCollaborationRuntime {
   readonly #host: PageOverlayHost;
@@ -107,10 +109,10 @@ class PageCollaborationRuntime {
           break;
         }
         case "syncaction.pointer.render":
-          this.#pointerRuntime()?.render(message.pointer);
+          this.#pointerRuntime()?.render(message.pointer, message.projection);
           break;
         case "syncaction.pointer.lease":
-          this.#pointerRuntime()?.renderLease(message.lease);
+          this.#pointerRuntime()?.renderLease(message.lease, message.projection);
           break;
         case "syncaction.pointer.frame":
           this.#pointerRuntime()?.renderFrame(message.frame);
@@ -546,6 +548,26 @@ class PageCollaborationRuntime {
           surface: this.#host.getSurface("drawing"),
           context,
           getStroke,
+          mediaAtPoint: (x, y) => {
+            const media = this.#principalMedia(context)?.getMediaElement();
+            if (media === undefined) return null;
+            const rect = media.getBoundingClientRect();
+            return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
+              ? media
+              : null;
+          },
+          identifyMedia: (element) => {
+            const adapter = this.#principalMedia(context);
+            return adapter?.getMediaElement() === element
+              ? { provider: adapter.target.provider, mediaKey: adapter.target.mediaKey }
+              : null;
+          },
+          resolveMedia: (provider, mediaKey) => {
+            const adapter = this.#principalMedia(context);
+            return adapter?.target.provider === provider && adapter.target.mediaKey === mediaKey
+              ? adapter.getMediaElement()
+              : null;
+          },
           setInteraction: (interaction) => this.#host.setSurfaceInteraction("drawing", interaction),
           reportState: async (state) => {
             const reportContext = this.#toolContext;
@@ -671,6 +693,15 @@ class PageCollaborationRuntime {
       document,
       window,
       surface: this.#host.getSurface("pointer"),
+      getPrincipalMedia: (context) => {
+        const adapter = this.#principalMedia({ ...context, frameKey: "top" });
+        return adapter === null
+          ? null
+          : {
+              element: adapter.getMediaElement(),
+              identity: { provider: adapter.target.provider, mediaKey: adapter.target.mediaKey },
+            };
+      },
       emitSample: (sample) =>
         browser.runtime.sendMessage(
           PointerSampleMessageSchema.parse({
@@ -687,6 +718,26 @@ class PageCollaborationRuntime {
       }
     });
     return pointer;
+  }
+
+  #principalMedia(context: PageOverlayContext): MediaAdapter | null {
+    if (
+      this.#host.state !== "ACTIVE" ||
+      this.#hostContext === undefined ||
+      !sameHostContext(this.#hostContext, context)
+    ) {
+      return null;
+    }
+    return discoverMediaAdapter({
+      document,
+      window,
+      context: {
+        logicalTabId: context.logicalTabId,
+        documentRevision: context.documentRevision,
+        frameKey: context.frameKey ?? "top",
+        pageUrl: window.location.href,
+      },
+    }).adapter;
   }
 
   #mediaRuntime(): MediaPageRuntime | undefined {

@@ -120,6 +120,23 @@ describe("annotation anchors", () => {
     ).toMatchObject({ state: "LOCATED" });
   });
 
+  it("does not bypass an explicit principal-media rejection with a generic media fallback", () => {
+    const video = document.createElement("video");
+    document.body.append(video);
+    video.getBoundingClientRect = () => domRect(20, 30, 640, 360);
+    const genericAnchor = captureAnnotationAnchor(anchorEnvironment(), video);
+    expect(genericAnchor?.type).toBe("media");
+    const principalOnly = anchorEnvironment({
+      identifyMedia: () => null,
+      resolveMedia: () => null,
+    });
+    expect(captureAnnotationAnchor(principalOnly, video)?.type).toBe("element");
+    expect(resolveAnnotationAnchor(principalOnly, { anchor: genericAnchor!, frameKey })).toEqual({
+      state: "UNLOCATABLE",
+      reason: "MEDIA_NOT_FOUND",
+    });
+  });
+
   it("reprojects document-root anchors and enforces aspect and per-axis layout tolerances", () => {
     const environment = anchorEnvironment();
     const anchor = captureAnnotationAnchor(environment, null);

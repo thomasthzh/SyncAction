@@ -262,6 +262,183 @@ describe("PointerPageRuntime", () => {
     expect(surface.querySelectorAll(".syncaction-pointer")).toHaveLength(0);
   });
 
+  it("projects media leases into the local player across resize without accepting viewport frames", () => {
+    const media = document.createElement("video");
+    document.body.append(media);
+    let rectangle = domRect(100, 150, 640, 360);
+    media.getBoundingClientRect = () => rectangle;
+    const identity = { provider: "YOUTUBE" as const, mediaKey: "youtube:dQw4w9WgXcQ" };
+    const scheduler = new FakeScheduler();
+    const surface = document.createElement("section");
+    document.documentElement.append(surface);
+    const runtime = new PointerPageRuntime({
+      document,
+      window,
+      surface,
+      now: () => now,
+      scheduler,
+      emitSample: vi.fn(),
+      getPrincipalMedia: () => ({ element: media, identity }),
+    });
+    const lease = {
+      ...remoteLease(),
+      anchor: { path: buildPointerPath(document, media)!, x: 0.5, y: 0.25 },
+    };
+    const projection = { type: "MEDIA_ANCHOR_ONLY" as const, media: identity };
+    runtime.setContext(context);
+    runtime.renderLease(lease, projection);
+    expect(runtime.getPointerPosition(remoteUserId, remoteDeviceId)).toEqual({
+      x: 420,
+      y: 240,
+      source: "anchor",
+    });
+    runtime.renderFrame(remoteFrame(1, 4_095, 4_095));
+    expect(runtime.getPointerPosition(remoteUserId, remoteDeviceId)).toEqual({
+      x: 420,
+      y: 240,
+      source: "anchor",
+    });
+    now += 100;
+    runtime.renderLease({ ...lease, anchor: { ...lease.anchor, x: 0.75 } }, projection);
+    now += 100;
+    scheduler.flushAnimationFrame();
+    expect(runtime.getPointerPosition(remoteUserId, remoteDeviceId)?.x).toBe(580);
+    rectangle = domRect(40, 80, 400, 225);
+    window.dispatchEvent(new Event("resize"));
+    scheduler.flushAnimationFrame();
+    expect(runtime.getPointerPosition(remoteUserId, remoteDeviceId)).toEqual({
+      x: 340,
+      y: 136.25,
+      source: "anchor",
+    });
+    media.remove();
+    window.dispatchEvent(new Event("resize"));
+    scheduler.flushAnimationFrame();
+    expect(runtime.getPointerPosition(remoteUserId, remoteDeviceId)).toBeNull();
+    runtime.dispose();
+  });
+
+  it("hides media pointers with preview paths, missing anchors or a changed media identity", () => {
+    const media = document.createElement("video");
+    const preview = document.createElement("video");
+    document.body.append(media, preview);
+    media.getBoundingClientRect = () => domRect(100, 150, 640, 360);
+    preview.getBoundingClientRect = () => domRect(800, 200, 150, 100);
+    const identity = { provider: "YOUTUBE" as const, mediaKey: "youtube:dQw4w9WgXcQ" };
+    let currentIdentity = identity;
+    const surface = document.createElement("section");
+    document.documentElement.append(surface);
+    const runtime = new PointerPageRuntime({
+      document,
+      window,
+      surface,
+      now: () => now,
+      scheduler: new FakeScheduler(),
+      emitSample: vi.fn(),
+      getPrincipalMedia: () => ({ element: media, identity: currentIdentity }),
+    });
+    const lease = {
+      ...remoteLease(),
+      anchor: { path: buildPointerPath(document, preview)!, x: 0.5, y: 0.5 },
+    };
+    const projection = { type: "MEDIA_ANCHOR_ONLY" as const, media: identity };
+    runtime.setContext(context);
+    runtime.renderLease(lease, projection);
+    expect(runtime.getPointerPosition(remoteUserId, remoteDeviceId)).toBeNull();
+    const mainLease = {
+      ...lease,
+      anchor: { ...lease.anchor, path: buildPointerPath(document, media)! },
+    };
+    runtime.renderLease(mainLease, projection);
+    expect(runtime.getPointerPosition(remoteUserId, remoteDeviceId)).not.toBeNull();
+    runtime.renderLease({ ...mainLease, anchor: null }, projection);
+    expect(runtime.getPointerPosition(remoteUserId, remoteDeviceId)).toBeNull();
+    currentIdentity = { ...identity, mediaKey: "youtube:9bZkp7q19f0" };
+    runtime.renderLease(mainLease, projection);
+    expect(runtime.getPointerPosition(remoteUserId, remoteDeviceId)).toBeNull();
+    runtime.dispose();
+  });
+
+  it("switches the same lease between media projection and exact viewport frames without stale visuals", () => {
+    const media = document.createElement("video");
+    document.body.append(media);
+    media.getBoundingClientRect = () => domRect(100, 150, 640, 360);
+    const identity = { provider: "YOUTUBE" as const, mediaKey: "youtube:dQw4w9WgXcQ" };
+    const surface = document.createElement("section");
+    document.documentElement.append(surface);
+    const runtime = new PointerPageRuntime({
+      document,
+      window,
+      surface,
+      now: () => now,
+      scheduler: new FakeScheduler(),
+      emitSample: vi.fn(),
+      getPrincipalMedia: () => ({ element: media, identity }),
+    });
+    const lease = {
+      ...remoteLease(),
+      anchor: { path: buildPointerPath(document, media)!, x: 0.5, y: 0.25 },
+    };
+    const projection = { type: "MEDIA_ANCHOR_ONLY" as const, media: identity };
+    runtime.setContext(context);
+    runtime.renderLease(lease, projection);
+    runtime.renderLease(lease, { type: "PAGE" });
+    runtime.renderFrame(remoteFrame(2, 4_095, 0));
+    expect(runtime.getPointerPosition(remoteUserId, remoteDeviceId)).toEqual({
+      x: 1_000,
+      y: 0,
+      source: "viewport",
+    });
+    runtime.renderLease({ ...lease, anchor: null }, projection);
+    expect(runtime.getPointerPosition(remoteUserId, remoteDeviceId)).toBeNull();
+    runtime.renderFrame(remoteFrame(3, 4_095, 4_095));
+    expect(runtime.getPointerPosition(remoteUserId, remoteDeviceId)).toBeNull();
+    runtime.renderLease(lease, projection);
+    expect(runtime.getPointerPosition(remoteUserId, remoteDeviceId)).toEqual({
+      x: 420,
+      y: 240,
+      source: "anchor",
+    });
+    runtime.dispose();
+  });
+
+  it("samples the principal video through its controls and invalidates its anchor after layout changes", () => {
+    const media = document.createElement("video");
+    const controls = document.createElement("div");
+    document.body.append(media, controls);
+    media.getBoundingClientRect = () => domRect(100, 150, 640, 360);
+    controls.getBoundingClientRect = () => domRect(100, 150, 640, 360);
+    const identity = { provider: "YOUTUBE" as const, mediaKey: "youtube:dQw4w9WgXcQ" };
+    const samples: PointerLocalSample[] = [];
+    const surface = document.createElement("section");
+    document.documentElement.append(surface);
+    const runtime = new PointerPageRuntime({
+      document,
+      window,
+      surface,
+      emitSample: (sample) => {
+        samples.push(sample);
+      },
+      getPrincipalMedia: () => ({ element: media, identity }),
+    });
+    runtime.setContext(context);
+    runtime.handlePointerMove(pointerMove(controls, 420, 240));
+    expect(samples.at(-1)?.mediaAnchor).toEqual({
+      identity,
+      anchor: {
+        path: buildPointerPath(document, media),
+        x: 0.5,
+        y: 0.25,
+      },
+    });
+    runtime.handlePointerMove(pointerMove(controls, 900, 700));
+    expect(samples.at(-1)?.mediaAnchor).toBeNull();
+    runtime.handlePointerMove(pointerMove(controls, 420, 240));
+    window.dispatchEvent(new Event("resize"));
+    expect(samples.at(-1)?.mediaAnchor).toBeNull();
+    runtime.dispose();
+  });
+
   it("emits strict visible-page samples for controller-side 25 Hz coalescing", () => {
     const target = document.createElement("button");
     target.id = "private";

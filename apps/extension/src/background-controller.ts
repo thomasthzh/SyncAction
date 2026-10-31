@@ -126,6 +126,7 @@ export interface ExtensionStatus {
   pendingConfirmationCount: number;
   bindingCount: number;
   bindingValidationKey?: string | undefined;
+  mediaCollaborationAvailable?: boolean | undefined;
   browser: RoomBrowserStatus | null;
   presence: ActiveTabPresenceStatus | null;
   pointer: PointerControllerStatus | null;
@@ -634,6 +635,30 @@ export class BackgroundController {
     }
   }
 
+  public async getPageMediaCollaboration(
+    tabIdInput: unknown,
+    expectedDocumentRevision?: DocumentRevision,
+  ): Promise<boolean> {
+    const tabId = z.number().int().nonnegative().safe().parse(tabIdInput);
+    try {
+      const route = await this.#requirePageToolRoute(
+        expectedDocumentRevision === undefined
+          ? undefined
+          : { tabId, documentRevision: expectedDocumentRevision },
+      );
+      return (
+        route.tabId === tabId &&
+        (this.#presenceController?.hasMediaAnchoredRemotePointerObserver({
+          logicalTabId: route.context.logicalTabId,
+          documentRevision: route.context.documentRevision,
+        }) ??
+          false)
+      );
+    } catch {
+      return false;
+    }
+  }
+
   public async toggleDanmakuInput(expected?: {
     tabId: number;
     documentRevision: DocumentRevision;
@@ -999,6 +1024,32 @@ export class BackgroundController {
           },
         ];
       }) ?? [];
+    const activeBinding = record.bindings.find(
+      (binding) =>
+        binding.tabId === this.#activeTabId &&
+        (this.#browserSessionId === undefined ||
+          binding.browserSessionId === this.#browserSessionId),
+    );
+    const activeTab =
+      activeBinding === undefined ? undefined : tabsById.get(activeBinding.logicalTabId);
+    const mediaCollaborationAvailable =
+      this.#state === "SYNCED" &&
+      this.#pagePort !== undefined &&
+      record.mode === "SYNCED" &&
+      snapshot !== null &&
+      activeBinding !== undefined &&
+      activeTab !== undefined &&
+      activeTab.closedAtSeq === null &&
+      isConfirmedPageDocument(record, activeTab.id) &&
+      activeBinding.validatedAtServerSeq === snapshot.serverSeq &&
+      (this.#presenceController?.hasMediaAnchoredRemotePointerObserver({
+        logicalTabId: activeTab.id,
+        documentRevision: {
+          roomEpoch: snapshot.roomEpoch,
+          tabUpdatedAtSeq: activeTab.updatedAtSeq,
+        },
+      }) ??
+        false);
     return {
       state: this.#state,
       roomName: config.roomName,
@@ -1007,6 +1058,7 @@ export class BackgroundController {
       outboxCount: record.outbox.length,
       pendingConfirmationCount: record.pendingConfirmations.length,
       bindingCount: record.bindings.length,
+      mediaCollaborationAvailable,
       bindingValidationKey: JSON.stringify(
         [...record.bindings]
           .sort((left, right) => left.logicalTabId.localeCompare(right.logicalTabId))

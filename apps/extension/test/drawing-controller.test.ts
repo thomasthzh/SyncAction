@@ -15,6 +15,7 @@ import {
   type AnnotationSnapshotV2Message as AnnotationSnapshotMessage,
   type AnnotationSubmitV2 as AnnotationSubmit,
   type ContentSignature,
+  type MediaIdentity,
   type AnnotationSyncRequest,
   type StrokePreviewClear,
   type StrokePreviewEventMessage,
@@ -419,6 +420,7 @@ let transport: FakeTransport;
 let page: FakePage;
 let controller: DrawingController;
 let currentContentSignature: ContentSignature | null;
+let currentMediaIdentity: MediaIdentity | null;
 
 function createController(role: "OWNER" | "MEMBER" = "MEMBER"): DrawingController {
   return new DrawingController({
@@ -433,6 +435,8 @@ function createController(role: "OWNER" | "MEMBER" = "MEMBER"): DrawingControlle
     contentSignatures: {
       getLocalContentSignature: () =>
         currentContentSignature === null ? null : structuredClone(currentContentSignature),
+      getLocalMediaIdentity: () =>
+        currentMediaIdentity === null ? null : structuredClone(currentMediaIdentity),
     },
     transport,
     page,
@@ -452,6 +456,7 @@ beforeEach(() => {
   transport = new FakeTransport();
   page = new FakePage();
   currentContentSignature = contentSignature;
+  currentMediaIdentity = null;
   controller = createController();
 });
 
@@ -572,6 +577,76 @@ describe("DrawingController content-bound annotations", () => {
     expect(page.snapshots.at(-1)?.snapshot.strokes).toEqual([]);
   });
 
+  it("renders the matching media stroke across page signatures while retaining the root guard", async () => {
+    const remoteSignature: ContentSignature = {
+      signatureVersion: 1,
+      digest: "R".repeat(43),
+    };
+    const mediaStroke = confirmedMediaStroke({ contentSignature: remoteSignature });
+    const rootStroke = {
+      ...mediaStroke,
+      strokeId: otherStrokeId,
+      anchor: draft.anchor,
+    };
+    currentMediaIdentity = { provider: "BILIBILI", mediaKey: "bilibili:av170001" };
+    transport.synchronizeImplementation = async () =>
+      snapshot({ sequence: 2, strokes: [mediaStroke, rootStroke] });
+
+    await activate();
+
+    expect(page.snapshots.at(-1)?.snapshot.strokes).toEqual([mediaStroke]);
+    expect((await annotations.load(roomId, pageKey)).confirmedSnapshot?.strokes).toEqual([
+      mediaStroke,
+      rootStroke,
+    ]);
+    currentMediaIdentity = { provider: "BILIBILI", mediaKey: "bilibili:av42" };
+    await controller.handleContentCompatibilityChanged(12, logicalTabId);
+    expect(page.snapshots.at(-1)?.snapshot.strokes).toEqual([]);
+
+    currentMediaIdentity = { provider: "BILIBILI", mediaKey: "bilibili:av170001" };
+    currentContentSignature = null;
+    await controller.handleContentCompatibilityChanged(12, logicalTabId);
+    expect(page.snapshots.at(-1)?.snapshot.strokes).toEqual([mediaStroke]);
+  });
+
+  it.each([
+    null,
+    { provider: "BILIBILI", mediaKey: "bilibili:av42" },
+    { provider: "HTML5", mediaKey: "bilibili:av170001" },
+  ] satisfies Array<MediaIdentity | null>)(
+    "rejects a media stroke with unknown or different media even when page signatures match: %j",
+    async (localMedia) => {
+      const mediaStroke = confirmedMediaStroke();
+      currentMediaIdentity = localMedia;
+      transport.synchronizeImplementation = async () =>
+        snapshot({ sequence: 1, strokes: [mediaStroke] });
+
+      await activate();
+
+      expect(page.snapshots.at(-1)?.snapshot.strokes).toEqual([]);
+      expect((await annotations.load(roomId, pageKey)).confirmedSnapshot?.strokes).toEqual([
+        mediaStroke,
+      ]);
+    },
+  );
+
+  it("does not render matching media from another frame or accept a stale-document snapshot", async () => {
+    currentMediaIdentity = { provider: "BILIBILI", mediaKey: "bilibili:av170001" };
+    const childMediaStroke = confirmedMediaStroke({ frameKey: childFrameKey });
+    transport.synchronizeImplementation = async () =>
+      snapshot({ sequence: 1, strokes: [childMediaStroke] });
+    await activate();
+
+    expect(page.snapshots.at(-1)?.snapshot.strokes).toEqual([]);
+    const renderedCount = page.snapshots.length;
+    transport.annotationHandler?.({
+      ...snapshot({ sequence: 2, strokes: [confirmedMediaStroke()] }),
+      documentRevision: { ...context.documentRevision, tabUpdatedAtSeq: 7 },
+    });
+    await controller.whenIdle();
+    expect(page.snapshots).toHaveLength(renderedCount);
+  });
+
   it("requires and persists a local element anchor signature for a new element stroke", async () => {
     const elementFinal: StrokeFinalMessage = {
       ...finalMessage(),
@@ -609,6 +684,21 @@ describe("DrawingController content-bound annotations", () => {
     });
   });
 });
+
+function confirmedMediaStroke(
+  overrides: Partial<AnnotationSnapshotMessage["strokes"][number]> = {},
+): AnnotationSnapshotMessage["strokes"][number] {
+  return {
+    ...draft,
+    anchor: { type: "media", provider: "BILIBILI", mediaKey: "bilibili:av170001" },
+    authorUserId: otherUserId,
+    lockedAtServerMs: null,
+    version: 1,
+    createdAtServerMs: now,
+    deletedAtServerMs: null,
+    ...overrides,
+  };
+}
 
 describe("DrawingController page synchronization and previews", () => {
   it("blocks only relevant page capability failures and preserves child degradation", async () => {

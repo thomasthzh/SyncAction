@@ -51,6 +51,43 @@ const ownerDeviceId = DeviceIdSchema.parse("00000000-0000-4000-8000-000000000544
 afterEach(() => unmountPanel());
 
 describe("vNext active room", () => {
+  it("explains the media-only scope while matching media permits collaboration across layouts", async () => {
+    const store = roomStore();
+    store.update({
+      pageAccess: {
+        ...store.pageAccess.value,
+        tabId: 42,
+        origin: "https://video.example",
+        supported: true,
+        browserPermissionGranted: true,
+        termsAccepted: true,
+        documentRevision: { roomEpoch: 0, tabUpdatedAtSeq: 1 },
+        contentCompatibility: "MISMATCH",
+        enabledFeatures: ["POINTER", "DANMAKU", "DRAWING", "MEDIA_CONTROL"],
+      },
+    });
+    const root = renderPanel(<App store={store} now={() => nowMs} />);
+    expect(root.querySelector(".dock-media-scope")?.textContent).toBe(
+      "布局不同，光标和画笔在视频内共享。",
+    );
+    for (const contentCompatibility of ["MISMATCH", "EXACT"] as const) {
+      await act(async () =>
+        store.update({
+          pageAccess: {
+            ...store.pageAccess.value,
+            contentCompatibility,
+            enabledFeatures:
+              contentCompatibility === "MISMATCH"
+                ? ["DANMAKU"]
+                : ["POINTER", "DANMAKU", "DRAWING", "MEDIA_CONTROL"],
+          },
+        }),
+      );
+      expect(root.querySelector(".dock-media-scope")).toBeNull();
+    }
+    expect(store.commandCalls).toEqual([]);
+  });
+
   it("removes a shared page only after the plugin confirmation, scoped to the selected room and server", async () => {
     const store = roomStore();
     const root = renderPanel(<App store={store} now={() => nowMs} />);

@@ -29,6 +29,7 @@ import {
 } from "../src/app-controller.js";
 import type { ExtensionStatus } from "../src/background-controller.js";
 import { ExtensionCommandRouter } from "../src/extension-command-router.js";
+import { projectDocumentFeatureAccess } from "../src/page-access-policy.js";
 import { projectUiState, UiStateHub, type UiStateHubPort } from "../src/ui/ui-state-hub.js";
 import {
   PageToolExpectedContextSchema,
@@ -748,6 +749,12 @@ describe("ExtensionAppController vNext server hub", () => {
       documentReady ? { roomEpoch: 0, tabUpdatedAtSeq: 1 } : null,
     );
     runtime.getPageContentCompatibility = vi.fn(async () => (documentReady ? compatibility : null));
+    runtime.getPageMediaCollaboration = vi.fn(
+      async (_tabId, revision) =>
+        live.mediaCollaborationAvailable === true &&
+        revision?.roomEpoch === 0 &&
+        revision.tabUpdatedAtSeq === 1,
+    );
     const { app } = createApp({
       profiles: new FakeProfiles([selected], profileAId),
       sessions,
@@ -767,6 +774,12 @@ describe("ExtensionAppController vNext server hub", () => {
     };
     const readPageAccess = vi.fn(async (): Promise<UiPageAccessSlice> => {
       const context = await app.getPageAccessContext(42);
+      const features = projectDocumentFeatureAccess({
+        grantEffective: true,
+        documentRevision: context.documentRevision,
+        contentCompatibility: context.contentCompatibility,
+        mediaCollaborationAvailable: context.mediaCollaborationAvailable,
+      });
       return {
         bindings: null,
         tabId: 42,
@@ -778,7 +791,7 @@ describe("ExtensionAppController vNext server hub", () => {
         disclosureVersion: 1,
         documentRevision: context.documentRevision,
         contentCompatibility: context.contentCompatibility,
-        enabledFeatures: context.documentRevision === null ? [] : ["DANMAKU"],
+        enabledFeatures: features.enabledFeatures,
         policySyncPendingCount: 0,
         reason: context.documentRevision === null ? "ROOM_DOCUMENT_UNAVAILABLE" : null,
       };
@@ -875,6 +888,44 @@ describe("ExtensionAppController vNext server hub", () => {
         ),
       );
       expect(readPageAccess).toHaveBeenCalledTimes(compatibilityReads);
+
+      // Same MISMATCH classification, but matching-media evidence becomes
+      // available: the real hub must refresh pageAccess rather than only room.
+      messages.length = 0;
+      live.mediaCollaborationAvailable = true;
+      runtimeInput.onStatusChanged?.();
+      await vi.waitFor(() =>
+        expect(messages).toContainEqual(
+          expect.objectContaining({
+            type: "ui.state.patch",
+            slice: "pageAccess",
+            value: expect.objectContaining({
+              contentCompatibility: "MISMATCH",
+              enabledFeatures: ["POINTER", "DANMAKU", "DRAWING", "MEDIA_CONTROL"],
+            }),
+          }),
+        ),
+      );
+      expect(runtime.getPageMediaCollaboration).toHaveBeenLastCalledWith(42, {
+        roomEpoch: 0,
+        tabUpdatedAtSeq: 1,
+      });
+
+      messages.length = 0;
+      live.mediaCollaborationAvailable = false;
+      runtimeInput.onStatusChanged?.();
+      await vi.waitFor(() =>
+        expect(messages).toContainEqual(
+          expect.objectContaining({
+            type: "ui.state.patch",
+            slice: "pageAccess",
+            value: expect.objectContaining({
+              contentCompatibility: "MISMATCH",
+              enabledFeatures: ["DANMAKU"],
+            }),
+          }),
+        ),
+      );
     } finally {
       hub.dispose();
       await app.stop();

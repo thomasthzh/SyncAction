@@ -17,6 +17,7 @@ export function projectDocumentFeatureAccess(input: {
   grantEffective: boolean;
   documentRevision: DocumentRevision | null;
   contentCompatibility: ContentCompatibility | null;
+  mediaCollaborationAvailable?: boolean | undefined;
 }): DocumentFeatureAccess {
   if (!input.grantEffective || input.documentRevision === null) {
     return { enabledFeatures: [], contentReason: null };
@@ -25,6 +26,13 @@ export function projectDocumentFeatureAccess(input: {
     return {
       enabledFeatures: [...ALL_PAGE_FEATURES],
       contentReason: null,
+    };
+  }
+  if (input.contentCompatibility === "MISMATCH" && input.mediaCollaborationAvailable === true) {
+    // Media runtimes still enforce the matching identity and media-only anchors.
+    return {
+      enabledFeatures: [...ALL_PAGE_FEATURES],
+      contentReason: "CONTENT_MISMATCH",
     };
   }
   return {

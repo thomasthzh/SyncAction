@@ -887,6 +887,61 @@ async function reportApplyResult(
 }
 
 describe("MediaController", () => {
+  it("settles paused follower alignment after seeked and ready observations instead of reapplying seek", async () => {
+    const value = harness();
+    const stationary: MediaObservedState = { ...playing, paused: true, positionMs: 0 };
+    const nativeObservations: Promise<void>[] = [];
+    value.page.onApply = (apply) => {
+      if (apply.action.type !== "SEEK" || value.page.applies.length >= 12) return;
+      const afterSeek = { ...stationary, observedAtClientMs: nowMs + value.page.applies.length };
+      nativeObservations.push(
+        value.controller.handleMediaObserved(
+          10,
+          0,
+          observedMessage(afterSeek, {
+            event: "APPLY_RESULT",
+            applyToken: apply.applyToken,
+          }),
+        ),
+      );
+      nativeObservations.push(
+        value.controller.handleMediaObserved(
+          10,
+          0,
+          observedMessage(afterSeek, {
+            event: "STATE_CHANGED",
+            trigger: "SEEKED",
+            applyToken: apply.applyToken,
+          }),
+        ),
+      );
+      nativeObservations.push(
+        value.controller.handleMediaObserved(
+          10,
+          0,
+          observedMessage(afterSeek, {
+            event: "STATE_CHANGED",
+            trigger: "READY",
+            applyToken: null,
+          }),
+        ),
+      );
+    };
+    await connect(value, snapshot([group({ status: "PAUSED", observed: stationary })]));
+    await observe(value, stationary);
+    await value.controller.whenIdle();
+    await Promise.all(nativeObservations);
+    expect(value.page.applies.map((apply) => apply.action)).toEqual([
+      { type: "SEEK", positionMs: 0 },
+    ]);
+    expect(value.transport.commands).toHaveLength(0);
+    expect(value.controller.getStatus().localObservation?.observed).toMatchObject({
+      paused: true,
+      positionMs: 0,
+    });
+    await value.controller.dispose();
+  });
+
   it("does not lock or control follower media when the leader media identity is incompatible", async () => {
     const value = harness({ mediaCompatible: false });
 
@@ -899,6 +954,47 @@ describe("MediaController", () => {
       errorCode: "MEDIA_MISMATCH",
       localMembership: null,
     });
+  });
+
+  it("reobserves and follows the paused authority when expired peer media evidence becomes fresh again", async () => {
+    const compatibility = { mediaCompatible: true };
+    const value = harness(compatibility);
+    await connect(value);
+    await observe(value);
+    compatibility.mediaCompatible = false;
+    value.transport.emit(
+      snapshot([group({ status: "PAUSED", observed: { ...playing, paused: true } })], 2),
+    );
+    await value.controller.whenIdle();
+    expect(value.controller.getStatus()).toMatchObject({
+      errorCode: "MEDIA_MISMATCH",
+      localObservation: null,
+      localMembership: null,
+    });
+    const before = value.page.observations.length;
+    const appliesBefore = value.page.applies.length;
+    await value.controller.handlePresenceChanged();
+    expect(value.page.observations).toHaveLength(before);
+    await observe(value);
+    expect(value.page.applies).toHaveLength(appliesBefore);
+    expect(value.controller.getStatus().localObservation).toBeNull();
+    compatibility.mediaCompatible = true;
+    const bindings = value.replicaRecord.bindings;
+    value.replicaRecord.bindings = [];
+    await value.controller.handlePresenceChanged();
+    expect(value.page.observations).toHaveLength(before);
+    expect(value.controller.getStatus().errorCode).toBe("MEDIA_MISMATCH");
+    value.replicaRecord.bindings = bindings;
+    await value.controller.handlePresenceChanged();
+    expect(value.page.observations).toHaveLength(before + 1);
+    expect(value.page.observations.at(-1)?.target).toEqual(target);
+    await observe(value);
+    expect(value.page.applies.at(-1)?.action).toEqual({ type: "PAUSE" });
+    expect(value.controller.getStatus()).toMatchObject({
+      errorCode: null,
+      localMembership: { role: "FOLLOWER", activeDevice: true },
+    });
+    await value.controller.dispose();
   });
 
   it("publishes heartbeats only for the exact browser-session binding and document context", async () => {
@@ -1823,6 +1919,58 @@ describe("MediaController", () => {
       ]),
     );
   });
+
+  it.each(["READY", "BUFFERING"] as const)(
+    "reconciles %s during a temporary rate without manufacturing user intent and still applies a real pause",
+    async (trigger) => {
+      const value = harness();
+      const authority = { ...playing, playbackRate: 1.25 };
+      await connect(value, snapshot([group({ observed: authority })]));
+      await observe(value, authority);
+      await observe(value, { ...authority, positionMs: 41_200 });
+      expect(value.page.playbackRate).toBe(1.3125);
+      value.page.applies.length = 0;
+      value.transport.commands.length = 0;
+      const feedback: Promise<void>[] = [];
+      value.page.onApply = (apply) => {
+        if (apply.action.type === "SEEK") {
+          feedback.push(
+            value.controller.handleMediaObserved(
+              10,
+              0,
+              observedMessage(
+                {
+                  ...authority,
+                  positionMs: apply.action.positionMs,
+                  playbackRate: value.page.playbackRate,
+                },
+                { event: "STATE_CHANGED", trigger: "READY" },
+              ),
+            ),
+          );
+        }
+      };
+      await observe(
+        value,
+        { ...authority, playbackRate: 1.3125, buffering: trigger === "BUFFERING" },
+        { event: "STATE_CHANGED", trigger },
+      );
+      await Promise.all(feedback);
+      await value.controller.whenIdle();
+      expect(value.transport.commands).toEqual([]);
+      expect(value.page.applies).toEqual([]);
+      const paused = { ...authority, paused: true };
+      value.transport.emit(snapshot([group({ status: "PAUSED", observed: paused })], 2));
+      await value.controller.whenIdle();
+      expect(value.page.applies.at(-1)?.action).toEqual({ type: "PAUSE" });
+      expect(value.page.playbackRate).toBe(1.25);
+      const afterPause = value.page.applies.length;
+      await observe(value, paused, { event: "STATE_CHANGED", trigger: "READY" });
+      expect(value.page.applies).toHaveLength(afterPause);
+      expect(value.transport.commands).toEqual([]);
+      await value.controller.dispose();
+    },
+  );
 
   it("uses the pure three-band correction plan and restores the exact rate after three seconds", async () => {
     const value = harness();

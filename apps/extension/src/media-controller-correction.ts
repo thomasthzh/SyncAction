@@ -52,6 +52,9 @@ export function inferMediaFollowerAction(
       observed: localObserved,
     };
   }
+  // Readiness describes buffering/playback progress, including a temporary
+  // correction rate. It carries no user seek, play/pause or rate-control intent.
+  if (trigger === "READY" || trigger === "BUFFERING") return null;
   if (trigger === "SEEKED") {
     return {
       type: "SEEK",
@@ -99,7 +102,12 @@ export function planMediaFollowerCorrection(
   let rateRestore: MediaRateRestorePlan | null = null;
 
   if (forceSeek) {
-    actions.push({ type: "SEEK", positionMs: leaderPositionMs });
+    // A paused seek emits readiness events too; an already aligned observation
+    // must not start another seek/readiness feedback cycle. Adapters read whole
+    // milliseconds, whereas server prediction may stop on a fractional one.
+    if (forceSeekInput || Math.abs(localNow.positionMs - leaderPositionMs) >= 1) {
+      actions.push({ type: "SEEK", positionMs: leaderPositionMs });
+    }
     if (localNow.playbackRate !== group.observed.playbackRate) {
       actions.push({
         type: "SET_RATE",

@@ -78,6 +78,7 @@ export interface DrawingPageRuntimeOptions {
   scheduler?: DrawingPageScheduler;
   now?: () => number;
   elementAtPoint?: (clientX: number, clientY: number) => Element | null;
+  mediaAtPoint?: (clientX: number, clientY: number) => Element | null;
   identifyMedia?: AnnotationAnchorEnvironment["identifyMedia"];
   resolveMedia?: AnnotationAnchorEnvironment["resolveMedia"];
   setInteraction?: (interaction: { active: boolean; capturesInput: boolean }) => void;
@@ -146,6 +147,7 @@ export class DrawingPageRuntime {
   readonly #scheduler: DrawingPageScheduler;
   readonly #now: () => number;
   readonly #elementAtPoint: (clientX: number, clientY: number) => Element | null;
+  readonly #mediaAtPoint: DrawingPageRuntimeOptions["mediaAtPoint"];
   readonly #setInteraction: (interaction: { active: boolean; capturesInput: boolean }) => void;
   readonly #reportState:
     | ((state: {
@@ -222,6 +224,7 @@ export class DrawingPageRuntime {
     this.#elementAtPoint =
       options.elementAtPoint ??
       ((clientX, clientY) => this.#readUnderlyingElement(clientX, clientY));
+    this.#mediaAtPoint = options.mediaAtPoint;
     this.#setInteraction =
       options.setInteraction ??
       ((interaction) => {
@@ -394,7 +397,10 @@ export class DrawingPageRuntime {
       return;
     }
 
-    const target = sample.target ?? this.#elementAtPoint(sample.clientX, sample.clientY);
+    const target =
+      this.#mediaAtPoint?.(sample.clientX, sample.clientY) ??
+      sample.target ??
+      this.#elementAtPoint(sample.clientX, sample.clientY);
     if (target instanceof HTMLIFrameElement) {
       this.#notice.textContent = "此框架未授权，无法绘制";
       return;

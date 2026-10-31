@@ -36,6 +36,7 @@ import {
   type PointerIdentity,
   type PointerPageContext,
   type PointerPagePort,
+  type PointerProjection,
 } from "../pointer-controller.js";
 import {
   CollaborationPageContextSchema,
@@ -1042,6 +1043,7 @@ export class ChromePageCollaborationPort
     tabIdInput: number,
     pointerInput: PointerRecord,
     frameIdInput = 0,
+    projection?: PointerProjection,
   ): Promise<void> {
     const pointer = PointerRecordSchema.parse(pointerInput);
     await this.#send(
@@ -1049,6 +1051,7 @@ export class ChromePageCollaborationPort
       PointerRenderMessageSchema.parse({
         type: "syncaction.pointer.render",
         pointer,
+        ...(projection === undefined ? {} : { projection }),
       }),
       frameIdInput,
     );
@@ -1058,6 +1061,7 @@ export class ChromePageCollaborationPort
     tabIdInput: number,
     leaseInput: PointerLeaseRecord,
     frameIdInput = 0,
+    projection?: PointerProjection,
   ): Promise<void> {
     const lease = PointerLeaseRecordSchema.parse(leaseInput);
     await this.#send(
@@ -1065,6 +1069,7 @@ export class ChromePageCollaborationPort
       PointerLeaseRenderMessageSchema.parse({
         type: "syncaction.pointer.lease",
         lease,
+        ...(projection === undefined ? {} : { projection }),
       }),
       frameIdInput,
     );

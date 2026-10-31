@@ -12,6 +12,7 @@ import {
   PointerLeaseSnapshotSchema,
   PointerSnapshotMessageSchema,
   LogicalTabIdSchema,
+  MediaIdentitySchema,
   RoomIdSchema,
   type PointerDocumentRevision,
   type PointerFrame,
@@ -19,6 +20,7 @@ import {
   type PointerLeaseRecord,
   type PointerRecord,
   type RoomId,
+  type MediaIdentity,
 } from "@syncaction/protocol";
 import type { DurableReplica } from "@syncaction/replica";
 import { z } from "zod";
@@ -32,11 +34,22 @@ import { isConfirmedPageDocument } from "./confirmed-page-document.js";
 const LocalTabIdSchema = z.number().int().nonnegative().safe();
 const BrowserSessionIdSchema = z.string().uuid();
 
+export const PointerProjectionSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("PAGE") }).strict(),
+  z.object({ type: z.literal("MEDIA_ANCHOR_ONLY"), media: MediaIdentitySchema }).strict(),
+]);
+export type PointerProjection = z.infer<typeof PointerProjectionSchema>;
+
 export const PointerLocalSampleSchema = z
   .object({
     type: z.literal("pointer.sample"),
     documentRevision: PointerDocumentRevisionSchema,
     anchor: PointerAnchorSchema.nullable(),
+    mediaAnchor: z
+      .object({ identity: MediaIdentitySchema, anchor: PointerAnchorSchema })
+      .strict()
+      .nullable()
+      .optional(),
     viewport: PointerCoordinatesSchema,
     viewportDimensions: z
       .object({
@@ -70,8 +83,18 @@ export interface PointerPagePort {
   ensureInjected(tabId: number): Promise<boolean>;
   verifyInjected(tabId: number): Promise<boolean>;
   setContext(tabId: number, context: PointerPageContext): Promise<void>;
-  render(tabId: number, pointer: PointerRecord): Promise<void>;
-  renderLease?(tabId: number, lease: PointerLeaseRecord): Promise<void>;
+  render(
+    tabId: number,
+    pointer: PointerRecord,
+    frameId?: number,
+    projection?: PointerProjection,
+  ): Promise<void>;
+  renderLease?(
+    tabId: number,
+    lease: PointerLeaseRecord,
+    frameId?: number,
+    projection?: PointerProjection,
+  ): Promise<void>;
   renderFrame?(tabId: number, frame: PointerFrameEvent): Promise<void>;
   clear(tabId: number, identity?: PointerIdentity): Promise<void>;
   dispose(tabId: number): Promise<void>;
@@ -97,6 +120,17 @@ export interface PointerControllerOptions {
 }
 
 export interface PointerCompatibilityPort {
+  getRemotePointerProjection?(input: {
+    logicalTabId: string;
+    documentRevision: PointerDocumentRevision;
+    remoteUserId: string;
+    remoteDeviceId: string;
+  }): PointerProjection | null;
+  getLocalMediaIdentity?(context: PointerPageContext): MediaIdentity | null;
+  hasMediaAnchoredRemotePointerObserver?(input: {
+    logicalTabId: string;
+    documentRevision: PointerDocumentRevision;
+  }): boolean;
   canRenderRemotePointer(input: {
     logicalTabId: string;
     documentRevision: PointerDocumentRevision;
@@ -125,7 +159,14 @@ interface PendingRemoteFrame {
   barrier: number;
 }
 
+interface PendingRemoteLease {
+  lease: PointerLeaseRecord;
+  generation: number;
+  barrier: number;
+}
+
 const POINTER_FRAME_INTERVAL_MS = 40;
+const POINTER_MEDIA_ANCHOR_INTERVAL_MS = 100;
 const POINTER_LEASE_RENEW_INTERVAL_MS = 2_000;
 const POINTER_VIEWPORT_BUCKET_PX = 160;
 
@@ -147,6 +188,8 @@ export class PointerController {
   readonly #remoteFrameSequenceByLease = new Map<string, number>();
   readonly #pendingRemoteFrames = new Map<string, PendingRemoteFrame>();
   readonly #scheduledRemoteFrameBarriers = new Map<string, number>();
+  readonly #pendingRemoteLeases = new Map<string, PendingRemoteLease>();
+  readonly #scheduledRemoteLeaseBarriers = new Map<string, number>();
   readonly #pageCapabilityErrors = new Map<number, Map<"PAGE_HOST" | "POINTER", string>>();
   #synchronized = false;
   #activeTabId: number | undefined;
@@ -154,6 +197,12 @@ export class PointerController {
   #pageTail: Promise<void> = Promise.resolve();
   #leaseTail: Promise<void> = Promise.resolve();
   #latestSample: LatestSample | undefined;
+  #latestMediaSample: LatestSample | undefined;
+  #mediaSampleDirty = false;
+  #mediaLeaseQueued = false;
+  #leaseRenewalQueued = false;
+  #mediaObserverAvailable = false;
+  #mediaTimer: unknown;
   #leaseId: string | null = null;
   #leaseContext: PointerPageContext | null = null;
   #leaseTabId: number | null = null;
@@ -196,6 +245,8 @@ export class PointerController {
       this.#remoteFrameSequenceByLease.clear();
       this.#pendingRemoteFrames.clear();
       this.#scheduledRemoteFrameBarriers.clear();
+      this.#pendingRemoteLeases.clear();
+      this.#scheduledRemoteLeaseBarriers.clear();
       this.#pointerBarrier += 1;
       this.#pointerObserverStateKnown = false;
       this.#remoteObserverAvailable = true;
@@ -297,11 +348,21 @@ export class PointerController {
       this.#documentVisible = false;
       this.#latestSample = undefined;
       this.#stopFrameTimer();
+      this.#stopMediaTimer();
+      if (this.#mediaObserverAvailable) {
+        this.#latestMediaSample = { tabId, sample: { ...sample, mediaAnchor: null } };
+        this.#mediaSampleDirty = true;
+        this.#queueMediaLease();
+      }
       return;
     }
     const becameVisible = !this.#documentVisible;
     this.#documentVisible = true;
     this.#latestSample = { tabId, sample };
+    if (this.#mediaObserverAvailable) {
+      this.#latestMediaSample = { tabId, sample };
+      this.#mediaSampleDirty = true;
+    }
     if (becameVisible && this.#hasRemoteObserver()) {
       this.#queueLeaseRenewal();
     }
@@ -333,6 +394,7 @@ export class PointerController {
 
   #refreshRemoteObserverAvailability(): void {
     this.#applyRemoteObserverAvailability(this.#computeRemoteObserver());
+    this.#refreshMediaObserver();
   }
 
   public handlePageCapability(reportInput: PageCapabilityReport): void {
@@ -518,6 +580,7 @@ export class PointerController {
     this.#leaseTabId = tabId;
     this.#leaseContext = structuredClone(context);
     this.#remoteObserverAvailable = this.#computeRemoteObserver();
+    this.#refreshMediaObserver();
     this.#nextFrameSeq = 1;
     this.#pauseLeaseAfterRenewal = !this.#hasRemoteObserver();
     const publish = this.#leaseTail.then(() =>
@@ -553,11 +616,24 @@ export class PointerController {
       this.#stopLeaseTimer();
       return;
     }
+    const latest = this.#mediaObserverAvailable ? this.#latestMediaSample : this.#latestSample;
     const sample =
-      this.#latestSample?.tabId === tabId &&
-      sameRevision(this.#latestSample.sample.documentRevision, context.documentRevision)
-        ? this.#latestSample.sample
+      latest?.tabId === tabId &&
+      sameRevision(latest.sample.documentRevision, context.documentRevision)
+        ? latest.sample
         : undefined;
+    const media = this.#compatibility?.getLocalMediaIdentity?.(context);
+    const mediaAnchor = sample?.mediaAnchor;
+    const anchor = this.#mediaObserverAvailable
+      ? media !== null &&
+        media !== undefined &&
+        mediaAnchor !== null &&
+        mediaAnchor !== undefined &&
+        media.provider === mediaAnchor.identity.provider &&
+        media.mediaKey === mediaAnchor.identity.mediaKey
+        ? mediaAnchor.anchor
+        : null
+      : (sample?.anchor ?? null);
     const acknowledgement = await this.#transport.publishPointerLease({
       type: "pointer.lease",
       protocolVersion: 1,
@@ -566,7 +642,7 @@ export class PointerController {
       leaseId,
       logicalTabId: context.logicalTabId,
       documentRevision: context.documentRevision,
-      anchor: sample?.anchor ?? null,
+      anchor,
     });
     if (!this.#synchronized || generation !== this.#generation || this.#leaseId !== leaseId) {
       return;
@@ -578,6 +654,7 @@ export class PointerController {
     } else {
       this.#stopFrameTimer();
     }
+    this.#refreshMediaObserver();
     if (!this.#hasRemoteObserver() && renewal && this.#pauseLeaseAfterRenewal) {
       this.#stopLeaseTimer();
     } else {
@@ -590,17 +667,29 @@ export class PointerController {
     const tabId = this.#leaseTabId;
     const context = this.#leaseContext;
     const generation = this.#generation;
-    if (!this.#synchronized || leaseId === null || tabId === null || context === null) {
+    if (
+      !this.#synchronized ||
+      leaseId === null ||
+      tabId === null ||
+      context === null ||
+      this.#leaseRenewalQueued ||
+      this.#mediaLeaseQueued
+    ) {
       return;
     }
+    this.#leaseRenewalQueued = true;
     const publish = this.#leaseTail.then(() =>
       this.#publishLease(tabId, context, leaseId, generation, true),
     );
-    this.#leaseTail = publish.catch((cause) => {
-      if (this.#synchronized && generation === this.#generation && this.#leaseId === leaseId) {
-        this.#errorCode = pointerErrorCode(cause);
-      }
-    });
+    this.#leaseTail = publish
+      .catch((cause) => {
+        if (this.#synchronized && generation === this.#generation && this.#leaseId === leaseId) {
+          this.#errorCode = pointerErrorCode(cause);
+        }
+      })
+      .finally(() => {
+        this.#leaseRenewalQueued = false;
+      });
   }
 
   #flushLatestFrame(): void {
@@ -651,7 +740,11 @@ export class PointerController {
   #stopLocalPublisher(): void {
     this.#stopFrameTimer();
     this.#stopLeaseTimer();
+    this.#stopMediaTimer();
     this.#latestSample = undefined;
+    this.#latestMediaSample = undefined;
+    this.#mediaSampleDirty = false;
+    this.#mediaObserverAvailable = false;
     this.#leaseId = null;
     this.#leaseContext = null;
     this.#leaseTabId = null;
@@ -690,6 +783,85 @@ export class PointerController {
       this.#scheduler.clearInterval(this.#leaseTimer);
       this.#leaseTimer = undefined;
     }
+  }
+
+  #refreshMediaObserver(): void {
+    this.#mediaObserverAvailable =
+      this.#leaseContext !== null &&
+      (this.#compatibility?.hasMediaAnchoredRemotePointerObserver?.({
+        logicalTabId: this.#leaseContext.logicalTabId,
+        documentRevision: this.#leaseContext.documentRevision,
+      }) ??
+        false);
+    if (!this.#mediaObserverAvailable || !this.#documentVisible) {
+      this.#stopMediaTimer();
+      if (!this.#mediaObserverAvailable) {
+        this.#latestMediaSample = undefined;
+        this.#mediaSampleDirty = false;
+      }
+      return;
+    }
+    if (this.#mediaTimer === undefined) {
+      this.#mediaTimer = this.#scheduler.setInterval(
+        () => this.#queueMediaLease(),
+        POINTER_MEDIA_ANCHOR_INTERVAL_MS,
+      );
+    }
+  }
+
+  #stopMediaTimer(): void {
+    if (this.#mediaTimer !== undefined) {
+      this.#scheduler.clearInterval(this.#mediaTimer);
+      this.#mediaTimer = undefined;
+    }
+  }
+
+  #queueMediaLease(): void {
+    const leaseId = this.#leaseId;
+    const tabId = this.#leaseTabId;
+    const context = this.#leaseContext;
+    const generation = this.#generation;
+    if (
+      !this.#mediaSampleDirty ||
+      this.#mediaLeaseQueued ||
+      leaseId === null ||
+      tabId === null ||
+      context === null
+    )
+      return;
+    this.#mediaLeaseQueued = true;
+    const publish = this.#leaseTail.then(async () => {
+      if (
+        !this.#synchronized ||
+        generation !== this.#generation ||
+        this.#leaseId !== leaseId ||
+        this.#leaseContext === null ||
+        !samePageContext(this.#leaseContext, context)
+      )
+        return;
+      this.#mediaSampleDirty = false;
+      await this.#publishLease(tabId, context, leaseId, generation, true);
+    });
+    this.#leaseTail = publish
+      .catch((cause) => {
+        if (this.#synchronized && generation === this.#generation && this.#leaseId === leaseId) {
+          this.#errorCode = pointerErrorCode(cause);
+        }
+      })
+      .finally(() => {
+        this.#mediaLeaseQueued = false;
+        if (
+          this.#mediaSampleDirty &&
+          !this.#documentVisible &&
+          this.#synchronized &&
+          generation === this.#generation &&
+          this.#leaseId === leaseId &&
+          this.#leaseContext !== null &&
+          samePageContext(this.#leaseContext, context)
+        ) {
+          this.#queueMediaLease();
+        }
+      });
   }
 
   #hasRemoteObserver(): boolean {
@@ -736,6 +908,17 @@ export class PointerController {
     }
     this.#pointerBarrier += 1;
     const reliableBarrier = this.#pointerBarrier;
+    if (parsed.type === "pointer.lease.event") {
+      const key = pointerKey(parsed.lease);
+      this.#pendingRemoteLeases.set(key, {
+        lease: parsed.lease,
+        generation,
+        barrier: reliableBarrier,
+      });
+      if (!this.#scheduledRemoteLeaseBarriers.has(key))
+        this.#scheduleRemoteLeaseDrain(key, reliableBarrier);
+      return;
+    }
     this.#enqueuePage(async () => {
       if (!this.#synchronized || generation !== this.#generation) {
         return;
@@ -762,6 +945,9 @@ export class PointerController {
         this.#pointerObserverStateKnown = true;
         this.#remoteLeases.clear();
         this.#remoteFrameSequenceByLease.clear();
+        for (const [key, pending] of this.#pendingRemoteLeases) {
+          if (pending.barrier < reliableBarrier) this.#pendingRemoteLeases.delete(key);
+        }
         for (const [leaseId, pending] of this.#pendingRemoteFrames) {
           if (pending.barrier < reliableBarrier) {
             this.#pendingRemoteFrames.delete(leaseId);
@@ -775,30 +961,6 @@ export class PointerController {
         this.#refreshRemoteObserverAvailability();
         await Promise.all([...this.#managedTabs].map((tabId) => this.#page.clear(tabId)));
         await this.#reconcileRemoteLeases(generation);
-        return;
-      }
-      if (parsed.type === "pointer.lease.event") {
-        this.#pointerObserverStateKnown = true;
-        const lease = parsed.lease;
-        const key = pointerKey(lease);
-        const previous = this.#remoteLeases.get(key);
-        if (!this.#acceptRemoteLease(lease)) {
-          this.#remoteLeases.delete(key);
-          if (previous !== undefined) {
-            this.#remoteFrameSequenceByLease.delete(previous.leaseId);
-            this.#pendingRemoteFrames.delete(previous.leaseId);
-          }
-          this.#refreshRemoteObserverAvailability();
-          await this.#clearIdentity(lease);
-          return;
-        }
-        if (previous?.leaseId !== lease.leaseId && previous !== undefined) {
-          this.#remoteFrameSequenceByLease.delete(previous.leaseId);
-          this.#pendingRemoteFrames.delete(previous.leaseId);
-        }
-        this.#remoteLeases.set(key, lease);
-        this.#refreshRemoteObserverAvailability();
-        await this.#routeRemoteLease(lease, generation);
         return;
       }
       if (parsed.type === "pointer.clear") {
@@ -833,6 +995,51 @@ export class PointerController {
       }
       this.#remotePointers.set(pointerKey(pointer), pointer);
       await this.#routeRemote(pointer, generation);
+    });
+  }
+
+  #scheduleRemoteLeaseDrain(key: string, barrier: number): void {
+    this.#scheduledRemoteLeaseBarriers.set(key, barrier);
+    this.#enqueuePage(async () => {
+      try {
+        const pending = this.#pendingRemoteLeases.get(key);
+        if (
+          pending === undefined ||
+          pending.barrier !== barrier ||
+          !this.#synchronized ||
+          pending.generation !== this.#generation
+        )
+          return;
+        this.#pendingRemoteLeases.delete(key);
+        const { lease } = pending;
+        this.#pointerObserverStateKnown = true;
+        const previous = this.#remoteLeases.get(key);
+        if (!this.#acceptRemoteLease(lease)) {
+          this.#remoteLeases.delete(key);
+          if (previous !== undefined) {
+            this.#remoteFrameSequenceByLease.delete(previous.leaseId);
+            this.#pendingRemoteFrames.delete(previous.leaseId);
+          }
+          this.#refreshRemoteObserverAvailability();
+          await this.#clearIdentity(lease);
+          return;
+        }
+        if (previous !== undefined && previous.leaseId !== lease.leaseId) {
+          this.#remoteFrameSequenceByLease.delete(previous.leaseId);
+          this.#pendingRemoteFrames.delete(previous.leaseId);
+        }
+        this.#remoteLeases.set(key, lease);
+        this.#refreshRemoteObserverAvailability();
+        await this.#routeRemoteLease(lease, pending.generation);
+      } finally {
+        if (this.#scheduledRemoteLeaseBarriers.get(key) === barrier) {
+          this.#scheduledRemoteLeaseBarriers.delete(key);
+        }
+        const pending = this.#pendingRemoteLeases.get(key);
+        if (pending !== undefined && !this.#scheduledRemoteLeaseBarriers.has(key)) {
+          this.#scheduleRemoteLeaseDrain(key, pending.barrier);
+        }
+      }
     });
   }
 
@@ -981,7 +1188,14 @@ export class PointerController {
       generation === this.#generation &&
       this.#managedTabs.has(binding.tabId)
     ) {
-      await this.#page.renderLease?.(binding.tabId, lease);
+      const projection = this.#remoteProjection(lease);
+      if (projection === null) {
+        await this.#clearIdentity(lease);
+      } else if (projection.type === "MEDIA_ANCHOR_ONLY") {
+        await this.#page.renderLease?.(binding.tabId, lease, 0, projection);
+      } else {
+        await this.#page.renderLease?.(binding.tabId, lease);
+      }
     }
   }
 
@@ -997,6 +1211,7 @@ export class PointerController {
       await this.#clearIdentity(lease);
       return;
     }
+    if (this.#remoteProjection(lease)?.type === "MEDIA_ANCHOR_ONLY") return;
     const cachedBinding = [...this.#contexts.entries()].find(
       ([tabId, context]) =>
         this.#managedTabs.has(tabId) &&
@@ -1067,7 +1282,14 @@ export class PointerController {
       generation === this.#generation &&
       this.#managedTabs.has(binding.tabId)
     ) {
-      await this.#page.render(binding.tabId, pointer);
+      const projection = this.#remoteProjection(pointer);
+      if (projection === null) {
+        await this.#clearIdentity(pointer);
+      } else if (projection.type === "MEDIA_ANCHOR_ONLY") {
+        await this.#page.render(binding.tabId, pointer, 0, projection);
+      } else {
+        await this.#page.render(binding.tabId, pointer);
+      }
     }
   }
 
@@ -1088,14 +1310,33 @@ export class PointerController {
       "logicalTabId" | "documentRevision" | "userId" | "deviceId"
     >,
   ): boolean {
-    return (
-      this.#compatibility?.canRenderRemotePointer({
-        logicalTabId: pointer.logicalTabId,
-        documentRevision: pointer.documentRevision,
-        remoteUserId: pointer.userId,
-        remoteDeviceId: pointer.deviceId,
-      }) ?? true
-    );
+    return this.#remoteProjection(pointer) !== null;
+  }
+
+  #remoteProjection(
+    pointer: Pick<
+      PointerRecord | PointerLeaseRecord,
+      "logicalTabId" | "documentRevision" | "userId" | "deviceId"
+    >,
+  ): PointerProjection | null {
+    const input = {
+      logicalTabId: pointer.logicalTabId,
+      documentRevision: pointer.documentRevision,
+      remoteUserId: pointer.userId,
+      remoteDeviceId: pointer.deviceId,
+    };
+    if (this.#compatibility?.getRemotePointerProjection !== undefined) {
+      const projection = this.#compatibility.getRemotePointerProjection(input);
+      return projection === null ? null : PointerProjectionSchema.parse(projection);
+    }
+    return (this.#compatibility?.canRenderRemotePointer({
+      logicalTabId: pointer.logicalTabId,
+      documentRevision: pointer.documentRevision,
+      remoteUserId: pointer.userId,
+      remoteDeviceId: pointer.deviceId,
+    }) ?? true)
+      ? { type: "PAGE" }
+      : null;
   }
 
   #enqueuePage(work: () => Promise<void>): void {
