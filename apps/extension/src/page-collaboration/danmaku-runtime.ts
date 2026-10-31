@@ -86,6 +86,7 @@ export class DanmakuPageRuntime {
   #pendingMessageId: string | null = null;
   #pendingText: string | null = null;
   #hidden = false;
+  #movingGeometryReady = false;
   #lastReportSignature = "";
   #disposed = false;
 
@@ -186,16 +187,23 @@ export class DanmakuPageRuntime {
     status.setAttribute("role", "status");
     status.setAttribute("aria-live", "polite");
     input.addEventListener("keydown", (event) => {
+      // Editing inside the closed host must not invoke page bubble shortcuts.
+      event.stopPropagation();
+      if (event.isComposing) {
+        return;
+      }
       if (event.key === "Escape") {
         event.preventDefault();
         this.closeInput();
         return;
       }
-      if (event.key === "Enter" && !event.isComposing) {
+      if (event.key === "Enter") {
         event.preventDefault();
         this.#submitInput();
       }
     });
+    input.addEventListener("keypress", (event) => event.stopPropagation());
+    input.addEventListener("keyup", (event) => event.stopPropagation());
     bar.append(input, status);
     this.#root.append(bar);
     this.#inputBar = bar;
@@ -277,12 +285,12 @@ export class DanmakuPageRuntime {
       this.#deleteRecord(oldestId);
       evicted = true;
     }
+    this.#refreshSurface();
     if (evicted) {
       this.#renderAll();
     } else {
       this.#renderOne(event);
     }
-    this.#refreshSurface();
   }
 
   public setHidden(hidden: boolean): void {
@@ -290,14 +298,18 @@ export class DanmakuPageRuntime {
       return;
     }
     this.#hidden = hidden;
-    this.#renderAll();
     this.#refreshSurface();
+    this.#renderAll();
     this.#emitStateReport();
   }
 
   public handleResize(): void {
     if (!this.#disposed) {
-      this.#engine.resize();
+      this.#movingGeometryReady = false;
+      if (!this.#hidden && this.#messages.size > 0 && !this.#reducedMotion()) {
+        this.#engine.resize();
+        this.#movingGeometryReady = true;
+      }
     }
   }
 
@@ -326,6 +338,7 @@ export class DanmakuPageRuntime {
     this.#messages.clear();
     this.#engine.clear();
     this.#engine.hide();
+    this.#movingGeometryReady = false;
     this.#staticList.replaceChildren();
     this.#refreshSurface();
   }
@@ -419,6 +432,7 @@ export class DanmakuPageRuntime {
     this.#staticList.replaceChildren();
     if (this.#hidden || this.#messages.size === 0) {
       this.#engine.hide();
+      this.#movingGeometryReady = false;
       return;
     }
     for (const message of this.#messages.values()) {
@@ -429,15 +443,21 @@ export class DanmakuPageRuntime {
   #renderOne(event: DanmakuEventMessage): void {
     if (this.#hidden) {
       this.#engine.hide();
+      this.#movingGeometryReady = false;
       return;
     }
     if (this.#reducedMotion()) {
       this.#engine.hide();
+      this.#movingGeometryReady = false;
       const item = this.#document.createElement("li");
       item.dataset.syncactionDanmakuMessage = event.messageId;
       item.textContent = `${event.sender.displayName}：${event.text}`;
       this.#staticList.append(item);
       return;
+    }
+    if (!this.#movingGeometryReady) {
+      this.#engine.resize();
+      this.#movingGeometryReady = true;
     }
     this.#engine.show();
     this.#engine.emit({
@@ -484,6 +504,7 @@ export function createDanmakuRenderingEngine(
       engine.clear();
     },
     resize: () => {
+      engine.speed = Math.max(48, container.clientWidth / 9);
       engine.resize();
     },
     show: () => {
