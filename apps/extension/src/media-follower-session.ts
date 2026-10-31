@@ -302,6 +302,9 @@ export class MediaFollowerSession {
     }
     let continuesRateCorrection =
       this.#activeRateCorrection !== null &&
+      !group.observed.paused &&
+      !group.observed.ended &&
+      group.status !== "ENDED_WAITING" &&
       sameRateCorrectionSession(this.#activeRateCorrection, route, group);
     if (
       this.#activeRateCorrection !== null &&

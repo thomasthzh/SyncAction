@@ -208,6 +208,105 @@ describe("public HTML media adapters", () => {
     expect(requireAdapter(discover()).target.durationMs).toBe(200_000);
   });
 
+  it.each(["video-page-card-small", "feed-card"])(
+    "controls the paused Bilibili principal player instead of a playing %s preview",
+    async (previewClass) => {
+      const fixture = installBilibiliPlayers({ previewClass });
+      const adapter = requireAdapter(discover({ context: fixture.context }));
+
+      expect(adapter.getMediaElement()).toBe(fixture.principal);
+      expect(adapter.target).toMatchObject({
+        provider: "BILIBILI",
+        mediaKey: "bilibili:av170001",
+        durationMs: 600_000,
+      });
+      await adapter.apply(command({ type: "SEEK", positionMs: 10_000 }));
+      expect(fixture.principalState.currentTime).toBe(10);
+      expect(fixture.previewState.currentTime).toBe(3);
+    },
+  );
+
+  it.each(["bilibili-player", "bilibiliPlayer", "playerWrap", "bpx-player-container"])(
+    "keeps the Bilibili %s principal ahead of another playing media element",
+    (principalHost) => {
+      const fixture = installBilibiliPlayers({ principalHost, previewClass: "unmarked-preview" });
+
+      expect(requireAdapter(discover({ context: fixture.context })).getMediaElement()).toBe(
+        fixture.principal,
+      );
+    },
+  );
+
+  it("does not satisfy an explicit Bilibili target with an equal-duration recommendation preview", async () => {
+    const fixture = installBilibiliPlayers({ previewDuration: 600 });
+    fixture.preview.hidden = true;
+    const principalTarget = requireAdapter(discover({ context: fixture.context })).target;
+    fixture.preview.hidden = false;
+
+    const adapter = requireAdapter(discover({ context: fixture.context, target: principalTarget }));
+    expect(adapter.getMediaElement()).toBe(fixture.principal);
+    await adapter.apply(command({ type: "SEEK", positionMs: 20_000 }));
+    expect(fixture.principalState.currentTime).toBe(20);
+    expect(fixture.previewState.currentTime).toBe(3);
+
+    fixture.principal.remove();
+    expect(discover({ context: fixture.context, target: principalTarget })).toEqual({
+      adapter: null,
+      code: "MEDIA_NOT_FOUND",
+    });
+  });
+
+  it.each([
+    ["metadata", Number.NaN, 0, null, "MEDIA_METADATA_PENDING"],
+    ["live", Number.POSITIVE_INFINITY, 4, null, "MEDIA_LIVE_UNSUPPORTED"],
+    ["encrypted", 600, 4, {}, "MEDIA_DRM_UNSUPPORTED"],
+  ] as const)(
+    "keeps a Bilibili principal's %s result instead of falling back to a preview",
+    (_, duration, readyState, mediaKeys, code) => {
+      const fixture = installBilibiliPlayers();
+      installMediaState(fixture.principal, { duration, readyState, mediaKeys });
+
+      expect(discover({ context: fixture.context })).toEqual({ adapter: null, code });
+    },
+  );
+
+  it.each(["video-page-card-small", "feed-card"])(
+    "does not expose Bilibili %s previews as shared playback when no principal exists",
+    (previewClass) => {
+      const fixture = installBilibiliPlayers({ previewClass });
+      fixture.principal.remove();
+
+      expect(discover({ context: fixture.context })).toEqual({
+        adapter: null,
+        code: "MEDIA_NOT_FOUND",
+      });
+    },
+  );
+
+  it("rediscovers a replacement Bilibili principal without adopting the playing preview", () => {
+    const fixture = installBilibiliPlayers();
+    const replacement = document.createElement("video");
+    installMediaState(replacement, { duration: 720, currentTime: 8, paused: true });
+    replacement.getBoundingClientRect = () => domRect(20, 80, 960, 540);
+    fixture.principal.replaceWith(replacement);
+
+    const adapter = requireAdapter(discover({ context: fixture.context }));
+    expect(adapter.getMediaElement()).toBe(replacement);
+    expect(adapter.target.durationMs).toBe(720_000);
+  });
+
+  it.each([
+    "https://example.com/watch",
+    "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    "https://www.bilibili.com.evil.example/video/BV17x411w7KC",
+    "https://notbilibili.com/video/BV17x411w7KC",
+  ])("preserves ordinary playing-first discovery outside Bilibili: %s", (pageUrl) => {
+    const fixture = installBilibiliPlayers();
+    const selected = requireAdapter(discover({ context: { ...fixture.context, pageUrl } }));
+
+    expect(selected.getMediaElement()).toBe(fixture.preview);
+  });
+
   it("selects an exact visible candidate without changing default ranking", () => {
     const primary = document.createElement("video");
     primary.id = "primary-player";
@@ -348,6 +447,52 @@ function requireAdapter(result: MediaDiscoveryResult) {
 
 function command(action: MediaApplyCommand["action"]): MediaApplyCommand {
   return { applyToken, action };
+}
+
+function installBilibiliPlayers(
+  options: {
+    principalHost?: string;
+    previewClass?: string;
+    previewDuration?: number;
+  } = {},
+) {
+  const previewCard = document.createElement("div");
+  previewCard.className = options.previewClass ?? "video-page-card-small";
+  const preview = document.createElement("video");
+  const previewState = installMediaState(preview, {
+    duration: options.previewDuration ?? 30,
+    currentTime: 3,
+    paused: false,
+  });
+  preview.getBoundingClientRect = () => domRect(1_000, 80, 240, 135);
+  previewCard.append(preview);
+  const principalHost = document.createElement("div");
+  if (options.principalHost === "bpx-player-container") {
+    principalHost.className = options.principalHost;
+  } else {
+    principalHost.id = options.principalHost ?? "bilibili-player";
+  }
+  const principal = document.createElement("video");
+  const principalState = installMediaState(principal, {
+    duration: 600,
+    currentTime: 90,
+    paused: true,
+  });
+  principal.getBoundingClientRect = () => domRect(20, 80, 960, 540);
+  principalHost.append(principal);
+  // Preview first also exercises the explicit-target scan, which must not let
+  // equal provider/key/duration override principal-player selection.
+  document.body.append(previewCard, principalHost);
+  return {
+    principal,
+    principalState,
+    preview,
+    previewState,
+    context: {
+      ...context,
+      pageUrl: "https://www.bilibili.com/video/BV17x411w7KC?p=1",
+    },
+  };
 }
 
 function installMediaState(

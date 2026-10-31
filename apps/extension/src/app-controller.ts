@@ -84,6 +84,7 @@ function pageAccessRuntimeKey(room: ExtensionStatus | null): string {
     room?.browser?.state,
     room?.browser?.reason,
     room?.presence?.compatibilities ?? [],
+    room?.mediaCollaborationAvailable === true,
   ]);
 }
 
@@ -198,6 +199,10 @@ export interface RoomRuntime {
   getStatus(): Promise<ExtensionStatus>;
   getPageDocumentRevision?(tabIdInput: unknown): Promise<DocumentRevision | null>;
   getPageContentCompatibility?(tabIdInput: unknown): Promise<ContentCompatibility | null>;
+  getPageMediaCollaboration?(
+    tabIdInput: unknown,
+    expectedDocumentRevision?: DocumentRevision,
+  ): Promise<boolean>;
   handleBrowserEvent(eventInput: unknown): Promise<BrowserObserverResult | undefined>;
   handleActiveTabChanged(tabIdInput: unknown): Promise<void>;
   handlePointerPageReady(tabIdInput: unknown): Promise<void>;
@@ -459,6 +464,7 @@ export interface ExtensionPageAccessContext {
   serverTermsVersion: string | null;
   documentRevision: DocumentRevision | null;
   contentCompatibility: ContentCompatibility | null;
+  mediaCollaborationAvailable?: boolean;
   pendingPublication?: { logicalTabId: string } | null;
 }
 
@@ -589,6 +595,11 @@ export class ExtensionAppController {
         ? null
         : runtime.getPageContentCompatibility(tabId),
     ]);
+    const mediaCollaborationAvailable =
+      documentRevision !== null &&
+      runtime === this.#runtime &&
+      (await runtime?.getPageMediaCollaboration?.(tabId, documentRevision)) === true &&
+      runtime === this.#runtime;
     return {
       profileId: this.#profileId,
       serverOrigin: this.#serverUrl,
@@ -602,6 +613,7 @@ export class ExtensionAppController {
             },
       contentCompatibility:
         documentRevision === null || contentCompatibility === null ? null : contentCompatibility,
+      ...(runtime?.getPageMediaCollaboration === undefined ? {} : { mediaCollaborationAvailable }),
       ...(runtime?.getPendingPagePublication === undefined
         ? {}
         : {

@@ -3,19 +3,28 @@ import {
   PointerFrameEventSchema,
   PointerLeaseRecordSchema,
   PointerRecordSchema,
+  MediaIdentitySchema,
   type PointerAnchor,
   type PointerFrameEvent,
   type PointerLeaseRecord,
   type PointerPathSegment,
   type PointerRecord,
+  type MediaIdentity,
 } from "@syncaction/protocol";
 import {
   PointerLocalSampleSchema,
+  PointerProjectionSchema,
   type PointerIdentity,
   type PointerLocalSample,
   type PointerPageContext,
+  type PointerProjection,
 } from "./pointer-controller.js";
 import { realtimeMetrics, type RealtimeMetrics } from "./realtime-metrics.js";
+import {
+  buildMediaPointerAnchor,
+  isReservedMediaPointerAnchor,
+  matchesMediaPointerAnchor,
+} from "./media-pointer-anchor.js";
 
 const POINTER_STALE_MS = 3_000;
 const POINTER_SNAP_GAP_MS = 250;
@@ -45,12 +54,19 @@ export interface PointerPageRuntimeOptions {
   window: Window;
   surface: HTMLElement;
   emitSample: (sample: PointerLocalSample) => void | Promise<void>;
+  getPrincipalMedia?: (context: PointerPageContext) => PointerPrincipalMedia | null;
   now?: () => number;
   scheduler?: PointerPageScheduler;
   metrics?: Pick<RealtimeMetrics, "observePointerDomNodes">;
 }
 
+export interface PointerPrincipalMedia {
+  element: Element;
+  identity: MediaIdentity;
+}
+
 interface RemotePointerVisual {
+  projection: PointerProjection;
   lease: PointerLeaseRecord | null;
   legacyRecord: PointerRecord | null;
   leaseId: string;
@@ -161,6 +177,7 @@ export function locatePointer(
   }
   const pointer = parsed.data;
   if (pointer.anchor !== null) {
+    if (isReservedMediaPointerAnchor(pointer.anchor.path)) return null;
     const target = resolvePointerPath(document, pointer.anchor.path);
     if (target !== null) {
       const rectangle = target.getBoundingClientRect();
@@ -182,6 +199,7 @@ export class PointerPageRuntime {
   readonly #document: Document;
   readonly #window: Window;
   readonly #emitSample: (sample: PointerLocalSample) => void | Promise<void>;
+  readonly #getPrincipalMedia: PointerPageRuntimeOptions["getPrincipalMedia"];
   readonly #now: () => number;
   readonly #scheduler: PointerPageScheduler;
   readonly #metrics: Pick<RealtimeMetrics, "observePointerDomNodes">;
@@ -194,6 +212,7 @@ export class PointerPageRuntime {
   readonly #visibilityListener: () => void;
   readonly #repositionListener: () => void;
   #context: PointerPageContext | null = null;
+  #lastLocalSample: PointerLocalSample | null = null;
   #frameHandle: unknown;
   #expiryTimer: unknown;
   #disposed = false;
@@ -202,6 +221,7 @@ export class PointerPageRuntime {
     this.#document = options.document;
     this.#window = options.window;
     this.#emitSample = options.emitSample;
+    this.#getPrincipalMedia = options.getPrincipalMedia;
     this.#now = options.now ?? Date.now;
     this.#scheduler = options.scheduler ?? browserScheduler(options.window);
     this.#metrics = options.metrics ?? realtimeMetrics;
@@ -233,6 +253,7 @@ export class PointerPageRuntime {
         type: "pointer.sample",
         documentRevision: context.documentRevision,
         anchor: null,
+        ...(this.#getPrincipalMedia === undefined ? {} : { mediaAnchor: null }),
         viewport: { x: 0, y: 0 },
         viewportDimensions: {
           widthCssPx: this.#window.innerWidth,
@@ -242,7 +263,14 @@ export class PointerPageRuntime {
       });
       void Promise.resolve(this.#emitSample(sample)).catch(() => undefined);
     };
-    this.#repositionListener = () => this.#scheduleReposition();
+    this.#repositionListener = () => {
+      this.#scheduleReposition();
+      if (this.#lastLocalSample !== null && this.#getPrincipalMedia !== undefined) {
+        const sample = { ...this.#lastLocalSample, mediaAnchor: null };
+        this.#lastLocalSample = sample;
+        void Promise.resolve(this.#emitSample(sample)).catch(() => undefined);
+      }
+    };
     this.#document.addEventListener("pointermove", this.#pointerMoveListener, {
       passive: true,
     });
@@ -260,6 +288,13 @@ export class PointerPageRuntime {
     if (this.#disposed) {
       return;
     }
+    if (
+      this.#context === null ||
+      this.#context.logicalTabId !== context.logicalTabId ||
+      !sameRevision(this.#context.documentRevision, context.documentRevision)
+    ) {
+      this.#lastLocalSample = null;
+    }
     this.#context = structuredClone(context);
     for (const [key, rendered] of this.#rendered) {
       const documentIdentity = rendered.lease ?? rendered.legacyRecord;
@@ -273,7 +308,7 @@ export class PointerPageRuntime {
     }
   }
 
-  public render(pointerInput: PointerRecord): void {
+  public render(pointerInput: PointerRecord, projectionInput?: PointerProjection): void {
     if (this.#disposed || this.#context === null) {
       return;
     }
@@ -296,9 +331,14 @@ export class PointerPageRuntime {
       `legacy:${pointer.userId}:${pointer.deviceId}`,
       pointer,
     );
+    const projection = PointerProjectionSchema.parse(projectionInput ?? { type: "PAGE" });
+    visual.projection = projection;
     visual.legacyRecord = structuredClone(pointer);
     visual.expiresAt = pointer.expiresAt;
-    const position = locatePointer(this.#document, this.#window, pointer);
+    const position =
+      projection.type === "MEDIA_ANCHOR_ONLY"
+        ? this.#locateMediaAnchor(pointer.anchor, projection.media)
+        : locatePointer(this.#document, this.#window, pointer);
     if (position === null) {
       visual.element.hidden = true;
       visual.hasPosition = false;
@@ -310,7 +350,7 @@ export class PointerPageRuntime {
     this.#ensureAnimationLoop();
   }
 
-  public renderLease(leaseInput: PointerLeaseRecord): void {
+  public renderLease(leaseInput: PointerLeaseRecord, projectionInput?: PointerProjection): void {
     if (this.#disposed || this.#context === null) {
       return;
     }
@@ -329,6 +369,12 @@ export class PointerPageRuntime {
       return;
     }
     const visual = this.#getOrCreateVisual(key, lease.leaseId, lease);
+    const projection = PointerProjectionSchema.parse(projectionInput ?? { type: "PAGE" });
+    if (visual.projection.type !== projection.type || visual.leaseId !== lease.leaseId) {
+      this.#hideVisual(key, visual);
+      visual.lastFrameAt = 0;
+    }
+    visual.projection = projection;
     if (visual.leaseId !== lease.leaseId) {
       visual.leaseId = lease.leaseId;
       visual.lastSequence = 0;
@@ -339,6 +385,22 @@ export class PointerPageRuntime {
     visual.lease = structuredClone(lease);
     visual.legacyRecord = null;
     visual.expiresAt = lease.expiresAt;
+    if (projection.type === "MEDIA_ANCHOR_ONLY") {
+      const position = this.#locateMediaAnchor(lease.anchor, projection.media);
+      const previousAt = visual.lastFrameAt;
+      visual.lastFrameAt = this.#now();
+      if (position === null) {
+        this.#hideVisual(key, visual);
+      } else {
+        const gap = visual.lastFrameAt - previousAt;
+        const snap = !visual.hasPosition || previousAt === 0 || gap >= POINTER_SNAP_GAP_MS;
+        visual.interpolationDurationMs = snap ? 0 : Math.min(POINTER_INTERPOLATION_MAX_MS, gap);
+        this.#setTarget(visual, position.x, position.y, visual.lastFrameAt, snap, "anchor");
+      }
+      this.#scheduleExpiry();
+      this.#ensureAnimationLoop();
+      return;
+    }
     const anchored = locateLeaseAnchor(this.#document, this.#window, lease);
     if (!visual.hasPosition && anchored !== null) {
       this.#setTarget(visual, anchored.x, anchored.y, this.#now(), true, anchored.source);
@@ -360,6 +422,7 @@ export class PointerPageRuntime {
     const visual = this.#rendered.get(key);
     if (
       visual === undefined ||
+      visual.projection.type === "MEDIA_ANCHOR_ONLY" ||
       visual.lease === null ||
       visual.leaseId !== frame.leaseId ||
       visual.lease.expiresAt <= this.#now() ||
@@ -423,6 +486,18 @@ export class PointerPageRuntime {
         (candidate): candidate is Element =>
           candidate instanceof Element && candidate.getRootNode() === this.#document,
       );
+    const principal = this.#principalMedia();
+    const principalRectangle = principal?.element.getBoundingClientRect();
+    const mediaAnchor =
+      principal === null ||
+      principalRectangle === undefined ||
+      !pointInside(principalRectangle, event.clientX, event.clientY)
+        ? null
+        : buildMediaPointerAnchor(
+            principal.identity,
+            (event.clientX - principalRectangle.left) / principalRectangle.width,
+            (event.clientY - principalRectangle.top) / principalRectangle.height,
+          );
     const sample = PointerLocalSampleSchema.parse({
       type: "pointer.sample",
       documentRevision: context.documentRevision,
@@ -430,6 +505,14 @@ export class PointerPageRuntime {
         target === undefined
           ? null
           : buildPointerAnchor(this.#document, target, event.clientX, event.clientY),
+      ...(this.#getPrincipalMedia === undefined
+        ? {}
+        : {
+            mediaAnchor:
+              principal === null || mediaAnchor === null
+                ? null
+                : { identity: principal.identity, anchor: mediaAnchor },
+          }),
       viewport: {
         x: clamp(event.clientX / this.#window.innerWidth),
         y: clamp(event.clientY / this.#window.innerHeight),
@@ -440,6 +523,7 @@ export class PointerPageRuntime {
       },
       documentVisible: true,
     });
+    this.#lastLocalSample = sample;
     void Promise.resolve(this.#emitSample(sample)).catch(() => undefined);
   }
 
@@ -454,6 +538,7 @@ export class PointerPageRuntime {
     }
     this.#disposed = true;
     this.#context = null;
+    this.#lastLocalSample = null;
     this.clear();
     this.#document.removeEventListener("pointermove", this.#pointerMoveListener);
     this.#document.removeEventListener("visibilitychange", this.#visibilityListener);
@@ -487,7 +572,18 @@ export class PointerPageRuntime {
       return;
     }
     for (const visual of this.#rendered.values()) {
-      if (visual.legacyRecord !== null) {
+      if (visual.projection.type === "MEDIA_ANCHOR_ONLY") {
+        const identity = visual.lease ?? visual.legacyRecord;
+        const position =
+          identity === null
+            ? null
+            : this.#locateMediaAnchor(identity.anchor, visual.projection.media);
+        if (position === null) {
+          if (identity !== null) this.#hideVisual(pointerKey(identity), visual);
+        } else {
+          this.#setTarget(visual, position.x, position.y, this.#now(), true, "anchor");
+        }
+      } else if (visual.legacyRecord !== null) {
         const position = locatePointer(this.#document, this.#window, visual.legacyRecord);
         if (position !== null) {
           this.#setTarget(visual, position.x, position.y, this.#now(), true, position.source);
@@ -523,6 +619,7 @@ export class PointerPageRuntime {
     this.#updateElementMetadata(element, metadata);
     this.#overlay.append(element);
     const visual: RemotePointerVisual = {
+      projection: { type: "PAGE" },
       lease: null,
       legacyRecord: null,
       leaseId,
@@ -560,6 +657,54 @@ export class PointerPageRuntime {
     if (label !== null && label.textContent !== metadata.displayName) {
       label.textContent = metadata.displayName;
     }
+  }
+
+  #hideVisual(key: string, visual: RemotePointerVisual): void {
+    visual.element.hidden = true;
+    visual.hasPosition = false;
+    this.#positions.delete(key);
+  }
+
+  #principalMedia(): PointerPrincipalMedia | null {
+    if (this.#context === null || this.#getPrincipalMedia === undefined) return null;
+    const principal = this.#getPrincipalMedia(this.#context);
+    if (
+      principal === null ||
+      !MediaIdentitySchema.safeParse(principal.identity).success ||
+      !principal.element.isConnected ||
+      principal.element.getRootNode() !== this.#document ||
+      !["video", "audio"].includes(principal.element.localName.toLowerCase())
+    )
+      return null;
+    const rectangle = principal.element.getBoundingClientRect();
+    const style = this.#window.getComputedStyle(principal.element);
+    return Number.isFinite(rectangle.width) &&
+      Number.isFinite(rectangle.height) &&
+      rectangle.width > 0 &&
+      rectangle.height > 0 &&
+      style.display !== "none" &&
+      style.visibility !== "hidden" &&
+      style.visibility !== "collapse"
+      ? principal
+      : null;
+  }
+
+  #locateMediaAnchor(anchor: PointerAnchor | null, media: MediaIdentity): PointerPosition | null {
+    const principal = this.#principalMedia();
+    if (
+      principal === null ||
+      anchor === null ||
+      principal.identity.provider !== media.provider ||
+      principal.identity.mediaKey !== media.mediaKey ||
+      (isReservedMediaPointerAnchor(anchor.path)
+        ? !matchesMediaPointerAnchor(anchor, media)
+        : resolvePointerPath(this.#document, anchor.path) !== principal.element)
+    )
+      return null;
+    const rectangle = principal.element.getBoundingClientRect();
+    const x = rectangle.left + rectangle.width * anchor.x;
+    const y = rectangle.top + rectangle.height * anchor.y;
+    return isInsideViewport(this.#window, x, y) ? { x, y, source: "anchor" } : null;
   }
 
   #setTarget(
@@ -716,12 +861,16 @@ function isInsideViewport(window: Window, x: number, y: number): boolean {
   return x >= 0 && y >= 0 && x <= window.innerWidth && y <= window.innerHeight;
 }
 
+function pointInside(rectangle: DOMRect, x: number, y: number): boolean {
+  return x >= rectangle.left && y >= rectangle.top && x <= rectangle.right && y <= rectangle.bottom;
+}
+
 function locateLeaseAnchor(
   document: Document,
   window: Window,
   lease: PointerLeaseRecord,
 ): PointerPosition | null {
-  if (lease.anchor === null) {
+  if (lease.anchor === null || isReservedMediaPointerAnchor(lease.anchor.path)) {
     return null;
   }
   const target = resolvePointerPath(document, lease.anchor.path);

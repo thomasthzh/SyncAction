@@ -45,6 +45,7 @@ import {
 } from "../src/background-controller.js";
 import { AnnotationReplica, type AnnotationReplicaStorageArea } from "../src/annotation-replica.js";
 import { DEFAULT_SERVER_PROFILE_ID } from "../src/server-profile.js";
+import { projectDocumentFeatureAccess } from "../src/page-access-policy.js";
 import type { DanmakuControllerPagePort } from "../src/danmaku-controller.js";
 import type { DrawingControllerPagePort } from "../src/drawing-controller.js";
 import type { MediaPagePort } from "../src/media-controller.js";
@@ -1063,6 +1064,104 @@ describe("BackgroundController", () => {
       type: "presence.update",
       logicalTabId,
     });
+    await controller.stop();
+  });
+
+  it("projects matching-media collaboration from real presence evidence without changing MISMATCH", async () => {
+    const onStatusChanged = vi.fn();
+    const controller = new BackgroundController({
+      persistence,
+      configStore: new StaticConfigStore(config),
+      transportFactory: () => transport,
+      browserPort: new MutableBrowserPort(),
+      browserSessionId: "018f8f8e-4b5c-7d6e-8f90-123456789ab5",
+      pagePort: new FakePointerPagePort(),
+      onStatusChanged,
+    });
+    const revision = { roomEpoch: 0, tabUpdatedAtSeq: 1 };
+    const localContext = {
+      documentRevision: revision,
+      canonicalPageIdentity: "url:https://example.com/",
+      contentSignature: { signatureVersion: 1, digest: "A".repeat(43) },
+      media: { provider: "HTML5", mediaKey: "html5:principal" },
+    };
+    const remote = {
+      userId: "018f8f8e-4b5c-7d6e-8f90-123456789ab7",
+      deviceId: "018f8f8e-4b5c-7d6e-8f90-123456789ab8",
+      username: "peer",
+      displayName: "Peer",
+      logicalTabId,
+      expiresAt: Date.now() + 30_000,
+      contentContext: {
+        ...localContext,
+        contentSignature: { signatureVersion: 1, digest: "B".repeat(43) },
+      },
+    };
+    const emitPresence = async (presenceSeq: number, contentContext: unknown) => {
+      transport.presenceHandler?.(
+        PresenceSnapshotV2MessageSchema.parse({
+          type: "presence.snapshot.v2",
+          protocolVersion: 1,
+          roomId,
+          presenceSeq,
+          presences: [{ ...remote, contentContext }],
+        }),
+      );
+      await controller.whenIdle();
+    };
+    await controller.start();
+    await controller.whenIdle();
+    await controller.handleActiveTabChanged(20);
+    const localReport = PageCompatibilityReportSchema.parse({
+      type: "page.compatibility.report",
+      protocolVersion: 1,
+      logicalTabId,
+      contentContext: localContext,
+    });
+    await controller.handlePageCompatibilityReport(20, localReport);
+    await emitPresence(1, remote.contentContext);
+
+    expect(await controller.getPageContentCompatibility(20)).toBe("MISMATCH");
+    expect(await controller.getPageMediaCollaboration(20, revision)).toBe(true);
+    expect((await controller.getStatus()).mediaCollaborationAvailable).toBe(true);
+    expect(
+      projectDocumentFeatureAccess({
+        grantEffective: true,
+        documentRevision: await controller.getPageDocumentRevision(20),
+        contentCompatibility: await controller.getPageContentCompatibility(20),
+        mediaCollaborationAvailable: await controller.getPageMediaCollaboration(20, revision),
+      }).enabledFeatures,
+    ).toContain("DRAWING");
+    expect(await controller.getPageMediaCollaboration(99, revision)).toBe(false);
+    expect(
+      await controller.getPageMediaCollaboration(20, { ...revision, tabUpdatedAtSeq: 2 }),
+    ).toBe(false);
+
+    onStatusChanged.mockClear();
+    await emitPresence(2, {
+      ...remote.contentContext,
+      media: { provider: "HTML5", mediaKey: "html5:different" },
+    });
+    expect(await controller.getPageContentCompatibility(20)).toBe("MISMATCH");
+    expect(await controller.getPageMediaCollaboration(20, revision)).toBe(false);
+    expect((await controller.getStatus()).mediaCollaborationAvailable).toBe(false);
+    expect(onStatusChanged).toHaveBeenCalled();
+    await emitPresence(3, { ...remote.contentContext, contentSignature: null });
+    expect(await controller.getPageContentCompatibility(20)).toBe("UNKNOWN");
+    expect(await controller.getPageMediaCollaboration(20, revision)).toBe(false);
+    await emitPresence(4, remote.contentContext);
+    expect(await controller.getPageMediaCollaboration(20, revision)).toBe(true);
+
+    await controller.handleActiveTabChanged(99);
+    expect(await controller.getPageMediaCollaboration(20, revision)).toBe(false);
+    expect((await controller.getStatus()).mediaCollaborationAvailable).toBe(false);
+    await controller.handleActiveTabChanged(20);
+    await controller.handlePageCompatibilityReport(20, localReport);
+    expect(await controller.getPageMediaCollaboration(20, revision)).toBe(true);
+
+    await controller.handlePagePermissionBoundaryChanged();
+    expect(await controller.getPageMediaCollaboration(20, revision)).toBe(false);
+    expect((await controller.getStatus()).mediaCollaborationAvailable).toBe(false);
     await controller.stop();
   });
 

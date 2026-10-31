@@ -15,15 +15,18 @@ import {
   type PointerLeaseUpdate,
   type PointerRecord,
   type PointerUpdate,
+  type MediaIdentity,
 } from "@syncaction/protocol";
 import { ReplicaRecordSchema, type ReplicaRecord } from "@syncaction/replica";
 import { beforeEach, describe, expect, it } from "vitest";
+import { buildMediaPointerAnchor } from "../src/media-pointer-anchor.js";
 import {
   PointerController,
   type PointerControllerScheduler,
   type PointerLocalSample,
   type PointerPageContext,
   type PointerPagePort,
+  type PointerProjection,
 } from "../src/pointer-controller.js";
 import type {
   PointerMessage,
@@ -43,6 +46,8 @@ const firstLeaseId = "018f8f8e-4b5c-7d6e-8f90-123456789c10";
 const secondLeaseId = "018f8f8e-4b5c-7d6e-8f90-123456789c11";
 const remoteLeaseId = "018f8f8e-4b5c-7d6e-8f90-123456789c12";
 let now = 1_785_110_000_000;
+
+const mediaIdentity: MediaIdentity = { provider: "YOUTUBE", mediaKey: "youtube:dQw4w9WgXcQ" };
 
 function record(
   overrides: {
@@ -177,7 +182,12 @@ class FakePointerPagePort implements PointerPagePort {
   public readonly verified: number[] = [];
   public readonly contexts: Array<{ tabId: number; context: PointerPageContext }> = [];
   public readonly rendered: Array<{ tabId: number; pointer: PointerRecord }> = [];
-  public readonly renderedLeases: Array<{ tabId: number; lease: PointerLeaseRecord }> = [];
+  public readonly renderedLeases: Array<{
+    tabId: number;
+    lease: PointerLeaseRecord;
+    projection?: PointerProjection;
+  }> = [];
+  public leaseImplementation: (() => Promise<void>) | undefined;
   public readonly renderedFrames: Array<{ tabId: number; frame: PointerFrameEvent }> = [];
   public frameImplementation:
     ((tabId: number, frame: PointerFrameEvent) => Promise<void>) | undefined;
@@ -208,8 +218,18 @@ class FakePointerPagePort implements PointerPagePort {
     this.rendered.push({ tabId, pointer: structuredClone(pointer) });
   }
 
-  public async renderLease(tabId: number, lease: PointerLeaseRecord): Promise<void> {
-    this.renderedLeases.push({ tabId, lease: structuredClone(lease) });
+  public async renderLease(
+    tabId: number,
+    lease: PointerLeaseRecord,
+    _frameId?: number,
+    projection?: PointerProjection,
+  ): Promise<void> {
+    this.renderedLeases.push({
+      tabId,
+      lease: structuredClone(lease),
+      ...(projection === undefined ? {} : { projection: structuredClone(projection) }),
+    });
+    await this.leaseImplementation?.();
   }
 
   public async renderFrame(tabId: number, frame: PointerFrameEvent): Promise<void> {
@@ -302,6 +322,255 @@ beforeEach(() => {
 });
 
 describe("PointerController binding and local publishing", () => {
+  it("updates only the newest media anchor on the 100 ms cadence and clears outside the player", async () => {
+    configureMediaPointers();
+    await pointers.handleActiveTabChanged(7);
+    await pointers.setSynchronized(true);
+    for (let index = 1; index <= 20; index += 1) {
+      await pointers.handleLocalSample(7, mediaSample(index / 20));
+    }
+    scheduler.tick(40);
+    expect(transport.frames.at(-1)).toMatchObject({ xQuantized: 1_638, yQuantized: 2_457 });
+    scheduler.tick(100);
+    await pointers.whenIdle();
+    expect(transport.leases).toHaveLength(2);
+    expect(transport.leases.at(-1)).toMatchObject({ leaseId: firstLeaseId, anchor: { x: 1 } });
+    scheduler.tick(100);
+    await pointers.whenIdle();
+    expect(transport.leases).toHaveLength(2);
+    await pointers.handleLocalSample(7, { ...sample, mediaAnchor: null });
+    scheduler.tick(100);
+    await pointers.whenIdle();
+    expect(transport.leases.at(-1)?.anchor).toBeNull();
+    await pointers.handleLocalSample(7, mediaSample(0.5));
+    await pointers.handleLocalSample(7, { ...sample, documentVisible: false });
+    await pointers.whenIdle();
+    expect(transport.leases.at(-1)?.anchor).toBeNull();
+    expect([...scheduler.intervals.values()].some(({ delayMs }) => delayMs === 100)).toBe(false);
+  });
+
+  it("bounds blocked media publications to one in flight and one newest sample", async () => {
+    configureMediaPointers();
+    await pointers.handleActiveTabChanged(7);
+    await pointers.setSynchronized(true);
+    let release: (() => void) | undefined;
+    let started: (() => void) | undefined;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const entered = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    transport.leaseImplementation = async (update) => {
+      started?.();
+      await blocked;
+      return PointerLeaseAckSchema.parse({
+        type: "pointer.lease.ack",
+        protocolVersion: 1,
+        roomId,
+        leaseId: update.leaseId,
+        accepted: true,
+        expiresAt: now + 3_000,
+      });
+    };
+    await pointers.handleLocalSample(7, mediaSample(0.1));
+    scheduler.tick(100);
+    await entered;
+    for (let index = 1; index <= 200; index += 1) {
+      await pointers.handleLocalSample(7, mediaSample(index / 200));
+      scheduler.tick(100);
+    }
+    expect(transport.leases).toHaveLength(2);
+    release?.();
+    await pointers.whenIdle();
+    scheduler.tick(100);
+    await pointers.whenIdle();
+    expect(transport.leases).toHaveLength(3);
+    expect(transport.leases.at(-1)?.anchor?.x).toBe(1);
+    expect(new Set(transport.leases.map((lease) => lease.leaseId))).toEqual(
+      new Set([firstLeaseId]),
+    );
+  });
+
+  it("clears the newest hidden media anchor immediately after an in-flight lease completes", async () => {
+    configureMediaPointers();
+    await pointers.handleActiveTabChanged(7);
+    await pointers.setSynchronized(true);
+    let release: (() => void) | undefined;
+    let started: (() => void) | undefined;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const entered = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    transport.leaseImplementation = async (update) => {
+      started?.();
+      await blocked;
+      return PointerLeaseAckSchema.parse({
+        type: "pointer.lease.ack",
+        protocolVersion: 1,
+        roomId,
+        leaseId: update.leaseId,
+        accepted: true,
+        expiresAt: now + 3_000,
+      });
+    };
+    await pointers.handleLocalSample(7, mediaSample(0.7));
+    scheduler.tick(100);
+    await entered;
+    for (let index = 0; index < 3; index += 1) {
+      now += 2_000;
+      scheduler.tick(2_000);
+    }
+    await pointers.handleLocalSample(7, { ...sample, documentVisible: false });
+    expect([...scheduler.intervals.values()].some(({ delayMs }) => delayMs === 100)).toBe(false);
+    expect(transport.leases).toHaveLength(2);
+    release?.();
+    await pointers.whenIdle();
+    expect(transport.leases).toHaveLength(3);
+    expect(transport.leases.at(-1)?.anchor).toBeNull();
+  });
+
+  it("coalesces blocked ordinary renewals and resumes the exact-page heartbeat on its next tick", async () => {
+    await pointers.handleActiveTabChanged(7);
+    await pointers.setSynchronized(true);
+    let release: (() => void) | undefined;
+    let started: (() => void) | undefined;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const entered = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    transport.leaseImplementation = async (update) => {
+      started?.();
+      await blocked;
+      return PointerLeaseAckSchema.parse({
+        type: "pointer.lease.ack",
+        protocolVersion: 1,
+        roomId,
+        leaseId: update.leaseId,
+        accepted: true,
+        expiresAt: now + 3_000,
+      });
+    };
+    scheduler.tick(2_000);
+    await entered;
+    for (let index = 0; index < 3; index += 1) {
+      now += 2_000;
+      scheduler.tick(2_000);
+    }
+    expect(transport.leases).toHaveLength(2);
+    release?.();
+    await pointers.whenIdle();
+    expect(transport.leases).toHaveLength(2);
+    scheduler.tick(2_000);
+    await pointers.whenIdle();
+    expect(transport.leases).toHaveLength(3);
+    expect(transport.leases.at(-1)?.leaseId).toBe(firstLeaseId);
+  });
+
+  it("drops a queued media sample when the active document changes", async () => {
+    configureMediaPointers();
+    await pointers.handleActiveTabChanged(7);
+    await pointers.setSynchronized(true);
+    await pointers.handleLocalSample(7, mediaSample(0.9));
+    scheduler.tick(100);
+    currentRecord = record({ tabId: 8, tabUpdatedAtSeq: 5 });
+    await pointers.handleActiveTabChanged(8);
+    expect(transport.leases).toHaveLength(2);
+    expect(transport.leases[1]).toMatchObject({
+      leaseId: secondLeaseId,
+      documentRevision: { roomEpoch: 2, tabUpdatedAtSeq: 5 },
+      anchor: null,
+    });
+  });
+
+  it("coalesces remote media leases and never routes viewport frames in media-only mode", async () => {
+    configureMediaPointers();
+    await pointers.handleActiveTabChanged(7);
+    await pointers.setSynchronized(true);
+    let release: (() => void) | undefined;
+    let started: (() => void) | undefined;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const entered = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    page.leaseImplementation = async () => {
+      page.leaseImplementation = undefined;
+      started?.();
+      await blocked;
+    };
+    transport.emit({
+      type: "pointer.lease.event",
+      protocolVersion: 1,
+      roomId,
+      lease: { ...remoteLease(), anchor: mediaSample(0.1).mediaAnchor!.anchor },
+    });
+    await entered;
+    for (let index = 1; index <= 200; index += 1) {
+      transport.emit({
+        type: "pointer.lease.event",
+        protocolVersion: 1,
+        roomId,
+        lease: { ...remoteLease(), anchor: mediaSample(index / 200).mediaAnchor!.anchor },
+      });
+    }
+    release?.();
+    await pointers.whenIdle();
+    expect(page.renderedLeases).toHaveLength(2);
+    expect(page.renderedLeases.at(-1)).toMatchObject({
+      projection: { type: "MEDIA_ANCHOR_ONLY", media: mediaIdentity },
+      lease: { anchor: { x: 1 } },
+    });
+    transport.emit(remoteFrame(1));
+    await pointers.whenIdle();
+    expect(page.renderedFrames).toEqual([]);
+    transport.emit({
+      type: "pointer.lease.clear",
+      protocolVersion: 1,
+      roomId,
+      userId: remoteUserId,
+      deviceId: remoteDeviceId,
+      leaseId: remoteLeaseId,
+    });
+    await pointers.whenIdle();
+    expect(page.cleared.at(-1)?.identity).toEqual({
+      userId: remoteUserId,
+      deviceId: remoteDeviceId,
+    });
+  });
+
+  it("restores the exact frame path when the same lease leaves media-only projection", async () => {
+    const state = configureMediaPointers();
+    await pointers.handleActiveTabChanged(7);
+    await pointers.setSynchronized(true);
+    transport.emit({
+      type: "pointer.lease.event",
+      protocolVersion: 1,
+      roomId,
+      lease: remoteLease(),
+    });
+    await pointers.whenIdle();
+    transport.emit(remoteFrame(1));
+    await pointers.whenIdle();
+    expect(page.renderedFrames).toHaveLength(0);
+    state.projection = { type: "PAGE" };
+    await pointers.handleContentCompatibilityChanged(logicalTabId);
+    transport.emit(remoteFrame(2));
+    await pointers.whenIdle();
+    expect(page.renderedFrames.at(-1)?.frame.seq).toBe(2);
+    state.projection = null;
+    await pointers.handleContentCompatibilityChanged(logicalTabId);
+    expect(page.cleared.at(-1)?.identity).toEqual({
+      userId: remoteUserId,
+      deviceId: remoteDeviceId,
+    });
+  });
+
   it("does not route a pending local navigation as the old confirmed document", async () => {
     expect(await pointers.getContextForTab(7)).not.toBeNull();
     currentRecord = ReplicaRecordSchema.parse({
@@ -566,6 +835,181 @@ describe("PointerController binding and local publishing", () => {
 });
 
 describe("PointerController remote routing and isolation", () => {
+  it("keeps exact-page 40 ms frames beside a media-only observer in a three-peer room", async () => {
+    const makeReceiver = (receiverDeviceId: string, projection: PointerProjection) => {
+      const receiverTransport = new FakePointerTransport();
+      const receiverPage = new FakePointerPagePort();
+      const eligibility: { projection: PointerProjection | null } = { projection };
+      const controller = new PointerController({
+        roomId,
+        browserSessionId,
+        deviceId: receiverDeviceId,
+        replica: { getRecord: async () => currentRecord },
+        transport: receiverTransport,
+        page: receiverPage,
+        scheduler: new FakePointerControllerScheduler(),
+        now: () => now,
+        compatibility: {
+          canRenderRemotePointer: () => eligibility.projection !== null,
+          getRemotePointerProjection: () => eligibility.projection,
+          hasCompatibleRemotePointerObserver: () => false,
+        },
+      });
+      return { controller, transport: receiverTransport, page: receiverPage, eligibility };
+    };
+    const exact = makeReceiver(remoteDeviceId, { type: "PAGE" });
+    const mismatch = makeReceiver("018f8f8e-4b5c-7d6e-8f90-123456789c13", {
+      type: "MEDIA_ANCHOR_ONLY",
+      media: mediaIdentity,
+    });
+    const receivers = [exact, mismatch];
+    pointers = new PointerController({
+      roomId,
+      browserSessionId,
+      deviceId,
+      replica: { getRecord: async () => currentRecord },
+      transport,
+      page,
+      scheduler,
+      now: () => now,
+      createLeaseId: () => leaseIds.shift() ?? secondLeaseId,
+      compatibility: {
+        canRenderRemotePointer: () => true,
+        hasCompatibleRemotePointerObserver: () =>
+          receivers.some(({ eligibility }) => eligibility.projection !== null),
+        hasMediaAnchoredRemotePointerObserver: () =>
+          receivers.some(({ eligibility }) => eligibility.projection?.type === "MEDIA_ANCHOR_ONLY"),
+        getLocalMediaIdentity: () => mediaIdentity,
+      },
+    });
+    for (const controller of [pointers, ...receivers.map((receiver) => receiver.controller)]) {
+      await controller.handleActiveTabChanged(7);
+      await controller.setSynchronized(true);
+    }
+    let routedLeases = 0;
+    let routedFrames = 0;
+    const broadcast = async (event: unknown) => {
+      for (const receiver of receivers) receiver.transport.emit(event);
+      await Promise.all(receivers.map(({ controller }) => controller.whenIdle()));
+    };
+    const routePublished = async () => {
+      for (const update of transport.leases.slice(routedLeases)) {
+        await broadcast(
+          PointerLeaseEventSchema.parse({
+            type: "pointer.lease.event",
+            protocolVersion: 1,
+            roomId,
+            lease: {
+              ...remoteLease(),
+              deviceId,
+              leaseId: update.leaseId,
+              logicalTabId: update.logicalTabId,
+              documentRevision: update.documentRevision,
+              anchor: update.anchor,
+            },
+          }),
+        );
+      }
+      routedLeases = transport.leases.length;
+      for (const frame of transport.frames.slice(routedFrames)) {
+        await broadcast({
+          ...remoteFrame(frame.seq),
+          deviceId,
+          leaseId: frame.leaseId,
+          xQuantized: frame.xQuantized,
+          yQuantized: frame.yQuantized,
+          viewport: frame.viewport,
+          receivedAtServerMs: now,
+        });
+      }
+      routedFrames = transport.frames.length;
+    };
+    await pointers.whenIdle();
+    await routePublished();
+    const marker = buildMediaPointerAnchor(mediaIdentity, 0.25, 0.5)!;
+    await pointers.handleLocalSample(7, {
+      ...sample,
+      mediaAnchor: { identity: mediaIdentity, anchor: marker },
+    });
+    scheduler.tick(100);
+    await pointers.whenIdle();
+    await routePublished();
+    expect(transport.leases.at(-1)?.anchor).toEqual(marker);
+    expect(transport.leases.at(-1)?.anchor).not.toEqual(sample.anchor);
+    expect(exact.page.renderedLeases.at(-1)?.projection).toBeUndefined();
+    expect(mismatch.page.renderedLeases.at(-1)).toMatchObject({
+      lease: { anchor: marker },
+      projection: { type: "MEDIA_ANCHOR_ONLY", media: mediaIdentity },
+    });
+
+    now += 40;
+    scheduler.tick(40);
+    await routePublished();
+    expect(exact.page.renderedFrames.at(-1)?.frame).toMatchObject({
+      seq: 1,
+      xQuantized: 1_638,
+      yQuantized: 2_457,
+    });
+    expect(mismatch.page.renderedFrames).toEqual([]);
+
+    await pointers.handleLocalSample(7, {
+      ...sample,
+      mediaAnchor: null,
+      viewport: { x: 0.9, y: 0.1 },
+    });
+    now += 40;
+    scheduler.tick(40);
+    await routePublished();
+    expect(exact.page.renderedFrames.map(({ frame }) => frame.seq)).toEqual([1, 2]);
+    expect(exact.page.renderedFrames.at(-1)?.frame).toMatchObject({
+      xQuantized: 3_686,
+      yQuantized: 410,
+    });
+    scheduler.tick(100);
+    await pointers.whenIdle();
+    await routePublished();
+    expect(mismatch.page.renderedLeases.at(-1)).toMatchObject({
+      lease: { anchor: null },
+      projection: { type: "MEDIA_ANCHOR_ONLY", media: mediaIdentity },
+    });
+    expect(mismatch.page.renderedFrames).toEqual([]);
+
+    const acceptedLeaseCounts = receivers.map((receiver) => receiver.page.renderedLeases.length);
+    const rejectedLease = { ...remoteLease(), deviceId, leaseId: firstLeaseId, anchor: marker };
+    await broadcast({
+      type: "pointer.lease.event",
+      protocolVersion: 1,
+      roomId,
+      lease: { ...rejectedLease, documentRevision: { roomEpoch: 2, tabUpdatedAtSeq: 3 } },
+    });
+    await broadcast({
+      type: "pointer.lease.event",
+      protocolVersion: 1,
+      roomId: otherRoomId,
+      lease: rejectedLease,
+    });
+    expect(receivers.map((receiver) => receiver.page.renderedLeases.length)).toEqual(
+      acceptedLeaseCounts,
+    );
+    mismatch.eligibility.projection = null;
+    await mismatch.controller.handleContentCompatibilityChanged(logicalTabId);
+    await broadcast({
+      type: "pointer.lease.event",
+      protocolVersion: 1,
+      roomId,
+      lease: rejectedLease,
+    });
+    expect(mismatch.page.renderedLeases).toHaveLength(acceptedLeaseCounts[1]!);
+    expect(mismatch.page.cleared.at(-1)?.identity).toEqual({
+      userId: remoteUserId,
+      deviceId,
+    });
+    expect(mismatch.page.renderedFrames).toEqual([]);
+    for (const controller of [pointers, ...receivers.map((receiver) => receiver.controller)]) {
+      await controller.setSynchronized(false);
+    }
+  });
+
   it("hides positional pointers until content is exact and reconciles cached state", async () => {
     await pointers.handleActiveTabChanged(7);
     await pointers.setSynchronized(true);
@@ -909,6 +1353,41 @@ describe("PointerController remote routing and isolation", () => {
     expect(pointers.getStatus()).toMatchObject({ state: "ONLINE", errorCode: null });
   });
 });
+
+function configureMediaPointers(): { projection: PointerProjection | null } {
+  const state: { projection: PointerProjection | null } = {
+    projection: { type: "MEDIA_ANCHOR_ONLY", media: mediaIdentity },
+  };
+  pointers = new PointerController({
+    roomId,
+    browserSessionId,
+    deviceId,
+    replica: { getRecord: async () => currentRecord },
+    transport,
+    page,
+    scheduler,
+    now: () => now,
+    createLeaseId: () => leaseIds.shift() ?? secondLeaseId,
+    compatibility: {
+      canRenderRemotePointer: () => state.projection !== null,
+      getRemotePointerProjection: () => state.projection,
+      hasCompatibleRemotePointerObserver: () => state.projection !== null,
+      hasMediaAnchoredRemotePointerObserver: () => state.projection?.type === "MEDIA_ANCHOR_ONLY",
+      getLocalMediaIdentity: () => mediaIdentity,
+    },
+  });
+  return state;
+}
+
+function mediaSample(x: number): PointerLocalSample {
+  return {
+    ...sample,
+    mediaAnchor: {
+      identity: mediaIdentity,
+      anchor: { path: [...sample.anchor!.path, { tagName: "video", nthOfType: 1 }], x, y: 0.5 },
+    },
+  };
+}
 
 function remoteEvent() {
   return PointerEventMessageSchema.parse({

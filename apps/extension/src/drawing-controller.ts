@@ -26,6 +26,7 @@ import {
   type AnnotationStrokeV2,
   type AnnotationStrokeDraftV2,
   type ContentSignature,
+  type MediaIdentity,
   type PointerPathSegment,
   type RoomId,
   type StrokePreviewClearMessage,
@@ -113,6 +114,7 @@ export interface DrawingControllerPagePort {
 
 export interface DrawingContentSignaturePort {
   getLocalContentSignature(context: CollaborationPageContext): ContentSignature | null;
+  getLocalMediaIdentity?(context: CollaborationPageContext): MediaIdentity | null;
 }
 
 export interface DrawingControllerOptions {
@@ -1606,16 +1608,24 @@ export class DrawingController {
     generation: number,
   ): Promise<AnnotationStrokeV2[] | null> {
     const localSignature = this.#contentSignatures.getLocalContentSignature(route.context);
-    if (localSignature === null) {
-      return [];
-    }
+    const localMedia = this.#contentSignatures.getLocalMediaIdentity?.(route.context) ?? null;
     const compatible: AnnotationStrokeV2[] = [];
     for (const stroke of strokes) {
       if (!this.#frameRouteStillCurrent(route, generation)) {
         return null;
       }
+      if (stroke.anchor.type === "media") {
+        if (
+          stroke.frameKey === route.context.frameKey &&
+          localMedia?.provider === stroke.anchor.provider &&
+          localMedia.mediaKey === stroke.anchor.mediaKey
+        ) {
+          compatible.push(stroke);
+        }
+        continue;
+      }
       const remoteSignature = stroke.contentSignature;
-      if (remoteSignature === null) {
+      if (localSignature === null || remoteSignature === null) {
         continue;
       }
       if (sameContentSignature(localSignature, remoteSignature)) {

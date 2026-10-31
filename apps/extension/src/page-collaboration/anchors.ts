@@ -66,7 +66,10 @@ export function captureAnnotationAnchor(
   if (target.getRootNode() !== environment.document || !target.isConnected) {
     return null;
   }
-  const mediaIdentity = environment.identifyMedia?.(target) ?? defaultHtmlMediaIdentity(target);
+  const mediaIdentity =
+    environment.identifyMedia === undefined
+      ? defaultHtmlMediaIdentity(target)
+      : environment.identifyMedia(target);
   if (mediaIdentity !== null) {
     const parsed = AnnotationAnchorSchema.safeParse({
       type: "media",
@@ -128,8 +131,9 @@ export function resolveAnnotationAnchor(
   let target: Element | null;
   if (anchor.data.type === "media") {
     target =
-      environment.resolveMedia?.(anchor.data.provider, anchor.data.mediaKey) ??
-      resolveDefaultHtmlMedia(environment.document, anchor.data.provider, anchor.data.mediaKey);
+      environment.resolveMedia === undefined
+        ? resolveDefaultHtmlMedia(environment.document, anchor.data.provider, anchor.data.mediaKey)
+        : environment.resolveMedia(anchor.data.provider, anchor.data.mediaKey);
     if (target === null) {
       return { state: "UNLOCATABLE", reason: "MEDIA_NOT_FOUND" };
     }

@@ -537,6 +537,38 @@ describe("DanmakuController exact routing", () => {
 });
 
 describe("DanmakuController failure lifecycle", () => {
+  it("resumes live receiving after renewed page permission without reconnecting the room", async () => {
+    await controller.handleActiveTabChanged(11);
+    await controller.setSynchronized(true);
+    const oldHandler = transport.handler;
+    const event = DanmakuEventMessageSchema.parse({
+      type: "danmaku.event",
+      protocolVersion: 1,
+      messageId,
+      ...context,
+      sender: { userId, username: "member", displayName: "Member", deviceId },
+      text: "一起看",
+      sentAtServerMs: now,
+      expiresAtServerMs: now + 9_000,
+    });
+
+    await controller.handlePermissionBoundaryChanged();
+    transport.emit(event);
+    await controller.whenIdle();
+    expect(page.rendered).toEqual([]);
+
+    await controller.handlePageReady(11, 0, "top", 2);
+    await controller.handleSubmit(11, 0, submission());
+    expect(page.statuses.at(-1)).toMatchObject({ status: "SENT", messageId });
+    expect(controller.getStatus().ready).toBe(true);
+
+    // A callback retained from before the permission boundary must stay stale.
+    oldHandler?.({ ...event, text: "stale handler" });
+    transport.emit(event);
+    await controller.whenIdle();
+    expect(page.rendered).toEqual([{ tabId: 11, context, event }]);
+  });
+
   it("stays permission-blocked across an offline reconnect until fresh top ready", async () => {
     await controller.handleActiveTabChanged(11);
     await controller.setSynchronized(true);

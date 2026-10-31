@@ -257,6 +257,7 @@ export const ExtensionStatusUiSchema = z
     pendingConfirmationCount: NonNegativeIntegerSchema,
     bindingCount: NonNegativeIntegerSchema,
     bindingValidationKey: z.string().max(8_192).optional(),
+    mediaCollaborationAvailable: z.boolean().optional(),
     browser: RoomBrowserStatusSchema.nullable(),
     presence: PresenceStatusSchema.nullable(),
     pointer: PointerStatusSchema.nullable(),

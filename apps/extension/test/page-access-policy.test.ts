@@ -15,6 +15,47 @@ describe("projectDocumentFeatureAccess", () => {
     });
   });
 
+  it("enables media-scoped collaboration for a confirmed matching-media layout mismatch", () => {
+    expect(
+      projectDocumentFeatureAccess({
+        grantEffective: true,
+        documentRevision: { roomEpoch: 3, tabUpdatedAtSeq: 18 },
+        contentCompatibility: "MISMATCH",
+        mediaCollaborationAvailable: true,
+      }),
+    ).toEqual({
+      enabledFeatures: ["POINTER", "DANMAKU", "DRAWING", "MEDIA_CONTROL"],
+      contentReason: "CONTENT_MISMATCH",
+    });
+  });
+
+  it("does not let matching-media evidence replace consent, a confirmed document, or known compatibility", () => {
+    expect(
+      projectDocumentFeatureAccess({
+        grantEffective: false,
+        documentRevision: { roomEpoch: 3, tabUpdatedAtSeq: 18 },
+        contentCompatibility: "MISMATCH",
+        mediaCollaborationAvailable: true,
+      }),
+    ).toEqual({ enabledFeatures: [], contentReason: null });
+    expect(
+      projectDocumentFeatureAccess({
+        grantEffective: true,
+        documentRevision: null,
+        contentCompatibility: "MISMATCH",
+        mediaCollaborationAvailable: true,
+      }),
+    ).toEqual({ enabledFeatures: [], contentReason: null });
+    expect(
+      projectDocumentFeatureAccess({
+        grantEffective: true,
+        documentRevision: { roomEpoch: 3, tabUpdatedAtSeq: 18 },
+        contentCompatibility: "UNKNOWN",
+        mediaCollaborationAvailable: true,
+      }),
+    ).toEqual({ enabledFeatures: ["DANMAKU"], contentReason: "CONTENT_UNKNOWN" });
+  });
+
   it.each([
     ["MISMATCH", "CONTENT_MISMATCH"],
     ["UNKNOWN", "CONTENT_UNKNOWN"],

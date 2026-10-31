@@ -9,6 +9,7 @@ import {
 import { describe, expect, it } from "vitest";
 import { MediaFollowerSession } from "../src/media-follower-session.js";
 import type { MediaRoute } from "../src/media-controller-model.js";
+import type { MediaPageApplyAction } from "../src/page-collaboration/messages.js";
 
 const nowMs = 1_700_000_000_000;
 const roomId = RoomIdSchema.parse("018f8f8e-4b5c-7d6e-8f90-123456789a01");
@@ -82,6 +83,8 @@ function group(proposals: unknown[] = []) {
 
 function createSession(options: {
   propose(action: PlaybackAction): Promise<void>;
+  apply?(action: MediaPageApplyAction): Promise<void>;
+  getGroup?(): ReturnType<typeof group>;
   errors?: string[];
 }) {
   let uuidCounter = 1;
@@ -89,7 +92,7 @@ function createSession(options: {
     userId: followerUserId,
     deviceId: followerDeviceId,
     page: {
-      apply: async () => undefined,
+      apply: async (_tabId, _frameId, _context, _target, action) => options.apply?.(action),
       setFollowerLock: async () => undefined,
     },
     scheduler: {
@@ -99,13 +102,167 @@ function createSession(options: {
     now: () => nowMs,
     createUuid: () => `00000000-0000-4000-8000-${String(uuidCounter++).padStart(12, "0")}`,
     isRouteCurrent: async () => true,
-    getGroup: () => group(),
+    getGroup: () => options.getGroup?.() ?? group(),
     propose: async (_group, action) => options.propose(action),
     onError: (errorCode) => options.errors?.push(errorCode),
   });
 }
 
 describe("MediaFollowerSession proposal lifecycle", () => {
+  it.each(["READY", "BUFFERING"] as const)(
+    "keeps a playing temporary rate across %s without proposing or forcing a seek",
+    async (trigger) => {
+      const authority = PlaybackGroupSnapshotSchema.parse({
+        ...group(),
+        observed: { ...authoritativeObserved, playbackRate: 1.25 },
+      });
+      let rate = 1.25;
+      const applied: MediaPageApplyAction[] = [];
+      const proposals: PlaybackAction[] = [];
+      const session = createSession({
+        getGroup: () => authority,
+        apply: async (action) => {
+          applied.push(structuredClone(action));
+          if (action.type === "SET_RATE" || action.type === "SET_RATE_TEMPORARY")
+            rate = action.playbackRate;
+        },
+        propose: async (action) => {
+          proposals.push(structuredClone(action));
+        },
+      });
+      await session.reconcile(
+        authority,
+        route,
+        target,
+        { ...authority.observed!, positionMs: 41_200 },
+        false,
+        () => true,
+      );
+      expect(rate).toBe(1.3125);
+      applied.length = 0;
+      const ready = {
+        ...authority.observed!,
+        playbackRate: rate,
+        buffering: trigger === "BUFFERING",
+      };
+      for (let repeat = 0; repeat < 6; repeat += 1) {
+        expect(
+          await session.handleGesture(authority, route, target, ready, () => true, trigger),
+        ).toBeNull();
+        await session.reconcile(authority, route, target, ready, false, () => true);
+      }
+      expect(proposals).toEqual([]);
+      expect(applied).toEqual([]);
+      expect(rate).toBe(1.3125);
+      // A real, untagged rate-control event still expresses the user's intent.
+      await session.handleGesture(
+        authority,
+        route,
+        target,
+        { ...ready, playbackRate: 1.5 },
+        () => true,
+        "RATE_CHANGED",
+      );
+      expect(proposals).toEqual([{ type: "SET_RATE", playbackRate: 1.5 }]);
+      expect(applied.some((action) => action.type === "SEEK")).toBe(true);
+      await session.dispose();
+    },
+  );
+
+  it.each([
+    { status: "PAUSED", paused: true, ended: false },
+    { status: "ENDED_WAITING", paused: true, ended: true },
+  ])(
+    "restores a temporary correction on an aligned $status heartbeat without inventing a rate proposal",
+    async (stationary) => {
+      let current = group();
+      let rate = 1;
+      let paused = false;
+      let uuidCounter = 1;
+      const applied: MediaPageApplyAction[] = [];
+      const proposals: PlaybackAction[] = [];
+      const timers = new Map<symbol, () => void>();
+      const session = new MediaFollowerSession({
+        userId: followerUserId,
+        deviceId: followerDeviceId,
+        page: {
+          apply: async (_tabId, _frameId, _context, _target, action) => {
+            applied.push(structuredClone(action));
+            if (action.type === "SET_RATE" || action.type === "SET_RATE_TEMPORARY") {
+              rate = action.playbackRate;
+            }
+            if (action.type === "PAUSE") paused = true;
+          },
+          setFollowerLock: async () => undefined,
+        },
+        scheduler: {
+          setTimeout: (callback) => {
+            const handle = Symbol("rate restore");
+            timers.set(handle, callback);
+            return handle;
+          },
+          clearTimeout: (handle) => {
+            timers.delete(handle as symbol);
+          },
+        },
+        now: () => nowMs,
+        createUuid: () => `00000000-0000-4000-8000-${String(uuidCounter++).padStart(12, "0")}`,
+        isRouteCurrent: async () => true,
+        getGroup: () => current,
+        propose: async (_group, action) => {
+          proposals.push(structuredClone(action));
+        },
+        onError: (code) => {
+          throw new Error(code);
+        },
+      });
+      await session.reconcile(
+        current,
+        route,
+        target,
+        { ...authoritativeObserved, positionMs: 41_200 },
+        false,
+        () => true,
+      );
+      expect(rate).toBe(1.05);
+      expect(timers.size).toBe(1);
+      const staleRestore = [...timers.values()][0]!;
+      applied.length = 0;
+      current = PlaybackGroupSnapshotSchema.parse({
+        ...current,
+        status: stationary.status,
+        observed: { ...authoritativeObserved, paused: stationary.paused, ended: stationary.ended },
+      });
+      await session.reconcile(
+        current,
+        route,
+        target,
+        { ...current.observed!, paused, playbackRate: rate },
+        false,
+        () => true,
+      );
+      expect(applied.some((action) => action.type === "SEEK")).toBe(false);
+      expect(rate).toBe(1);
+      expect(paused).toBe(true);
+      expect(timers.size).toBe(0);
+      const appliedCount = applied.length;
+      staleRestore();
+      await session.whenIdle();
+      expect(applied).toHaveLength(appliedCount);
+      const action = await session.handleGesture(
+        current,
+        route,
+        target,
+        { ...current.observed!, paused, playbackRate: rate },
+        () => true,
+        "READY",
+      );
+      expect(action).toBeNull();
+      expect(proposals).toEqual([]);
+      await session.dispose();
+    },
+  );
+
   it("releases a reserved token that was never dispatched", () => {
     const session = createSession({
       propose: async () => undefined,

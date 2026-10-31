@@ -370,7 +370,32 @@ export class MediaController {
     if (this.#synchronized) {
       const generation = this.#generation;
       this.#enqueue(async () => {
-        if (this.#generationGuard(generation)()) await this.#refreshNavigation();
+        const guard = this.#generationGuard(generation);
+        if (!guard()) return;
+        await this.#refreshNavigation();
+        if (!guard() || this.#errorCode !== "MEDIA_MISMATCH") return;
+        const membership = this.#currentMembership();
+        const group = membership === null ? undefined : this.#groupById(membership.playbackGroupId);
+        if (
+          membership?.role !== "FOLLOWER" ||
+          !membership.activeDevice ||
+          group?.target === null ||
+          group?.target === undefined ||
+          group.observed === null ||
+          this.#compatibility === undefined ||
+          !this.#compatibility.canSynchronizeKnownMedia({
+            target: group.target,
+            remoteUserId: group.leaderUserId,
+            remoteDeviceId: group.leaderDeviceId,
+          })
+        )
+          return;
+        const route = await this.#routeForTarget(group.target);
+        if (!guard() || route === null || route.tabId !== this.#activeTabId) return;
+        this.#controlStateValid = true;
+        this.#errorCode = null;
+        this.#follower.setPendingForcedAlignment(group.playbackGroupId);
+        await this.#activateExistingTarget(group.target, generation);
       });
     }
     await this.whenIdle();
@@ -462,6 +487,10 @@ export class MediaController {
         route === null ||
         !sameMediaContext(route.context, message.context)
       ) {
+        return;
+      }
+      if (!this.#controlStateValid && this.#errorCode === "MEDIA_MISMATCH") {
+        // Only fresh peer evidence may reopen control after compatibility loss.
         return;
       }
       const leaderAuthorityToken =

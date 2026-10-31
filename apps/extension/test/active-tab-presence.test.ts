@@ -124,6 +124,7 @@ let scheduler: FakeScheduler;
 let transport: FakePresenceTransport;
 let presence: ActiveTabPresenceController;
 let roomSyncRequests: number;
+let roomSyncResponder: (() => Promise<void>) | undefined;
 let remotePresenceChanges: string[][];
 let statusChanges: number;
 
@@ -133,6 +134,7 @@ beforeEach(() => {
   scheduler = new FakeScheduler();
   transport = new FakePresenceTransport();
   roomSyncRequests = 0;
+  roomSyncResponder = undefined;
   remotePresenceChanges = [];
   statusChanges = 0;
   presence = new ActiveTabPresenceController({
@@ -146,6 +148,7 @@ beforeEach(() => {
     now: () => now,
     requestRoomSync: async () => {
       roomSyncRequests += 1;
+      await roomSyncResponder?.();
     },
     onRemotePresenceChanged: async (logicalTabIds) => {
       remotePresenceChanges.push([...logicalTabIds]);
@@ -157,6 +160,172 @@ beforeEach(() => {
 });
 
 describe("ActiveTabPresenceController", () => {
+  it("renews an existing self lease from its ACK without extending peer evidence", async () => {
+    await presence.handleActiveTabChanged(7);
+    await presence.setSynchronized(true);
+    const initial = snapshotV2(1, now + 30_000);
+    transport.handler?.({
+      ...initial,
+      presences: [...initial.presences, { ...initial.presences[0]!, userId: localUserId }],
+    });
+    await presence.whenIdle();
+    for (let tick = 0; tick < 4; tick += 1) {
+      now += 10_000;
+      scheduler.tick();
+      await presence.whenIdle();
+    }
+    expect(presence.getStatus().presences).toEqual([
+      expect.objectContaining({ userId: localUserId, expiresAt: now + 30_000 }),
+    ]);
+    expect(presence.getStatus().lastAckExpiresAt).toBe(now + 30_000);
+  });
+
+  it("refreshes near-expiry peer snapshots across byte-identical server renewals", async () => {
+    const media: MediaIdentity = { provider: "YOUTUBE", mediaKey: "youtube:dQw4w9WgXcQ" };
+    const content = {
+      contentSignature: { signatureVersion: 1 as const, digest: "B".repeat(43) },
+      media,
+    };
+    await presence.handleActiveTabChanged(7);
+    await presence.setSynchronized(true);
+    await presence.handlePageCompatibilityReport(
+      7,
+      compatibilityReport("A".repeat(43), undefined, media),
+    );
+    transport.handler?.(snapshotV2(1, now + 30_000, content));
+    roomSyncResponder = async () => {
+      // Unchanged server renewals emit no delta and do not advance presenceSeq.
+      transport.handler?.(snapshotV2(1, now + 30_000, content));
+    };
+    await presence.whenIdle();
+    const statusBaseline = statusChanges;
+    for (let tick = 0; tick < 9; tick += 1) {
+      now += 10_000;
+      scheduler.tick();
+      await presence.whenIdle();
+      expect(presence.getStatus().presences).toHaveLength(1);
+      expect(
+        presence.getRemotePointerProjection({
+          logicalTabId,
+          documentRevision: { roomEpoch: 0, tabUpdatedAtSeq: 1 },
+          remoteUserId,
+          remoteDeviceId: deviceId,
+        }),
+      ).toEqual({ type: "MEDIA_ANCHOR_ONLY", media });
+    }
+    expect(roomSyncRequests).toBe(4);
+    expect(statusChanges).toBe(statusBaseline);
+    transport.handler?.(deltaV2(1, { kind: "REMOVE", userId: remoteUserId, deviceId }));
+    await presence.whenIdle();
+    now += 20_000;
+    scheduler.tick();
+    await presence.whenIdle();
+    expect(roomSyncRequests).toBe(4);
+    expect(presence.getStatus().presences).toEqual([]);
+  });
+
+  it("retries refresh only on heartbeats and recovers after expired evidence was pruned", async () => {
+    await presence.setSynchronized(true);
+    transport.handler?.(snapshotV2(1, now + 30_000));
+    roomSyncResponder = async () => {
+      throw new Error("NETWORK_UNAVAILABLE");
+    };
+    now += 20_000;
+    scheduler.tick();
+    await presence.whenIdle();
+    expect(roomSyncRequests).toBe(1);
+    for (let repeat = 0; repeat < 10; repeat += 1) await presence.handleBindingsChanged();
+    expect(roomSyncRequests).toBe(1);
+    now += 11_000;
+    expect(presence.getStatus().presences).toEqual([]);
+    roomSyncResponder = async () => {
+      transport.handler?.(snapshotV2(1, now + 30_000));
+    };
+    scheduler.tick();
+    await presence.whenIdle();
+    expect(roomSyncRequests).toBe(2);
+    expect(presence.getStatus().presences).toHaveLength(1);
+    // Authoritative omission clears expiry recovery; an offline peer is not recreated.
+    transport.handler?.({ ...snapshotV2(1, now + 30_000), presences: [] });
+    now += 20_000;
+    scheduler.tick();
+    await presence.whenIdle();
+    expect(roomSyncRequests).toBe(2);
+    expect(presence.getStatus().presences).toEqual([]);
+  });
+
+  it.each(["v2", "legacy"])(
+    "keeps an actual %s refresh in flight until ACK settlement and discards its stale failure after disconnect",
+    async (protocol) => {
+      let release!: () => void;
+      let entered!: () => void;
+      const started = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const barrier = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      await presence.setSynchronized(true);
+      transport.handler?.(snapshotV2(1, now + 30_000));
+      roomSyncResponder = async () => {
+        entered();
+        await barrier;
+        throw new Error("STALE_REFRESH");
+      };
+      now += 20_000;
+      scheduler.tick();
+      await started;
+      transport.handler?.(
+        protocol === "v2" ? snapshotV2(1, now + 30_000) : snapshot(roomId, now + 30_000),
+      );
+      now += 20_000;
+      scheduler.tick();
+      const stopping = presence.setSynchronized(false);
+      release();
+      await stopping;
+      expect(roomSyncRequests).toBe(1);
+      expect(presence.getStatus()).toMatchObject({
+        state: "OFFLINE",
+        errorCode: null,
+        presences: [],
+      });
+      await presence.setSynchronized(true);
+      await presence.whenIdle();
+      expect(presence.getStatus().errorCode).toBeNull();
+    },
+  );
+
+  it.each(["v2", "legacy"])(
+    "coalesces a gap behind an actual %s refresh even when the snapshot arrives before its ACK",
+    async (protocol) => {
+      let release!: () => void;
+      let entered!: () => void;
+      const started = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const barrier = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      await presence.setSynchronized(true);
+      transport.handler?.(snapshotV2(1, now + 30_000));
+      roomSyncResponder = async () => {
+        entered();
+        await barrier;
+      };
+      now += 20_000;
+      scheduler.tick();
+      await started;
+      transport.handler?.(
+        protocol === "v2" ? snapshotV2(1, now + 30_000) : snapshot(roomId, now + 30_000),
+      );
+      transport.handler?.(deltaV2(4, { kind: "REMOVE", userId: remoteUserId, deviceId }));
+      release();
+      await presence.whenIdle();
+      expect(roomSyncRequests).toBe(1);
+      expect(presence.getStatus().presences).toHaveLength(1);
+    },
+  );
+
   it("stays online outside the shared page while its navigation is awaiting confirmation", async () => {
     await presence.handleActiveTabChanged(7);
     await presence.setSynchronized(true);
@@ -467,7 +636,7 @@ describe("ActiveTabPresenceController", () => {
     ).toBe(false);
   });
 
-  it("allows known matching media across randomized page content while blocking positional data", async () => {
+  it("allows only media-anchored pointers across known matching media with different page layout", async () => {
     const media: MediaIdentity = {
       provider: "YOUTUBE",
       mediaKey: "youtube:dQw4w9WgXcQ",
@@ -492,7 +661,22 @@ describe("ActiveTabPresenceController", () => {
         remoteUserId,
         remoteDeviceId: deviceId,
       }),
-    ).toBe(false);
+    ).toBe(true);
+    expect(
+      presence.getRemotePointerProjection({
+        logicalTabId,
+        documentRevision: { roomEpoch: 0, tabUpdatedAtSeq: 1 },
+        remoteUserId,
+        remoteDeviceId: deviceId,
+      }),
+    ).toEqual({ type: "MEDIA_ANCHOR_ONLY", media });
+    expect(
+      presence.getLocalMediaIdentity({
+        roomId,
+        logicalTabId,
+        documentRevision: { roomEpoch: 0, tabUpdatedAtSeq: 1 },
+      }),
+    ).toEqual(media);
     expect(
       presence.canSynchronizeKnownMedia({
         target: {
@@ -521,6 +705,60 @@ describe("ActiveTabPresenceController", () => {
         remoteDeviceId: deviceId,
       }),
     ).toBe(false);
+  });
+
+  it("never authorizes media pointers from missing, expired or different media/document evidence", async () => {
+    const media: MediaIdentity = { provider: "YOUTUBE", mediaKey: "youtube:dQw4w9WgXcQ" };
+    await presence.handleActiveTabChanged(7);
+    await presence.setSynchronized(true);
+    await presence.handlePageCompatibilityReport(
+      7,
+      compatibilityReport("A".repeat(43), undefined, media),
+    );
+    const scope = {
+      logicalTabId,
+      documentRevision: { roomEpoch: 0, tabUpdatedAtSeq: 1 },
+      remoteUserId,
+      remoteDeviceId: deviceId,
+    };
+    transport.handler?.(snapshotV2(1, now + 30_000, { contentSignature: null, media }));
+    expect(presence.getRemotePointerProjection(scope)).toBeNull();
+    transport.handler?.(
+      snapshotV2(2, now + 30_000, {
+        contentSignature: { signatureVersion: 1, digest: "B".repeat(43) },
+        media: { ...media, mediaKey: "youtube:9bZkp7q19f0" },
+      }),
+    );
+    expect(presence.getRemotePointerProjection(scope)).toBeNull();
+    transport.handler?.(
+      snapshotV2(3, now + 30_000, {
+        contentSignature: { signatureVersion: 1, digest: "B".repeat(43) },
+        media,
+      }),
+    );
+    expect(
+      presence.getRemotePointerProjection({
+        ...scope,
+        documentRevision: { roomEpoch: 0, tabUpdatedAtSeq: 2 },
+      }),
+    ).toBeNull();
+    expect(presence.getRemotePointerProjection(scope)?.type).toBe("MEDIA_ANCHOR_ONLY");
+    const copy = presence.getLocalMediaIdentity({
+      roomId,
+      logicalTabId,
+      documentRevision: scope.documentRevision,
+    });
+    copy!.mediaKey = "youtube:9bZkp7q19f0";
+    expect(
+      presence.getLocalMediaIdentity({
+        roomId,
+        logicalTabId,
+        documentRevision: scope.documentRevision,
+      }),
+    ).toEqual(media);
+    now += 30_001;
+    expect(presence.getRemotePointerProjection(scope)).toBeNull();
+    expect(presence.hasCompatibleRemotePointerObserver(scope)).toBe(false);
   });
 
   it("revokes local compatibility before permission-boundary cleanup", async () => {

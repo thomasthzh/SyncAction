@@ -64,6 +64,9 @@ export function BottomActionDock({
   const commandInFlight = useRef(false);
   const busy = preparation.busy || feedback.pending !== null;
   const pendingPublication = store.pageAccess.value.pendingPublication != null;
+  const mediaScopedCollaboration =
+    store.pageAccess.value.contentCompatibility === "MISMATCH" &&
+    store.pageAccess.value.enabledFeatures.includes("DRAWING");
 
   async function shareAsNew(): Promise<void> {
     const expectedContext = capturePageShareContext(store);
@@ -164,6 +167,10 @@ export function BottomActionDock({
       {pendingPublication ? (
         <p class="dock-pending-publication" role="status">
           有更新待提交。房间仍使用上次提交的页面，当前页协作已暂停。
+        </p>
+      ) : mediaScopedCollaboration ? (
+        <p class="dock-media-scope" role="status">
+          布局不同，光标和画笔在视频内共享。
         </p>
       ) : null}
       <div class="bottom-action-dock__tools">

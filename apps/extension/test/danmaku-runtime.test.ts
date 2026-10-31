@@ -158,6 +158,133 @@ describe("DanmakuPageRuntime", () => {
     focus.mockRestore();
   });
 
+  it.each(["keydown", "keypress", "keyup"] as const)(
+    "keeps focused input %s away from page shortcuts without cancelling editing defaults",
+    (eventType) => {
+      const harness = createHarness();
+      const siteKeys: string[] = [];
+      const onPageKey = (event: Event) => siteKeys.push((event as KeyboardEvent).key);
+      document.addEventListener(eventType, onPageKey);
+      try {
+        expect(harness.host.element.shadowRoot).toBeNull();
+        for (let opening = 0; opening < 2; opening += 1) {
+          harness.runtime.openInput();
+          const input = requireInput(harness.surface);
+          input.focus();
+          expect((input.getRootNode() as ShadowRoot).activeElement).toBe(input);
+          for (const key of ["f", "k", " ", "Backspace", "ArrowLeft", "Tab"]) {
+            const event = new KeyboardEvent(eventType, {
+              key,
+              bubbles: true,
+              composed: true,
+              cancelable: true,
+            });
+            expect(input.dispatchEvent(event)).toBe(true);
+            expect(event.defaultPrevented).toBe(false);
+          }
+          expect(siteKeys).toEqual([]);
+          harness.runtime.closeInput();
+        }
+        const pageButton = document.createElement("button");
+        document.body.append(pageButton);
+        pageButton.focus();
+        for (const key of ["f", "k", " "]) {
+          const event = new KeyboardEvent(eventType, {
+            key,
+            bubbles: true,
+            composed: true,
+            cancelable: true,
+          });
+          expect(pageButton.dispatchEvent(event)).toBe(true);
+          expect(event.defaultPrevented).toBe(false);
+        }
+        expect(siteKeys).toEqual(["f", "k", " "]);
+      } finally {
+        document.removeEventListener(eventType, onPageKey);
+        harness.dispose();
+      }
+    },
+  );
+
+  it("submits and closes through owned input keys without invoking page bubble shortcuts", () => {
+    const harness = createHarness();
+    const siteKeys: string[] = [];
+    const onPageKey = (event: KeyboardEvent) => siteKeys.push(event.key);
+    document.addEventListener("keydown", onPageKey);
+    try {
+      harness.runtime.openInput();
+      const input = requireInput(harness.surface);
+      input.value = "一起看 f，不切换播放器";
+      const enter = new KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        composed: true,
+        cancelable: true,
+      });
+      expect(input.dispatchEvent(enter)).toBe(false);
+      expect(enter.defaultPrevented).toBe(true);
+      expect(harness.submissions).toHaveLength(1);
+      expect(harness.submissions[0]?.text).toBe(input.value);
+      expect(siteKeys).toEqual([]);
+      const escape = new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        composed: true,
+        cancelable: true,
+      });
+      expect(input.dispatchEvent(escape)).toBe(false);
+      expect(escape.defaultPrevented).toBe(true);
+      expect(harness.runtime.getState().inputOpen).toBe(false);
+      expect(harness.surface.querySelector("input")).toBeNull();
+      expect(siteKeys).toEqual([]);
+    } finally {
+      document.removeEventListener("keydown", onPageKey);
+      harness.dispose();
+    }
+  });
+
+  it("lets IME own composing Enter and Escape while isolating them from page bubble shortcuts", () => {
+    const harness = createHarness();
+    const siteKeys: string[] = [];
+    const onPageKey = (event: KeyboardEvent) => siteKeys.push(event.key);
+    document.addEventListener("keydown", onPageKey);
+    try {
+      harness.runtime.openInput();
+      const input = requireInput(harness.surface);
+      input.value = "天涯共此时";
+      for (const key of ["Enter", "Escape"]) {
+        const event = new KeyboardEvent("keydown", {
+          key,
+          isComposing: true,
+          bubbles: true,
+          composed: true,
+          cancelable: true,
+        });
+        expect(input.dispatchEvent(event)).toBe(true);
+        expect(event.defaultPrevented).toBe(false);
+        expect(harness.runtime.getState().inputOpen).toBe(true);
+        expect(requireInput(harness.surface)).toBe(input);
+        expect(input.value).toBe("天涯共此时");
+        expect(harness.submissions).toEqual([]);
+      }
+      expect(siteKeys).toEqual([]);
+      input.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+          composed: true,
+          cancelable: true,
+        }),
+      );
+      expect(harness.submissions).toHaveLength(1);
+      expect(harness.submissions[0]?.text).toBe("天涯共此时");
+      expect(siteKeys).toEqual([]);
+    } finally {
+      document.removeEventListener("keydown", onPageKey);
+      harness.dispose();
+    }
+  });
+
   it("renders text literally, caps visible messages at 30, removes at nine seconds, and reuses one lane engine", () => {
     const harness = createHarness();
     for (let index = 0; index < 31; index += 1) {
@@ -173,8 +300,9 @@ describe("DanmakuPageRuntime", () => {
     expect(harness.engines).toHaveLength(1);
     expect(harness.engines[0]!.comments).toHaveLength(30);
 
+    const resizeCallsBeforeWindowChange = harness.engines[0]!.resizeCalls;
     harness.runtime.handleResize();
-    expect(harness.engines[0]!.resizeCalls).toBe(1);
+    expect(harness.engines[0]!.resizeCalls).toBe(resizeCallsBeforeWindowChange + 1);
     expect(harness.engines).toHaveLength(1);
 
     harness.scheduler.advanceTo(1_785_160_009_000);

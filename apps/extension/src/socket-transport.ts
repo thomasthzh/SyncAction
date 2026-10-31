@@ -37,6 +37,7 @@ import {
   RoomEventMessageSchema,
   RoomDeltaMessageSchema,
   RoomSnapshotMessageSchema,
+  RoomSyncRequestSchema,
   StrokePreviewClearMessageSchema,
   StrokePreviewClearSchema,
   StrokePreviewEventMessageSchema,
@@ -223,6 +224,20 @@ export class SocketReplicaTransport
   #roomEventHandler: RoomEventHandler | undefined;
   #notificationCreatedHandler: NotificationCreatedHandler | undefined;
   #notificationReadHandler: NotificationReadHandler | undefined;
+  readonly #roomSyncs = new Set<Promise<RoomSnapshotMessage | RoomDeltaMessage>>();
+  #latestRoomSync:
+    { key: string; promise: Promise<RoomSnapshotMessage | RoomDeltaMessage> } | undefined;
+  #connectionGeneration = 0;
+  #roomGeneration = 0;
+  #roomScope: { roomId: string; roomEpoch: number } | undefined;
+  #pendingMediaHeartbeat:
+    | {
+        socket: Socket;
+        connectionGeneration: number;
+        roomGeneration: number;
+        heartbeat: MediaHeartbeat;
+      }
+    | undefined;
 
   public constructor(options: SocketReplicaTransportOptions) {
     this.#serverUrl = options.serverUrl;
@@ -444,6 +459,7 @@ export class SocketReplicaTransport
     });
     socket.on("disconnect", () => {
       if (this.#active) {
+        this.#resetRoomSync();
         this.#awaitingPresenceSnapshotV2 = true;
         this.#presenceMetricsSeq = null;
         this.#disconnectedAtMs = this.#now();
@@ -468,32 +484,60 @@ export class SocketReplicaTransport
   }
 
   public async synchronize(
-    request: RoomSyncRequest,
+    requestInput: RoomSyncRequest,
   ): Promise<RoomSnapshotMessage | RoomDeltaMessage> {
-    const response: unknown = await this.#requireSocket()
-      .timeout(this.#ackTimeoutMs)
-      .emitWithAck("room.sync", request);
-    const error = SyncErrorMessageSchema.safeParse(response);
-    if (error.success) {
-      throw new SocketReplicaTransportError(error.data.code);
-    }
-    const snapshot = RoomSnapshotMessageSchema.safeParse(response);
-    if (snapshot.success) {
+    const request = RoomSyncRequestSchema.parse(requestInput);
+    const socket = this.#requireSocket();
+    const key = JSON.stringify(request);
+    const existing = this.#latestRoomSync;
+    if (existing?.key === key) return existing.promise;
+    const generation = this.#connectionGeneration;
+    const operation = (async () => {
+      const response: unknown = await socket
+        .timeout(this.#ackTimeoutMs)
+        .emitWithAck("room.sync", request);
+      if (
+        generation !== this.#connectionGeneration ||
+        this.#socket !== socket ||
+        !socket.connected
+      ) {
+        throw new SocketReplicaTransportError("TRANSPORT_FAILURE");
+      }
+      this.#throwSyncError(response);
+      const snapshot = RoomSnapshotMessageSchema.safeParse(response);
+      const delta = RoomDeltaMessageSchema.safeParse(response);
+      const message = snapshot.success ? snapshot.data : delta.success ? delta.data : null;
+      if (message === null) throw new SocketReplicaTransportError("PROTOCOL_FAILURE");
+      const scope = message.type === "room.snapshot" ? message.state : message;
+      if (scope.roomId !== request.roomId) {
+        throw new SocketReplicaTransportError("PROTOCOL_FAILURE");
+      }
+      if (
+        this.#roomScope !== undefined &&
+        (this.#roomScope.roomId !== scope.roomId || this.#roomScope.roomEpoch !== scope.roomEpoch)
+      ) {
+        this.#roomGeneration += 1;
+      }
+      this.#roomScope = { roomId: scope.roomId, roomEpoch: scope.roomEpoch };
       this.#notifyUiRelevantActivity();
-      return snapshot.data;
-    }
-    const delta = RoomDeltaMessageSchema.safeParse(response);
-    if (delta.success) {
-      this.#notifyUiRelevantActivity();
-      return delta.data;
-    }
-    throw new SocketReplicaTransportError("PROTOCOL_FAILURE");
+      return message;
+    })();
+    const pending = operation.finally(() => {
+      this.#roomSyncs.delete(pending);
+      if (this.#latestRoomSync?.promise === pending) this.#latestRoomSync = undefined;
+      if (this.#roomSyncs.size === 0) this.#flushMediaHeartbeat();
+    });
+    this.#roomSyncs.add(pending);
+    this.#latestRoomSync = { key, promise: pending };
+    return pending;
   }
 
   public async submit(envelope: ClientOperationEnvelope): Promise<OperationAck> {
-    const response: unknown = await this.#requireSocket()
-      .timeout(this.#ackTimeoutMs)
-      .emitWithAck("operation.submit", envelope);
+    const response: unknown = await this.#afterRoomSync(
+      envelope.roomId,
+      envelope.roomEpoch,
+      (socket) => socket.timeout(this.#ackTimeoutMs).emitWithAck("operation.submit", envelope),
+    );
     const error = SyncErrorMessageSchema.safeParse(response);
     if (error.success) {
       throw new SocketReplicaTransportError(error.data.code);
@@ -518,9 +562,13 @@ export class SocketReplicaTransport
       updateInput.type === "presence.update.v2"
         ? PresenceUpdateV2Schema.parse(updateInput)
         : PresenceUpdateSchema.parse(updateInput);
-    const response: unknown = await this.#requireSocket()
-      .timeout(this.#ackTimeoutMs)
-      .emitWithAck(update.type, update);
+    const response: unknown = await this.#afterRoomSync(
+      update.roomId,
+      update.type === "presence.update.v2"
+        ? update.contentContext?.documentRevision.roomEpoch
+        : undefined,
+      (socket) => socket.timeout(this.#ackTimeoutMs).emitWithAck(update.type, update),
+    );
     const error = SyncErrorMessageSchema.safeParse(response);
     if (error.success) {
       throw new SocketReplicaTransportError(error.data.code);
@@ -545,9 +593,11 @@ export class SocketReplicaTransport
 
   public async publishPointerLease(updateInput: PointerLeaseUpdate): Promise<PointerLeaseAck> {
     const update = PointerLeaseUpdateSchema.parse(updateInput);
-    const response: unknown = await this.#requireSocket()
-      .timeout(this.#ackTimeoutMs)
-      .emitWithAck("pointer.lease", update);
+    const response: unknown = await this.#afterRoomSync(
+      update.roomId,
+      update.documentRevision?.roomEpoch,
+      (socket) => socket.timeout(this.#ackTimeoutMs).emitWithAck("pointer.lease", update),
+    );
     const error = SyncErrorMessageSchema.safeParse(response);
     if (error.success) {
       throw new SocketReplicaTransportError(error.data.code);
@@ -568,15 +618,19 @@ export class SocketReplicaTransport
   public publishPointerFrame(frameInput: PointerFrame): void {
     const frame = PointerFrameSchema.parse(frameInput);
     const socket = this.#requireSocket();
-    this.#metrics.recordPointerFrame(volatilePacketWillDrop(socket));
+    const blocked = this.#roomSyncs.size > 0 || !this.#roomScopeMatches(frame.roomId);
+    this.#metrics.recordPointerFrame(blocked || volatilePacketWillDrop(socket));
+    if (blocked) return;
     socket.volatile.emit("pointer.frame", frame);
   }
 
   public async publishPointer(updateInput: PointerUpdate): Promise<PointerAck> {
     const update = PointerUpdateSchema.parse(updateInput);
-    const response: unknown = await this.#requireSocket()
-      .timeout(this.#ackTimeoutMs)
-      .emitWithAck("pointer.update", update);
+    const response: unknown = await this.#afterRoomSync(
+      update.roomId,
+      update.documentRevision?.roomEpoch,
+      (socket) => socket.timeout(this.#ackTimeoutMs).emitWithAck("pointer.update", update),
+    );
     const error = SyncErrorMessageSchema.safeParse(response);
     if (error.success) {
       throw new SocketReplicaTransportError(error.data.code);
@@ -601,9 +655,11 @@ export class SocketReplicaTransport
 
   public async sendMediaCommand(commandInput: MediaCommand): Promise<MediaCommandAck> {
     const command = MediaCommandSchema.parse(commandInput);
-    const response: unknown = await this.#requireSocket()
-      .timeout(this.#ackTimeoutMs)
-      .emitWithAck("media.command", command);
+    const response: unknown = await this.#afterRoomSync(
+      command.roomId,
+      "target" in command ? command.target?.documentRevision.roomEpoch : undefined,
+      (socket) => socket.timeout(this.#ackTimeoutMs).emitWithAck("media.command", command),
+    );
     const error = SyncErrorMessageSchema.safeParse(response);
     if (error.success) {
       throw new SocketReplicaTransportError(error.data.code);
@@ -620,6 +676,17 @@ export class SocketReplicaTransport
   public publishMediaHeartbeat(heartbeatInput: MediaHeartbeat): void {
     const heartbeat = MediaHeartbeatSchema.parse(heartbeatInput);
     const socket = this.#requireSocket();
+    if (this.#roomSyncs.size > 0) {
+      this.#pendingMediaHeartbeat = {
+        socket,
+        connectionGeneration: this.#connectionGeneration,
+        roomGeneration: this.#roomGeneration,
+        heartbeat,
+      };
+      return;
+    }
+    if (!this.#roomScopeMatches(heartbeat.roomId, heartbeat.target.documentRevision.roomEpoch))
+      return;
     this.#metrics.recordMediaHeartbeat();
     socket.volatile.emit("media.heartbeat", heartbeat);
   }
@@ -652,9 +719,11 @@ export class SocketReplicaTransport
     requestInput: AnnotationSyncRequest,
   ): Promise<AnnotationSnapshotV2Message | AnnotationDeltaV2Message> {
     const request = AnnotationSyncRequestSchema.parse(requestInput);
-    const response: unknown = await this.#requireSocket()
-      .timeout(this.#ackTimeoutMs)
-      .emitWithAck("annotation.sync", request);
+    const response: unknown = await this.#afterRoomSync(
+      request.roomId,
+      request.documentRevision.roomEpoch,
+      (socket) => socket.timeout(this.#ackTimeoutMs).emitWithAck("annotation.sync", request),
+    );
     this.#throwSyncError(response);
     const snapshot = AnnotationSnapshotV2MessageSchema.safeParse(response);
     if (snapshot.success) {
@@ -669,9 +738,12 @@ export class SocketReplicaTransport
 
   public async submitAnnotation(submissionInput: AnnotationSubmitV2): Promise<AnnotationAckV2> {
     const submission = AnnotationSubmitV2Schema.parse(submissionInput);
-    const response: unknown = await this.#requireSocket()
-      .timeout(this.#ackTimeoutMs)
-      .emitWithAck("annotation.submit.v2", submission);
+    const response: unknown = await this.#afterRoomSync(
+      submission.roomId,
+      submission.documentRevision.roomEpoch,
+      (socket) =>
+        socket.timeout(this.#ackTimeoutMs).emitWithAck("annotation.submit.v2", submission),
+    );
     this.#throwSyncError(response);
     const acknowledgement = AnnotationAckV2Schema.safeParse(response);
     const authoritativePageMismatch =
@@ -697,9 +769,11 @@ export class SocketReplicaTransport
 
   public async sendDanmaku(messageInput: DanmakuSend): Promise<DanmakuAck> {
     const message = DanmakuSendSchema.parse(messageInput);
-    const response: unknown = await this.#requireSocket()
-      .volatile.timeout(this.#ackTimeoutMs)
-      .emitWithAck("danmaku.send", message);
+    const response: unknown = await this.#afterRoomSync(
+      message.roomId,
+      message.documentRevision.roomEpoch,
+      (socket) => socket.volatile.timeout(this.#ackTimeoutMs).emitWithAck("danmaku.send", message),
+    );
     this.#throwSyncError(response);
     const acknowledgement = DanmakuAckSchema.safeParse(response);
     if (
@@ -716,16 +790,27 @@ export class SocketReplicaTransport
 
   public async publishStrokePreview(updateInput: StrokePreviewUpdate): Promise<void> {
     const update = StrokePreviewUpdateSchema.parse(updateInput);
+    if (
+      this.#roomSyncs.size > 0 ||
+      !this.#roomScopeMatches(update.roomId, update.documentRevision.roomEpoch)
+    )
+      return;
     this.#requireSocket().volatile.emit("stroke.preview.update", update);
   }
 
   public async clearStrokePreview(clearInput: StrokePreviewClear): Promise<void> {
     const clear = StrokePreviewClearSchema.parse(clearInput);
+    if (
+      this.#roomSyncs.size > 0 ||
+      !this.#roomScopeMatches(clear.roomId, clear.documentRevision.roomEpoch)
+    )
+      return;
     this.#requireSocket().volatile.emit("stroke.preview.clear", clear);
   }
 
   public async disconnect(): Promise<void> {
     const socket = this.#socket;
+    this.#resetRoomSync();
     this.#active = false;
     this.#socket = undefined;
     this.#awaitingPresenceSnapshotV2 = true;
@@ -744,6 +829,67 @@ export class SocketReplicaTransport
       socket.removeAllListeners();
       socket.disconnect();
     }
+  }
+
+  async #afterRoomSync<T>(
+    roomId: string,
+    roomEpoch: number | undefined,
+    send: (socket: Socket) => Promise<T>,
+  ): Promise<T> {
+    const socket = this.#requireSocket();
+    const generation = this.#connectionGeneration;
+    const roomGeneration = this.#roomGeneration;
+    while (this.#roomSyncs.size > 0) {
+      await Promise.allSettled([...this.#roomSyncs.values()]);
+      if (generation !== this.#connectionGeneration) {
+        throw new SocketReplicaTransportError("TRANSPORT_FAILURE");
+      }
+    }
+    if (
+      generation !== this.#connectionGeneration ||
+      roomGeneration !== this.#roomGeneration ||
+      this.#socket !== socket ||
+      !socket.connected ||
+      !this.#roomScopeMatches(roomId, roomEpoch)
+    ) {
+      throw new SocketReplicaTransportError("TRANSPORT_FAILURE");
+    }
+    return send(socket);
+  }
+
+  #roomScopeMatches(roomId: string, roomEpoch?: number): boolean {
+    return (
+      this.#roomScope === undefined ||
+      (this.#roomScope.roomId === roomId &&
+        (roomEpoch === undefined || this.#roomScope.roomEpoch === roomEpoch))
+    );
+  }
+
+  #flushMediaHeartbeat(): void {
+    const pending = this.#pendingMediaHeartbeat;
+    this.#pendingMediaHeartbeat = undefined;
+    if (
+      pending === undefined ||
+      pending.socket !== this.#socket ||
+      !pending.socket.connected ||
+      pending.connectionGeneration !== this.#connectionGeneration ||
+      pending.roomGeneration !== this.#roomGeneration ||
+      !this.#roomScopeMatches(
+        pending.heartbeat.roomId,
+        pending.heartbeat.target.documentRevision.roomEpoch,
+      )
+    )
+      return;
+    this.#metrics.recordMediaHeartbeat();
+    pending.socket.volatile.emit("media.heartbeat", pending.heartbeat);
+  }
+
+  #resetRoomSync(): void {
+    this.#connectionGeneration += 1;
+    this.#roomSyncs.clear();
+    this.#latestRoomSync = undefined;
+    this.#roomScope = undefined;
+    this.#pendingMediaHeartbeat = undefined;
   }
 
   #requireSocket(): Socket {

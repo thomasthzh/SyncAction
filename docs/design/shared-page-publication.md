@@ -62,6 +62,25 @@ existing effective consent within its server, origin and terms scope. Full data 
 expandable, while the task, scope and concise disclosure remain visible. A failed preflight offers
 retry rather than an indefinitely disabled checking button.
 
+## Responsive media collaboration
+
+Page-wide content compatibility remains a guard for arbitrary positional content. When two current
+documents identify the same media, cursor and pen coordinates inside that selected media can instead
+be mapped to its local rectangle. Different window sizes or surrounding recommendations do not
+disable that media region. A missing, different or unlocatable player does not fall back to a
+guessed viewport position; outside the matching media, the ordinary page compatibility rules still
+apply.
+
+The cursor uses the existing pointer lease anchor at a bounded cadence for this media mapping;
+unchanged exact pages retain the compact pointer-frame path. Pen strokes retain their existing media
+identity and normalized points. No new server protocol, DOM transfer, Cookie access or screenshot
+sharing is introduced. Both collaborators should update the client for the complete behavior.
+
+Bilibili discovery and explicit target lookup share the same candidate selection: recommendation
+previews cannot replace the recognized principal player just because a preview is playing while the
+principal video is paused. Principal metadata and protection errors stay visible rather than being
+hidden by selecting a preview.
+
 For already-loaded child documents, enumerate only the current tab, require both host permission and
 application consent per origin, and inject into the exact document ID. A denied child does not
 prevent allowed documents from working. Reload replaces root and child document generations even

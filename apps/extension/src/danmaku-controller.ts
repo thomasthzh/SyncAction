@@ -302,6 +302,12 @@ export class DanmakuController {
   public handlePermissionBoundaryChanged(): Promise<void> {
     this.#generation += 1;
     this.#permissionBlocked = true;
+    if (this.#synchronized) {
+      const generation = this.#generation;
+      this.#transport.setDanmakuHandler((event) => {
+        this.#enqueue(() => this.#handleRemote(event, generation));
+      });
+    }
     this.#knownFramesByTab.clear();
     this.#rootGenerationByTab.clear();
     this.#capabilityFailures.clear();

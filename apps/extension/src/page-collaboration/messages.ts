@@ -34,7 +34,11 @@ import {
   MEDIA_DISCOVERY_RESULT_CODES,
   MEDIA_PAGE_RESULT_CODES,
 } from "../media-adapters/types.js";
-import { PointerLocalSampleSchema, PointerPageContextSchema } from "../pointer-controller.js";
+import {
+  PointerLocalSampleSchema,
+  PointerPageContextSchema,
+  PointerProjectionSchema,
+} from "../pointer-controller.js";
 import { PageCapabilityMessageSchema } from "./capability.js";
 
 export {
@@ -116,6 +120,7 @@ export const PointerRenderMessageSchema = z
   .object({
     type: z.literal("syncaction.pointer.render"),
     pointer: PointerRecordSchema,
+    projection: PointerProjectionSchema.optional(),
   })
   .strict();
 
@@ -123,6 +128,7 @@ export const PointerLeaseRenderMessageSchema = z
   .object({
     type: z.literal("syncaction.pointer.lease"),
     lease: PointerLeaseRecordSchema,
+    projection: PointerProjectionSchema.optional(),
   })
   .strict();
 

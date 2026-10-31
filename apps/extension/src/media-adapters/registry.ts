@@ -22,12 +22,17 @@ export type {
   MediaDiscoveryResultCode,
 } from "./types.js";
 
+const BILIBILI_PREVIEW_SELECTOR = ".video-page-card-small, .feed-card";
+const BILIBILI_PLAYER_SELECTOR =
+  "#bilibili-player, #bilibiliPlayer, #playerWrap, .bpx-player-container";
+
 export function discoverMediaAdapter(options: MediaDiscoveryOptions): MediaDiscoveryResult {
   let mediaElements: HTMLMediaElement[];
   try {
     mediaElements = [...options.document.querySelectorAll<HTMLMediaElement>("video, audio")].filter(
       (media) => isVisibleMedia(media, options.window),
     );
+    mediaElements = pageMediaCandidates(mediaElements, options.context.pageUrl);
   } catch {
     return { adapter: null, code: "MEDIA_FRAME_UNAUTHORIZED" };
   }
@@ -47,6 +52,30 @@ export function discoverMediaAdapter(options: MediaDiscoveryOptions): MediaDisco
     return { adapter: null, code: "MEDIA_NOT_FOUND" };
   }
   return createCandidateAdapter(media, options);
+}
+
+function pageMediaCandidates(
+  mediaElements: HTMLMediaElement[],
+  pageUrl: string,
+): HTMLMediaElement[] {
+  let hostname: string;
+  try {
+    hostname = new URL(pageUrl).hostname;
+  } catch {
+    return mediaElements;
+  }
+  if (hostname !== "bilibili.com" && !hostname.endsWith(".bilibili.com")) {
+    return mediaElements;
+  }
+  // A playing recommendation must not replace the paused principal player,
+  // including when its provider/key/duration happen to match an explicit target.
+  const candidates = mediaElements.filter(
+    (media) => media.closest(BILIBILI_PREVIEW_SELECTOR) === null,
+  );
+  const principalPlayers = candidates.filter(
+    (media) => media.closest(BILIBILI_PLAYER_SELECTOR) !== null,
+  );
+  return principalPlayers.length > 0 ? principalPlayers : candidates;
 }
 
 function createCandidateAdapter(

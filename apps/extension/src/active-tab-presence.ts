@@ -5,6 +5,7 @@ import {
   DocumentRevisionSchema,
   LogicalTabIdSchema,
   MediaTargetSchema,
+  MediaIdentitySchema,
   PageCompatibilityReportSchema,
   PresenceDeltaMessageSchema,
   PresenceSnapshotMessageSchema,
@@ -13,6 +14,7 @@ import {
   type ContentSignature,
   type DocumentRevision,
   type MediaTarget,
+  type MediaIdentity,
   type PresenceDeltaMessage,
   type PageCompatibilityReport,
   type PresenceRecord,
@@ -22,6 +24,7 @@ import type { DurableReplica } from "@syncaction/replica";
 import { ContentCompatibilityController } from "./content-compatibility-controller.js";
 import type { PresenceTransport } from "./socket-transport.js";
 import { isConfirmedPageDocument } from "./confirmed-page-document.js";
+import type { PointerProjection } from "./pointer-controller.js";
 
 const HEARTBEAT_MS = 10_000;
 
@@ -84,6 +87,8 @@ export class ActiveTabPresenceController {
   #presenceSeq: number | null = null;
   #awaitingV2Snapshot = true;
   #roomSyncRequested = false;
+  #snapshotRequest: object | null = null;
+  readonly #expiredPresenceIdentities = new Set<string>();
   #lastAckExpiresAt: number | null = null;
   #errorCode: string | null = null;
   #lastStatusKey = "";
@@ -129,6 +134,8 @@ export class ActiveTabPresenceController {
       this.#presenceSeq = null;
       this.#awaitingV2Snapshot = true;
       this.#roomSyncRequested = false;
+      this.#snapshotRequest = null;
+      this.#expiredPresenceIdentities.clear();
       this.#lastAckExpiresAt = null;
       this.#errorCode = null;
       this.#notifyStatusChanged();
@@ -136,7 +143,7 @@ export class ActiveTabPresenceController {
     }
     const generation = this.#generation;
     this.#interval = this.#scheduler.setInterval(() => {
-      void this.#publish(generation);
+      void this.#publish(generation, true);
     }, HEARTBEAT_MS);
     return this.#publish(generation);
   }
@@ -238,19 +245,58 @@ export class ActiveTabPresenceController {
     remoteUserId: string;
     remoteDeviceId: string;
   }): boolean {
-    if (this.#isLocalIdentity(input.remoteUserId, input.remoteDeviceId)) {
-      return false;
-    }
-    return this.#compatibility.decide({
-      capability: "REMOTE_POINTER",
-      scope: {
-        roomId: this.#roomId,
-        logicalTabId: LogicalTabIdSchema.parse(input.logicalTabId),
-        documentRevision: DocumentRevisionSchema.parse(input.documentRevision),
-        remoteUserId: CanonicalUuidSchema.parse(input.remoteUserId),
-        remoteDeviceId: DeviceIdSchema.parse(input.remoteDeviceId),
-      },
-    }).allowed;
+    return this.getRemotePointerProjection(input) !== null;
+  }
+
+  public getLocalMediaIdentity(context: {
+    roomId: string;
+    logicalTabId: string;
+    documentRevision: DocumentRevision;
+  }): MediaIdentity | null {
+    if (context.roomId !== this.#roomId) return null;
+    const report = this.#currentReport(
+      context.logicalTabId,
+      context.documentRevision.roomEpoch,
+      context.documentRevision.tabUpdatedAtSeq,
+    );
+    const media = report?.contentContext.media;
+    return media === null || media === undefined
+      ? null
+      : structuredClone(MediaIdentitySchema.parse(media));
+  }
+
+  public getRemotePointerProjection(input: {
+    logicalTabId: string;
+    documentRevision: DocumentRevision;
+    remoteUserId: string;
+    remoteDeviceId: string;
+  }): PointerProjection | null {
+    if (!this.#synchronized || this.#isLocalIdentity(input.remoteUserId, input.remoteDeviceId))
+      return null;
+    const presence = [...this.#presences.values()].find(
+      (candidate) =>
+        candidate.userId === input.remoteUserId &&
+        candidate.deviceId === input.remoteDeviceId &&
+        candidate.logicalTabId === input.logicalTabId &&
+        candidate.expiresAt > this.#now(),
+    );
+    if (presence === undefined) return null;
+    const scope = {
+      roomId: this.#roomId,
+      logicalTabId: LogicalTabIdSchema.parse(input.logicalTabId),
+      documentRevision: DocumentRevisionSchema.parse(input.documentRevision),
+      remoteUserId: CanonicalUuidSchema.parse(input.remoteUserId),
+      remoteDeviceId: DeviceIdSchema.parse(input.remoteDeviceId),
+    };
+    const compatibility = this.#compatibility.classify(scope);
+    if (compatibility === "EXACT") return { type: "PAGE" };
+    if (compatibility !== "MISMATCH") return null;
+    const media = this.getLocalMediaIdentity({ roomId: this.#roomId, ...input });
+    return media !== null &&
+      this.#compatibility.decide({ capability: "KNOWN_MEDIA_SYNC", scope, knownMedia: media })
+        .allowed
+      ? { type: "MEDIA_ANCHOR_ONLY", media }
+      : null;
   }
 
   public canSynchronizeKnownMedia(input: {
@@ -290,16 +336,26 @@ export class ActiveTabPresenceController {
         presence.expiresAt > now &&
         !this.#isLocalIdentity(presence.userId, presence.deviceId) &&
         presence.logicalTabId === logicalTabId &&
-        this.#compatibility.decide({
-          capability: "REMOTE_POINTER",
-          scope: {
-            roomId: this.#roomId,
-            logicalTabId,
-            documentRevision,
-            remoteUserId: CanonicalUuidSchema.parse(presence.userId),
-            remoteDeviceId: DeviceIdSchema.parse(presence.deviceId),
-          },
-        }).allowed,
+        this.getRemotePointerProjection({
+          logicalTabId,
+          documentRevision,
+          remoteUserId: CanonicalUuidSchema.parse(presence.userId),
+          remoteDeviceId: DeviceIdSchema.parse(presence.deviceId),
+        }) !== null,
+    );
+  }
+
+  public hasMediaAnchoredRemotePointerObserver(input: {
+    logicalTabId: string;
+    documentRevision: DocumentRevision;
+  }): boolean {
+    return [...this.#presences.values()].some(
+      (presence) =>
+        this.getRemotePointerProjection({
+          ...input,
+          remoteUserId: presence.userId,
+          remoteDeviceId: presence.deviceId,
+        })?.type === "MEDIA_ANCHOR_ONLY",
     );
   }
 
@@ -379,6 +435,8 @@ export class ActiveTabPresenceController {
     this.#presenceSeq = null;
     this.#awaitingV2Snapshot = true;
     this.#roomSyncRequested = false;
+    this.#snapshotRequest = null;
+    this.#expiredPresenceIdentities.clear();
     this.#lastAckExpiresAt = null;
   }
 
@@ -390,7 +448,7 @@ export class ActiveTabPresenceController {
     } while (observed !== this.#tail);
   }
 
-  #publish(generation: number): Promise<void> {
+  #publish(generation: number, refreshExpiringPresences = false): Promise<void> {
     return this.#enqueue(async () => {
       if (!this.#synchronized || generation !== this.#generation) {
         return;
@@ -436,6 +494,12 @@ export class ActiveTabPresenceController {
           return;
         }
         this.#lastAckExpiresAt = ack.expiresAt;
+        const identity = presenceIdentity(this.#userId, this.#deviceId);
+        const ownPresence = this.#presences.get(identity);
+        if (ownPresence !== undefined) {
+          // This ACK proves only our own lease; peer expiry needs a server snapshot.
+          this.#presences.set(identity, { ...ownPresence, expiresAt: ack.expiresAt });
+        }
         this.#errorCode = null;
       } catch (cause) {
         if (!this.#synchronized || generation !== this.#generation) {
@@ -444,6 +508,7 @@ export class ActiveTabPresenceController {
         this.#errorCode = presenceErrorCode(cause);
       }
       this.#notifyStatusChanged();
+      if (refreshExpiringPresences) this.#refreshExpiringPresences();
     });
   }
 
@@ -483,6 +548,7 @@ export class ActiveTabPresenceController {
 
   #replacePresences(presences: readonly PresenceRecordV2[]): void {
     this.#presences.clear();
+    this.#expiredPresenceIdentities.clear();
     const now = this.#now();
     for (const presence of presences) {
       if (presence.expiresAt > now) {
@@ -521,6 +587,9 @@ export class ActiveTabPresenceController {
     }
     for (const change of delta.changes) {
       if (change.kind === "UPSERT") {
+        this.#expiredPresenceIdentities.delete(
+          presenceIdentity(change.presence.userId, change.presence.deviceId),
+        );
         this.#presences.set(
           presenceIdentity(change.presence.userId, change.presence.deviceId),
           change.presence,
@@ -544,6 +613,7 @@ export class ActiveTabPresenceController {
           });
         }
       } else {
+        this.#expiredPresenceIdentities.delete(presenceIdentity(change.userId, change.deviceId));
         this.#presences.delete(presenceIdentity(change.userId, change.deviceId));
         if (this.#isLocalIdentity(change.userId, change.deviceId)) {
           continue;
@@ -564,20 +634,48 @@ export class ActiveTabPresenceController {
     if (this.#roomSyncRequested) {
       return;
     }
-    this.#roomSyncRequested = true;
+    this.#requestPresenceSnapshot();
+  }
+
+  #refreshExpiringPresences(): void {
+    if (this.#requestRoomSync === undefined) return;
+    const now = this.#now();
+    if (
+      this.#expiredPresenceIdentities.size > 0 ||
+      (this.#awaitingV2Snapshot && this.#presenceSeq !== null) ||
+      [...this.#presences.values()].some(
+        (presence) =>
+          !this.#isLocalIdentity(presence.userId, presence.deviceId) &&
+          presence.expiresAt <= now + HEARTBEAT_MS,
+      )
+    ) {
+      // Unchanged peer renewals intentionally omit deltas. Revalidate before the
+      // cached lease expires, using the existing heartbeat instead of extra timers.
+      this.#requestPresenceSnapshot();
+    }
+  }
+
+  #requestPresenceSnapshot(): void {
+    if (this.#snapshotRequest !== null) return;
     const requestRoomSync = this.#requestRoomSync;
     if (requestRoomSync === undefined) {
       this.#errorCode = "PRESENCE_SEQUENCE_GAP";
       return;
     }
+    this.#roomSyncRequested = true;
+    const request = {};
+    this.#snapshotRequest = request;
     const generation = this.#generation;
     void this.#enqueue(async () => {
       try {
+        if (!this.#synchronized || generation !== this.#generation) return;
         await requestRoomSync();
       } catch (cause) {
         if (this.#synchronized && generation === this.#generation) {
           this.#errorCode = presenceErrorCode(cause);
         }
+      } finally {
+        if (this.#snapshotRequest === request) this.#snapshotRequest = null;
       }
     });
   }
@@ -585,6 +683,7 @@ export class ActiveTabPresenceController {
   #pruneExpired(now: number): void {
     for (const [identity, presence] of this.#presences) {
       if (presence.expiresAt <= now) {
+        this.#expiredPresenceIdentities.add(identity);
         this.#presences.delete(identity);
         this.#compatibility.removeRemoteReport({
           roomId: this.#roomId,

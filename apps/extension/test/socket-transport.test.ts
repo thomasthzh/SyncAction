@@ -26,6 +26,8 @@ import type {
   PresenceDeltaMessage,
   PresenceSnapshotV2Message,
   PresenceUpdateV2,
+  RoomSyncRequest,
+  RoomDeltaMessage,
   StrokePreviewClear,
   StrokePreviewClearMessage,
   StrokePreviewEventMessage,
@@ -732,6 +734,227 @@ describe("SocketReplicaTransport presence v2 channel", () => {
     );
   });
 });
+
+describe("SocketReplicaTransport room refresh barrier", () => {
+  const request: RoomSyncRequest = {
+    protocolVersion: 1,
+    roomId: ROOM_ID,
+    roomEpoch: 1,
+    lastServerSeq: 2,
+    hasConfirmedSnapshot: true,
+  };
+  const response = (input = request): RoomDeltaMessage => ({
+    type: "room.delta",
+    protocolVersion: 1,
+    roomId: input.roomId,
+    roomEpoch: input.roomEpoch,
+    fromServerSeq: input.lastServerSeq,
+    toServerSeq: input.lastServerSeq,
+    operations: [],
+  });
+  const accepted: MediaCommandAck = {
+    type: "media.command.ack",
+    protocolVersion: 1,
+    commandId: MEDIA_COMMAND_ID,
+    roomId: ROOM_ID,
+    accepted: true,
+    code: null,
+    playbackGroupId: PLAYBACK_GROUP_ID,
+    groupRevision: 1,
+    roomMediaRevision: 1,
+  };
+
+  it("waits reliable controls, drops frames and flushes only the latest heartbeat after refresh", async () => {
+    const { socket, transport } = createConnectedTransport();
+    const refreshing = deferred<RoomDeltaMessage>();
+    socket.emitWithAck.mockImplementation(async (event: string) => {
+      if (event === "room.sync") return refreshing.promise;
+      if (event === "pointer.lease") return pointerLeaseAck;
+      if (event === "media.command") return accepted;
+      throw new Error(`Unexpected event ${event}`);
+    });
+    const sync = transport.synchronize(request);
+    const lease = transport.publishPointerLease(pointerLeaseUpdate);
+    const command = transport.sendMediaCommand(mediaCommand);
+    for (let seq = 1; seq <= 120; seq += 1) {
+      transport.publishPointerFrame({ ...pointerFrame, seq });
+      transport.publishMediaHeartbeat({ ...mediaHeartbeat, positionMs: 42_000 + seq });
+    }
+    await Promise.resolve();
+    expect(socket.emitWithAck.mock.calls.map(([event]) => event)).toEqual(["room.sync"]);
+    expect(
+      socket.emitted.filter(
+        ({ event }) => event === "pointer.frame" || event === "media.heartbeat",
+      ),
+    ).toEqual([]);
+
+    refreshing.resolve(response());
+    await Promise.all([sync, lease, command]);
+    expect(socket.emitWithAck.mock.calls.map(([event]) => event)).toEqual([
+      "room.sync",
+      "pointer.lease",
+      "media.command",
+    ]);
+    expect(socket.emitted.filter(({ event }) => event === "pointer.frame")).toEqual([]);
+    expect(socket.emitted.filter(({ event }) => event === "media.heartbeat")).toEqual([
+      { event: "media.heartbeat", args: [{ ...mediaHeartbeat, positionMs: 42_120 }] },
+    ]);
+    transport.publishPointerFrame({ ...pointerFrame, seq: 121 });
+    expect(socket.emitted.at(-1)?.event).toBe("pointer.frame");
+  });
+
+  it("coalesces only identical requests and preserves distinct room, epoch and sequence replies", async () => {
+    const { socket, transport } = createConnectedTransport();
+    const variants = [
+      request,
+      { ...request, lastServerSeq: 3 },
+      { ...request, roomEpoch: 2 },
+      { ...request, roomId: RoomIdSchema.parse("10000000-0000-4000-8000-000000000002") },
+      { ...request, hasConfirmedSnapshot: false },
+    ];
+    const replies = variants.map(() => deferred<RoomDeltaMessage>());
+    socket.emitWithAck.mockImplementation(
+      (_event: string, input: RoomSyncRequest) =>
+        replies[variants.findIndex((variant) => JSON.stringify(variant) === JSON.stringify(input))]!
+          .promise,
+    );
+    const first = transport.synchronize(request);
+    const duplicate = transport.synchronize({ ...request });
+    const others = variants.slice(1).map((variant) => transport.synchronize(variant));
+    expect(socket.emitWithAck).toHaveBeenCalledTimes(5);
+    for (const [index, variant] of variants.entries()) replies[index]!.resolve(response(variant));
+    await expect(Promise.all([first, duplicate, ...others])).resolves.toEqual([
+      response(),
+      response(),
+      ...variants.slice(1).map(response),
+    ]);
+  });
+
+  it("waits for all distinct refreshes and releases controls after a failed refresh", async () => {
+    const { socket, transport } = createConnectedTransport();
+    const first = deferred<RoomDeltaMessage>();
+    const second = deferred<RoomDeltaMessage>();
+    socket.emitWithAck.mockImplementation(async (event: string, input: RoomSyncRequest) => {
+      if (event === "room.sync") return input.lastServerSeq === 2 ? first.promise : second.promise;
+      return accepted;
+    });
+    const sync1 = transport.synchronize(request);
+    const sync2 = transport.synchronize({ ...request, lastServerSeq: 3 });
+    const failed = expect(sync2).rejects.toThrow("timeout");
+    const command = transport.sendMediaCommand(mediaCommand);
+    transport.publishMediaHeartbeat({ ...mediaHeartbeat, paused: true });
+    first.resolve(response());
+    await sync1;
+    await Promise.resolve();
+    expect(socket.emitWithAck.mock.calls.map(([event]) => event)).toEqual([
+      "room.sync",
+      "room.sync",
+    ]);
+    expect(socket.emitted.filter(({ event }) => event === "media.heartbeat")).toEqual([]);
+    second.reject(new Error("timeout"));
+    await failed;
+    await expect(command).resolves.toEqual(accepted);
+    expect(socket.emitted.filter(({ event }) => event === "media.heartbeat")).toEqual([
+      { event: "media.heartbeat", args: [{ ...mediaHeartbeat, paused: true }] },
+    ]);
+  });
+
+  it("does not coalesce a return to room A across an intervening room B request", async () => {
+    const { socket, transport } = createConnectedTransport();
+    const replies = [
+      deferred<RoomDeltaMessage>(),
+      deferred<RoomDeltaMessage>(),
+      deferred<RoomDeltaMessage>(),
+    ];
+    let sent = 0;
+    socket.emitWithAck.mockImplementation(() => replies[sent++]!.promise);
+    const roomB = {
+      ...request,
+      roomId: RoomIdSchema.parse("10000000-0000-4000-8000-000000000002"),
+    };
+    const first = transport.synchronize(request);
+    const second = transport.synchronize(roomB);
+    const third = transport.synchronize(request);
+    expect(socket.emitWithAck).toHaveBeenCalledTimes(3);
+    replies[0]!.resolve(response());
+    await first;
+    replies[1]!.resolve(response(roomB));
+    await second;
+    replies[2]!.resolve(response());
+    await third;
+    socket.emitWithAck.mockResolvedValueOnce(accepted);
+    await expect(transport.sendMediaCommand(mediaCommand)).resolves.toEqual(accepted);
+  });
+
+  it("rejects another room's sync acknowledgement and permits a subsequent valid refresh", async () => {
+    const { socket, transport } = createConnectedTransport();
+    socket.emitWithAck.mockResolvedValueOnce(
+      response({ ...request, roomId: RoomIdSchema.parse("10000000-0000-4000-8000-000000000002") }),
+    );
+    await expect(transport.synchronize(request)).rejects.toMatchObject({
+      code: "PROTOCOL_FAILURE",
+    });
+    socket.emitWithAck.mockResolvedValueOnce(response());
+    await expect(transport.synchronize(request)).resolves.toEqual(response());
+    expect(socket.emitWithAck).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["disconnect", "stop", "room", "epoch"] as const)(
+    "discards waiting controls and heartbeat after %s changes",
+    async (change) => {
+      const { socket, transport } = createConnectedTransport();
+      socket.emitWithAck.mockResolvedValueOnce(response());
+      await transport.synchronize(request);
+      const blocked = deferred<RoomDeltaMessage>();
+      socket.emitWithAck.mockImplementation(async (event: string) =>
+        event === "room.sync" ? blocked.promise : accepted,
+      );
+      const next =
+        change === "room"
+          ? { ...request, roomId: RoomIdSchema.parse("10000000-0000-4000-8000-000000000002") }
+          : change === "epoch"
+            ? { ...request, roomEpoch: 2 }
+            : request;
+      const sync = transport.synchronize(next);
+      const syncResult =
+        change === "disconnect" || change === "stop"
+          ? expect(sync).rejects.toMatchObject({ code: "TRANSPORT_FAILURE" })
+          : sync;
+      const command = transport.sendMediaCommand(mediaCommand);
+      const rejected = expect(command).rejects.toMatchObject({ code: "TRANSPORT_FAILURE" });
+      transport.publishMediaHeartbeat(mediaHeartbeat);
+      if (change === "disconnect") {
+        socket.connected = false;
+        socket.emit("disconnect");
+        socket.connected = true;
+        socket.emit("connect");
+      } else if (change === "stop") {
+        await transport.disconnect();
+        await transport.connect({
+          onCommitted: vi.fn(),
+          onDisconnect: vi.fn(),
+          onReconnect: vi.fn(),
+        });
+      }
+      blocked.resolve(response(next));
+      await Promise.all([syncResult, rejected]);
+      expect(socket.emitWithAck.mock.calls.filter(([event]) => event === "media.command")).toEqual(
+        [],
+      );
+      expect(socket.emitted.filter(({ event }) => event === "media.heartbeat")).toEqual([]);
+    },
+  );
+});
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (cause: Error) => void;
+  const promise = new Promise<T>((accept, decline) => {
+    resolve = accept;
+    reject = decline;
+  });
+  return { promise, resolve, reject };
+}
 
 describe("SocketReplicaTransport pointer channel", () => {
   it("publishes a reliable lease before volatile frames without frame ACKs", async () => {
