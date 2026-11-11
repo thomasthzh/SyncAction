@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { Buffer } from "node:buffer";
-import { readFile, mkdir, copyFile, rm, writeFile } from "node:fs/promises";
+import { readFile, mkdir, copyFile, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 import process from "node:process";
 import { gunzipSync } from "node:zlib";
@@ -53,8 +53,10 @@ if (
 ) {
   throw new Error("RELEASE_OUTPUT_BOUNDARY_INVALID");
 }
-await rm(outputDirectory, { recursive: true, force: true });
-await mkdir(outputDirectory, { recursive: true });
+await mkdir(artifactsRoot, { recursive: true });
+// A release directory is immutable evidence. A repeated build must use a new
+// version instead of deleting or overwriting an existing archive set.
+await mkdir(outputDirectory);
 
 await runPnpm(["--filter", "@syncaction/extension", "zip"]);
 await runPnpm(["--filter", "@syncaction/extension", "zip:edge"]);
