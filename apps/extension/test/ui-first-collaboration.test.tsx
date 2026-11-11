@@ -33,6 +33,101 @@ function roomStore(): TestUiStore {
 }
 
 describe("first collaboration recovery and truthful results", () => {
+  it("switches the existing group with frozen current-page context instead of creating or sharing again", async () => {
+    const store = roomStore();
+    const playbackGroupId = store.room.value.runtime!.media!.playbackGroups[0]!.playbackGroupId;
+    const root = renderPanel(
+      <StartWatchingCard
+        store={store}
+        playbackGroupId={playbackGroupId}
+        onRequestPagePermission={vi.fn()}
+      />,
+    );
+    await click(byRole(root, "button", "用当前视频继续一起看"));
+    expect(store.commandCalls).toEqual([
+      {
+        name: "MEDIA_GROUP_SWITCH_CURRENT",
+        payload: {
+          playbackGroupId,
+          expectedContext: {
+            profileId: store.shell.value.selectedProfileId,
+            roomId: store.room.value.selectedRoomId,
+            tabId: store.pageAccess.value.tabId,
+            documentRevision: store.pageAccess.value.documentRevision,
+          },
+        },
+      },
+    ]);
+    expect(root.textContent).toContain("同伴继续在原播放组跟随");
+  });
+
+  it("requires explicit page publication before switching and never silently shares the new page", async () => {
+    const store = roomStore();
+    store.update({ pageAccess: { ...store.pageAccess.value, documentRevision: null } });
+    const root = renderPanel(
+      <StartWatchingCard
+        store={store}
+        playbackGroupId="00000000-0000-4000-8000-000000000101"
+        onRequestPagePermission={vi.fn()}
+      />,
+    );
+    await click(byRole(root, "button", "用当前视频继续一起看"));
+    expect(store.commandCalls).toEqual([]);
+    expect(root.textContent).toContain("先在插件底部提交页面更新");
+  });
+
+  it("carries the original group through the switch permission dialog", async () => {
+    const store = roomStore();
+    const runtime = store.room.value.runtime!;
+    const playbackGroupId = runtime.media!.playbackGroups[0]!.playbackGroupId;
+    const access = store.pageAccess.value;
+    store.update({
+      room: {
+        ...store.room.value,
+        runtime: {
+          ...runtime,
+          media: {
+            ...runtime.media!,
+            state: "DEGRADED",
+            errorCode: "STALE_MEDIA_CONTEXT",
+            localMembership: { playbackGroupId, role: "LEADER", activeDevice: true },
+          },
+        },
+      },
+      pageAccess: { ...access, termsAccepted: false, browserPermissionGranted: false },
+    });
+    const capture = vi.fn(async () => ({
+      profileId: store.shell.value.selectedProfileId,
+      roomId: store.room.value.selectedRoomId!,
+      tabId: access.tabId!,
+      origin: access.origin!,
+      documentRevision: access.documentRevision!,
+      feature: "MEDIA_CONTROL" as const,
+      serverTermsVersion: access.serverTermsVersion!,
+      disclosureVersion: 1 as const,
+      permissionPreviouslyGranted: false,
+    }));
+    const confirm = vi.fn(async (intent: PermissionIntent, agreed: boolean) => ({
+      granted: agreed && intent.feature === "MEDIA_CONTROL",
+      errorCode: null,
+      policySyncPending: false,
+    }));
+    const root = renderPanel(
+      <App store={store} pagePermissionCoordinator={{ capture, confirm }} />,
+    );
+    const details = [...root.querySelectorAll("details")].find(
+      (node) => node.querySelector("summary")?.textContent === "换个视频，继续一起看",
+    )!;
+    act(() => {
+      details.open = true;
+    });
+    await click(byRole(details, "button", "用当前视频继续一起看"));
+    await vi.waitFor(() => expect(root.textContent).toContain("同伴保持跟随"));
+    act(() => root.querySelector<HTMLInputElement>('input[name="agreement"]')!.click());
+    await click(byRole(root, "button", "允许当前站点"));
+    expect(confirm.mock.calls[0]?.[0]).toMatchObject({ mediaSwitchGroupId: playbackGroupId });
+    expect(store.commandCalls.some((command) => command.name === "MEDIA_GROUP_CREATE")).toBe(false);
+  });
   it("keeps one prominent first-watch instruction while independent page sharing remains available", () => {
     const store = roomStore();
     store.update({

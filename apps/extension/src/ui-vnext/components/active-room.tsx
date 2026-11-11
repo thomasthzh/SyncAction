@@ -358,6 +358,19 @@ export function ActiveRoom({
           />
         ) : null}
         {watchConnected &&
+        media?.localMembership?.role === "LEADER" &&
+        media.localMembership.activeDevice ? (
+          <details class="watch-new-group" open={media.state === "DEGRADED"}>
+            <summary>换个视频，继续一起看</summary>
+            <StartWatchingCard
+              key={media.localMembership.playbackGroupId}
+              store={store}
+              playbackGroupId={media.localMembership.playbackGroupId}
+              onRequestPagePermission={onRequestPagePermission}
+            />
+          </details>
+        ) : null}
+        {watchConnected &&
         media !== null &&
         mediaView.groups.length > 0 &&
         media.localMembership === null ? (

@@ -189,9 +189,11 @@ export function projectMediaControllerStatus(input: {
   navigation: MediaNavigationStatus[];
   nowMs: number;
 }): MediaControllerStatus {
-  const membership = input.controlStateValid
-    ? deriveMediaMembership(input.groups, input.userId, input.deviceId)
-    : null;
+  const confirmedMembership = deriveMediaMembership(input.groups, input.userId, input.deviceId);
+  // Losing the old target stops control, but does not remove the server's
+  // leader assignment. Keep that identity visible so an explicit switch can recover.
+  const membership =
+    input.controlStateValid || confirmedMembership?.role === "LEADER" ? confirmedMembership : null;
   const recommendation =
     input.controlStateValid && membership === null && input.localObservation !== null
       ? recommendGroup(input.groups, input.localObservation.target, input.nowMs)

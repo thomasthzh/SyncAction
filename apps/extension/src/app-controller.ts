@@ -277,6 +277,11 @@ export interface RoomRuntime {
   togglePagePen(expected?: { tabId: number; documentRevision: DocumentRevision }): Promise<void>;
   jumpToMediaMember(userId: string): Promise<void>;
   createMediaGroup?(tabId: number, expectedRevision?: DocumentRevision): Promise<MediaCommandAck>;
+  switchMediaGroupCurrent?(
+    playbackGroupId: string,
+    tabId: number,
+    expectedRevision: DocumentRevision,
+  ): Promise<MediaCommandAck>;
   alignMediaGroupOnce(playbackGroupId: string): Promise<void>;
   joinMediaGroup(playbackGroupId: string): Promise<MediaCommandAck | void>;
   leaveMediaGroup?(playbackGroupId?: string): Promise<void>;
@@ -1573,6 +1578,27 @@ export class ExtensionAppController {
     return this.#enqueue(async () =>
       this.#requireRuntime().alignMediaGroupOnce(CanonicalUuidSchema.parse(playbackGroupIdInput)),
     );
+  }
+
+  public switchMediaGroupCurrent(
+    playbackGroupIdInput: unknown,
+    tabIdInput: unknown,
+    expectedContextInput: MediaGroupCreateExpectedContext,
+  ): Promise<MediaCommandAck> {
+    const playbackGroupId = CanonicalUuidSchema.parse(playbackGroupIdInput);
+    const tabId = z.number().int().nonnegative().safe().parse(tabIdInput);
+    const expected = MediaGroupCreateExpectedContextSchema.parse(expectedContextInput);
+    const captured = this.#captureMediaCommandContext();
+    return this.#enqueue(async () => {
+      const runtime = await this.#requireMediaCommandContext(captured, expected, tabId);
+      if (runtime.switchMediaGroupCurrent === undefined) throw new Error("MEDIA_UNAVAILABLE");
+      const acknowledgement = MediaCommandAckSchema.parse(
+        await runtime.switchMediaGroupCurrent(playbackGroupId, tabId, expected.documentRevision),
+      );
+      if (!acknowledgement.accepted) throw new Error(acknowledgement.code);
+      this.#emitChanged(["room", "collaboration"]);
+      return acknowledgement;
+    });
   }
 
   public joinMediaGroup(

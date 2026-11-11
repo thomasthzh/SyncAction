@@ -534,6 +534,100 @@ async function observe(
 }
 
 describe("creating a playback group from the current shared page", () => {
+  it("switches a stale target on the leader's current published page without recreating the group", async () => {
+    const value = harness({ userId: leaderUserId, deviceId: leaderDeviceId });
+    await connect(value);
+    await observe(value);
+    const revision = { roomEpoch: 0, tabUpdatedAtSeq: 13 };
+    value.replicaRecord.confirmedSnapshot!.serverSeq = 13;
+    value.replicaRecord.confirmedSnapshot!.tabs[0]!.updatedAtSeq = 13;
+    value.replicaRecord.bindings[0]!.validatedAtServerSeq = 13;
+    await value.controller.handleBindingsChanged();
+    expect(value.controller.getStatus()).toMatchObject({
+      errorCode: "STALE_MEDIA_CONTEXT",
+      localObservation: null,
+      localMembership: { playbackGroupId, role: "LEADER", activeDevice: true },
+    });
+    await expect(value.controller.switchTarget(playbackGroupId, target, playing)).rejects.toThrow(
+      "MEDIA_SNAPSHOT_REQUIRED",
+    );
+    const nextTarget = { ...sameDocumentSecondTarget, documentRevision: revision };
+    vi.spyOn(value.page, "observe").mockImplementation(async (_tab, _frame, currentContext) => {
+      await value.controller.handleMediaObserved(
+        10,
+        0,
+        observedMessage(playing, { context: currentContext, target: nextTarget }),
+      );
+    });
+    const before = value.controller.getStatus().playbackGroups[0]!.members;
+    await expect(
+      value.controller.switchGroupFromCurrentPage(playbackGroupId, 10, revision),
+    ).resolves.toMatchObject({ accepted: true, playbackGroupId });
+    expect(value.transport.commands).toHaveLength(1);
+    expect(value.transport.commands[0]).toMatchObject({
+      type: "group.switch-target",
+      playbackGroupId,
+      target: nextTarget,
+    });
+    expect(value.page.observe).toHaveBeenNthCalledWith(1, 10, 0, {
+      roomId,
+      logicalTabId,
+      documentRevision: revision,
+      frameKey: "top",
+    });
+    expect(value.controller.getStatus().playbackGroups[0]!.members).toEqual(before);
+    await value.controller.dispose();
+  });
+
+  it("does not reuse an old target pin for an explicit same-document switch", async () => {
+    const value = harness({ userId: leaderUserId, deviceId: leaderDeviceId });
+    await connect(value);
+    await observe(value);
+    await value.controller.handleMediaObserved(
+      10,
+      0,
+      observedMessage(playing, {
+        event: "UNSUPPORTED",
+        target: null,
+        observed: null,
+        resultCode: "MEDIA_NOT_FOUND",
+      }),
+    );
+    vi.spyOn(value.page, "observe").mockImplementation(async (_tab, _frame, currentContext) => {
+      await value.controller.handleMediaObserved(
+        10,
+        0,
+        observedMessage(playing, { context: currentContext, target: sameDocumentSecondTarget }),
+      );
+    });
+    await value.controller.switchGroupFromCurrentPage(playbackGroupId, 10, target.documentRevision);
+    expect(value.page.observe).toHaveBeenNthCalledWith(1, 10, 0, {
+      roomId,
+      logicalTabId,
+      documentRevision: target.documentRevision,
+      frameKey: "top",
+    });
+    expect(value.transport.commands[0]).toMatchObject({
+      type: "group.switch-target",
+      target: sameDocumentSecondTarget,
+    });
+    await value.controller.dispose();
+  });
+
+  it("rejects switch attempts from a follower or another leader device", async () => {
+    for (const identity of [
+      { userId: followerUserId, deviceId: followerDeviceId },
+      { userId: leaderUserId, deviceId: followerDeviceId },
+    ]) {
+      const value = harness(identity);
+      await connect(value);
+      await expect(
+        value.controller.switchGroupFromCurrentPage(playbackGroupId, 10, target.documentRevision),
+      ).rejects.toThrow("MEDIA_LEADER_REQUIRED");
+      expect(value.transport.commands).toEqual([]);
+      await value.controller.dispose();
+    }
+  });
   it("accepts the transport snapshot after a permission boundary and creation ACK while ignoring the old handler", async () => {
     const onStatusChanged = vi.fn();
     const value = harness({ onStatusChanged });

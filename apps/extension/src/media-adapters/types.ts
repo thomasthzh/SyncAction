@@ -70,6 +70,8 @@ export interface MediaAdapter {
   readonly target: MediaTarget;
   getMediaElement(): HTMLMediaElement;
   isUsable(): boolean;
+  /** An accepted resource changed; never silently rebind its old target. */
+  isResourceInvalidated?(): boolean;
   read(): MediaObservedState;
   apply(command: MediaApplyCommand): Promise<MediaApplyResult>;
   subscribe(listener: (event: MediaDiscreteEvent) => void): () => void;
@@ -84,6 +86,7 @@ export interface MediaDiscoveryOptions {
   context: MediaDiscoveryContext;
   target?: MediaTarget;
   now?: () => number;
+  readPageUrl?: () => string;
 }
 
 export interface MediaAdapterFactoryOptions {
@@ -92,4 +95,6 @@ export interface MediaAdapterFactoryOptions {
   context: MediaDiscoveryContext;
   durationMs: number;
   now?: () => number;
+  readPageUrl?: () => string;
+  isCurrentPrincipal?: () => boolean;
 }

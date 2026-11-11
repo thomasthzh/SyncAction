@@ -32,6 +32,7 @@ export interface PermissionIntent {
   roomId?: RoomId;
   url?: string;
   mediaJoinGroupId?: string;
+  mediaSwitchGroupId?: string;
   profileId: string;
   tabId: number;
   origin: string;

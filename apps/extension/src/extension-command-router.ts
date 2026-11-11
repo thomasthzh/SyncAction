@@ -44,6 +44,7 @@ export type ExtensionCommandAppPort = Pick<
   | "setDanmakuHidden"
   | "togglePagePen"
   | "createMediaGroup"
+  | "switchMediaGroupCurrent"
   | "jumpToMediaMember"
   | "alignMediaGroupOnce"
   | "joinMediaGroup"
@@ -314,6 +315,16 @@ export class ExtensionCommandRouter {
       case "MEDIA_GROUP_ALIGN_ONCE":
         result = await this.#app.alignMediaGroupOnce(command.payload.playbackGroupId);
         break;
+      case "MEDIA_GROUP_SWITCH_CURRENT": {
+        const expected = command.payload.expectedContext;
+        const tab = await this.#activeMediaTab(expected);
+        result = await this.#app.switchMediaGroupCurrent(
+          command.payload.playbackGroupId,
+          tab.id,
+          expected,
+        );
+        break;
+      }
       case "MEDIA_GROUP_JOIN": {
         const expected = command.payload.expectedContext;
         if (expected !== undefined) await this.#activeMediaTab(expected);

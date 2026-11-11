@@ -69,12 +69,17 @@ const pagePermissionCoordinator = new OriginPermissionCoordinator({
         documentRevision: intent.documentRevision,
       };
       result = await store.command(
-        intent.mediaJoinGroupId === undefined
-          ? { name: "MEDIA_GROUP_CREATE", payload: { expectedContext } }
-          : {
-              name: "MEDIA_GROUP_JOIN",
-              payload: { playbackGroupId: intent.mediaJoinGroupId, expectedContext },
-            },
+        intent.mediaSwitchGroupId !== undefined
+          ? {
+              name: "MEDIA_GROUP_SWITCH_CURRENT",
+              payload: { playbackGroupId: intent.mediaSwitchGroupId, expectedContext },
+            }
+          : intent.mediaJoinGroupId === undefined
+            ? { name: "MEDIA_GROUP_CREATE", payload: { expectedContext } }
+            : {
+                name: "MEDIA_GROUP_JOIN",
+                payload: { playbackGroupId: intent.mediaJoinGroupId, expectedContext },
+              },
       );
     } else {
       return;

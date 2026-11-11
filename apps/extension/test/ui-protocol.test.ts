@@ -232,6 +232,7 @@ describe("side-panel UI protocol", () => {
       "DANMAKU_VISIBILITY",
       "PEN_TOGGLE",
       "MEDIA_GROUP_CREATE",
+      "MEDIA_GROUP_SWITCH_CURRENT",
       "MEDIA_MEMBER_JUMP",
       "MEDIA_GROUP_ALIGN_ONCE",
       "MEDIA_GROUP_JOIN",
