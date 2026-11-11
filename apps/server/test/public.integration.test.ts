@@ -8,6 +8,7 @@ import {
 import { NotificationService, RoomProductEventBus, RoomService } from "@syncaction/rooms";
 import { RoomSequencer } from "@syncaction/sync";
 import type { FastifyInstance } from "fastify";
+import { readFileSync } from "node:fs";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { buildPublicApp } from "../src/app.js";
 
@@ -17,6 +18,8 @@ if (connectionString === undefined) {
 }
 
 const now = new Date("2026-07-26T00:00:00.000Z");
+const releaseVersion = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"))
+  .version as string;
 const deviceId = "018f8f8e-4b5c-7d6e-8f90-123456789ab4";
 const annotationHmacKey = new Uint8Array(32).fill(23);
 let db: ReturnType<typeof createDatabase>;
@@ -507,7 +510,7 @@ describe("v0.9 product HTTP contracts", () => {
     expect(meta.statusCode).toBe(200);
     expect(meta.json()).toMatchObject({
       displayName: "SyncAction",
-      softwareVersion: "0.9.17",
+      softwareVersion: releaseVersion,
       protocolVersion: "1",
       minimumClientVersion: "0.8.1",
       termsVersion: "2026-07-30",
