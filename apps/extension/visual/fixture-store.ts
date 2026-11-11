@@ -8,7 +8,8 @@ import type {
 } from "../src/ui-vnext/store.js";
 import type { UiCommandResult, UiStateSlices } from "../src/ui/ui-protocol.js";
 
-export type VisualFixture = "lobby" | "room" | "guest" | "room-unshared";
+export type VisualFixture =
+  "lobby" | "room" | "guest" | "room-unshared" | "room-leader" | "room-leader-unshared";
 
 export const FIXTURE_NOW_MS = Date.parse("2026-08-24T08:00:00.000Z");
 
@@ -285,7 +286,29 @@ function roomSlices(): UiStateSlices {
 }
 
 export function createVisualStore(fixture: VisualFixture): UiStore {
-  const slices = fixture === "room" || fixture === "room-unshared" ? roomSlices() : lobbySlices();
+  const slices = fixture.startsWith("room") ? roomSlices() : lobbySlices();
+  if (fixture.startsWith("room-leader")) {
+    const runtime = slices.room.runtime!;
+    const media = runtime.media!;
+    slices.room = {
+      ...slices.room,
+      runtime: {
+        ...runtime,
+        media: {
+          ...media,
+          state: "DEGRADED",
+          errorCode: "STALE_MEDIA_CONTEXT",
+          localMembership: {
+            playbackGroupId: media.playbackGroups[0]!.playbackGroupId,
+            role: "LEADER",
+            activeDevice: true,
+          },
+        },
+      },
+    };
+    if (fixture === "room-leader-unshared")
+      slices.pageAccess = { ...slices.pageAccess, documentRevision: null };
+  }
   if (fixture === "room-unshared") {
     slices.pageAccess = {
       ...slices.pageAccess,

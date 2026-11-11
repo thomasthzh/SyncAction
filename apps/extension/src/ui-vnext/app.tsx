@@ -450,11 +450,16 @@ export function App({
   }
 
   function openPagePermission(intentKey: string, expectedUrl?: string): void {
+    const mediaSwitchGroupId = intentKey.startsWith("media-switch:")
+      ? CanonicalUuidSchema.parse(intentKey.slice("media-switch:".length))
+      : undefined;
     const mediaJoinGroupId = intentKey.startsWith("media-join:")
       ? CanonicalUuidSchema.parse(intentKey.slice("media-join:".length))
       : undefined;
     const feature =
-      intentKey === "media-create" || mediaJoinGroupId !== undefined
+      intentKey === "media-create" ||
+      mediaJoinGroupId !== undefined ||
+      mediaSwitchGroupId !== undefined
         ? "MEDIA_CONTROL"
         : intentKey === "danmaku"
           ? "DANMAKU"
@@ -484,7 +489,11 @@ export function App({
           current?.kind === "PAGE_PERMISSION" && current.intentKey === intentKey
             ? {
                 ...current,
-                intent: mediaJoinGroupId === undefined ? intent : { ...intent, mediaJoinGroupId },
+                intent: {
+                  ...intent,
+                  ...(mediaJoinGroupId === undefined ? {} : { mediaJoinGroupId }),
+                  ...(mediaSwitchGroupId === undefined ? {} : { mediaSwitchGroupId }),
+                },
                 preflightErrorCode: null,
               }
             : current,
@@ -673,9 +682,11 @@ export function App({
           feature={overlay.feature}
           {...(overlay.feature === "MEDIA_CONTROL"
             ? {
-                continuation: overlay.intentKey.startsWith("media-join:")
-                  ? ("JOIN_MEDIA_GROUP" as const)
-                  : ("CREATE_MEDIA_GROUP" as const),
+                continuation: overlay.intentKey.startsWith("media-switch:")
+                  ? ("SWITCH_MEDIA_GROUP" as const)
+                  : overlay.intentKey.startsWith("media-join:")
+                    ? ("JOIN_MEDIA_GROUP" as const)
+                    : ("CREATE_MEDIA_GROUP" as const),
               }
             : {})}
           origin={overlay.intent?.origin ?? store.pageAccess.value.origin ?? "当前页面不可授权"}

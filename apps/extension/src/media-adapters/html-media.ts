@@ -64,7 +64,7 @@ export class HtmlMediaAdapter implements MediaAdapter {
     const positionMs = clampInteger(
       secondsToMilliseconds(readFiniteNumber(() => this.#media.currentTime, 0)),
       0,
-      this.target.durationMs,
+      this.#effectiveDurationMs(),
     );
     const playbackRate = clamp(
       readFiniteNumber(() => this.#media.playbackRate, 1),
@@ -102,7 +102,7 @@ export class HtmlMediaAdapter implements MediaAdapter {
           break;
         case "SEEK":
           this.#media.currentTime =
-            clampInteger(command.action.positionMs, 0, this.target.durationMs) / 1_000;
+            clampInteger(command.action.positionMs, 0, this.#effectiveDurationMs()) / 1_000;
           break;
         case "SET_RATE":
           this.#media.playbackRate = clamp(
@@ -169,6 +169,13 @@ export class HtmlMediaAdapter implements MediaAdapter {
       code,
       observed: this.read(),
     };
+  }
+
+  #effectiveDurationMs(): number {
+    return Math.min(
+      this.target.durationMs,
+      readMediaDurationMs(this.#media) ?? this.target.durationMs,
+    );
   }
 }
 

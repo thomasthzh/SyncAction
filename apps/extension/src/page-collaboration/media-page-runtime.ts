@@ -111,6 +111,7 @@ export class MediaPageRuntime {
   #unsubscribe: (() => void) | undefined;
   #context: MediaPageContext | null = null;
   #requestedTarget: MediaTarget | null = null;
+  #invalidatedTarget: MediaTarget | null = null;
   #observer: MutationObserver | undefined;
   #rediscoveryTimer: number | undefined;
   #urlCheckTimer: number | undefined;
@@ -437,7 +438,7 @@ export class MediaPageRuntime {
       }
       return;
     }
-    if (this.#adapter !== adapter) {
+    if (this.#adapter !== adapter || adapter.isResourceInvalidated?.()) {
       if (result.applied && operation.action.type === "SET_RATE_TEMPORARY") {
         restoreAdapterRate(adapter, operation.action.restoreRate);
       }
@@ -512,20 +513,39 @@ export class MediaPageRuntime {
     const previousTarget = this.#adapter?.target ?? null;
     const previousObserved = this.#currentObservation()?.observed ?? null;
     const previousCode = this.#discoveryCode;
-    const result = discoverMediaAdapter({
-      document: this.#document,
-      window: this.#window,
-      context: {
-        logicalTabId: this.#context.logicalTabId,
-        documentRevision: this.#context.documentRevision,
-        frameKey: this.#context.frameKey,
-        pageUrl: this.#safePageUrl(),
-      },
-      ...(this.#requestedTarget === null ? {} : { target: structuredClone(this.#requestedTarget) }),
-      now: this.#now,
-    });
+    const previousAdapter = this.#adapter;
+    if (previousAdapter?.isResourceInvalidated?.())
+      this.#invalidatedTarget = previousAdapter.target;
+    const reusable =
+      previousAdapter?.target.provider === "BILIBILI" &&
+      previousAdapter.isResourceInvalidated !== undefined &&
+      isAdapterUsable(previousAdapter) &&
+      (this.#requestedTarget === null || sameTarget(previousAdapter.target, this.#requestedTarget));
+    const discovered = reusable
+      ? { adapter: previousAdapter, code: null }
+      : discoverMediaAdapter({
+          document: this.#document,
+          window: this.#window,
+          context: {
+            logicalTabId: this.#context.logicalTabId,
+            documentRevision: this.#context.documentRevision,
+            frameKey: this.#context.frameKey,
+            pageUrl: this.#safePageUrl(),
+          },
+          ...(this.#requestedTarget === null
+            ? {}
+            : { target: structuredClone(this.#requestedTarget) }),
+          now: this.#now,
+          readPageUrl: () => this.#safePageUrl(),
+        });
+    const result =
+      discovered.adapter !== null &&
+      this.#invalidatedTarget !== null &&
+      sameTarget(discovered.adapter.target, this.#invalidatedTarget)
+        ? { adapter: null, code: "MEDIA_NOT_FOUND" as const }
+        : discovered;
 
-    this.#stopAdapter();
+    if (!reusable || result.adapter === null) this.#stopAdapter();
     this.#lastRediscoveryAt = Date.now();
     if (result.adapter === null) {
       this.#discoveryCode = result.code;
@@ -559,9 +579,11 @@ export class MediaPageRuntime {
     this.#stopMetadataWakeListening();
     this.#adapter = adapter;
     this.#discoveryCode = null;
-    this.#unsubscribe = adapter.subscribe((event) => {
-      this.#handleDiscreteEvent(adapter, event);
-    });
+    if (!reusable) {
+      this.#unsubscribe = adapter.subscribe((event) => {
+        this.#handleDiscreteEvent(adapter, event);
+      });
+    }
     this.#syncFollowerInterceptor();
     const observed = adapter.read();
     this.#reportCapability("AVAILABLE", null, initial);
@@ -611,6 +633,10 @@ export class MediaPageRuntime {
     if (context === null) {
       return;
     }
+    if (adapter.isResourceInvalidated?.()) {
+      this.#scheduleRediscovery();
+      return;
+    }
     if (event.type === "DURATION_CHANGED" || event.type === "UNSUPPORTED") {
       this.#scheduleRediscovery();
       return;
@@ -639,6 +665,7 @@ export class MediaPageRuntime {
       return null;
     }
     try {
+      if (this.#adapter.isResourceInvalidated?.()) return null;
       return {
         target: this.#adapter.target,
         observed: this.#adapter.read(),
@@ -734,6 +761,7 @@ export class MediaPageRuntime {
   }
 
   #resetDiscoveryState(): void {
+    this.#invalidatedTarget = null;
     if (this.#rediscoveryTimer !== undefined) {
       this.#window.clearTimeout(this.#rediscoveryTimer);
       this.#rediscoveryTimer = undefined;
@@ -1018,6 +1046,7 @@ function toAdapterAction(action: MediaPageApplyAction): MediaApplyAction {
 
 function restoreAdapterRate(adapter: MediaAdapter, restoreRate: number): void {
   try {
+    if (adapter.isResourceInvalidated?.()) return;
     adapter.getMediaElement().playbackRate = restoreRate;
   } catch {
     // The media may have been removed; no external cleanup remains possible.

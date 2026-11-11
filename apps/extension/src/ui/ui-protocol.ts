@@ -714,6 +714,7 @@ export const UiCommandNameSchema = z.enum([
   "DANMAKU_VISIBILITY",
   "PEN_TOGGLE",
   "MEDIA_GROUP_CREATE",
+  "MEDIA_GROUP_SWITCH_CURRENT",
   "MEDIA_MEMBER_JUMP",
   "MEDIA_GROUP_ALIGN_ONCE",
   "MEDIA_GROUP_JOIN",
@@ -953,6 +954,15 @@ export const UiCommandSchema = z.discriminatedUnion("name", [
   commandWithPayload(
     "MEDIA_GROUP_CREATE",
     z.object({ expectedContext: MediaGroupCreateExpectedContextSchema }).strict().optional(),
+  ),
+  commandWithPayload(
+    "MEDIA_GROUP_SWITCH_CURRENT",
+    z
+      .object({
+        playbackGroupId: CanonicalUuidSchema,
+        expectedContext: MediaGroupCreateExpectedContextSchema,
+      })
+      .strict(),
   ),
   commandWithPayload("MEDIA_MEMBER_JUMP", z.object({ userId: CanonicalUuidSchema }).strict()),
   commandWithPayload(

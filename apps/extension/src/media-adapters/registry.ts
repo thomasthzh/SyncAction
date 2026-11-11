@@ -5,6 +5,7 @@ import {
   isKnownEncryptedMedia,
   isMediaMetadataPending,
   isPlayingMedia,
+  isRenderedMedia,
   isVisibleMedia,
   readMediaDurationMs,
   visibleMediaArea,
@@ -99,6 +100,16 @@ function createCandidateAdapter(
     context: options.context,
     durationMs,
     ...(options.now === undefined ? {} : { now: options.now }),
+    ...(options.readPageUrl === undefined ? {} : { readPageUrl: options.readPageUrl }),
+    isCurrentPrincipal: () =>
+      selectMediaElement(
+        pageMediaCandidates(
+          [...options.document.querySelectorAll<HTMLMediaElement>("video, audio")].filter(
+            (candidate) => isRenderedMedia(candidate, options.window),
+          ),
+          options.readPageUrl?.() ?? options.context.pageUrl,
+        ),
+      ) === media,
   };
   const providerAdapter =
     createYoutubeMediaAdapter(factoryOptions) ?? createBilibiliMediaAdapter(factoryOptions);

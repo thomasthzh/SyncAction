@@ -14,20 +14,23 @@ const requestedFixture = new URLSearchParams(globalThis.location.search).get("fi
 const fixture: VisualFixture =
   requestedFixture === "room-unshared"
     ? "room-unshared"
-    : requestedFixture === "room"
-      ? "room"
-      : requestedFixture === "guest"
-        ? "guest"
-        : "lobby";
+    : requestedFixture === "room-leader" || requestedFixture === "room-leader-unshared"
+      ? requestedFixture
+      : requestedFixture === "room"
+        ? "room"
+        : requestedFixture === "guest"
+          ? "guest"
+          : "lobby";
 document.documentElement.dataset.fixture = fixture;
 document.documentElement.dataset.visualStage = "true";
+const store = createVisualStore(fixture);
 
 render(
   requestedFixture?.startsWith("permission") ? (
     <PermissionPreview failed={requestedFixture === "permission-error"} />
   ) : (
     <App
-      store={createVisualStore(fixture)}
+      store={store}
       now={() => FIXTURE_NOW_MS}
       serviceStatusProbe={{ probe: async () => ({ latencyMs: 34 }) }}
     />

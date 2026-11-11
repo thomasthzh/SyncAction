@@ -8,11 +8,13 @@ import { ActionableStatus } from "./actionable-status.js";
 
 interface StartWatchingCardProps {
   readonly store: UiStore;
+  readonly playbackGroupId?: string;
   readonly onRequestPagePermission: (intentKey: string, expectedUrl?: string) => void;
 }
 
 export function StartWatchingCard({
   store,
+  playbackGroupId,
   onRequestPagePermission,
 }: StartWatchingCardProps): JSX.Element {
   const feedback = useCommandFeedback();
@@ -27,7 +29,8 @@ export function StartWatchingCard({
   const inFlight = useRef(false);
   const mounted = useRef(true);
   const membership = store.room.value.runtime?.media?.localMembership;
-  const hasGroup = membership !== null && membership !== undefined;
+  const switching = playbackGroupId !== undefined;
+  const hasGroup = membership !== null && membership !== undefined && !switching;
 
   useLayoutEffect(
     () => () => {
@@ -57,30 +60,31 @@ export function StartWatchingCard({
     // content equality is a separate gate for positional collaboration.
     const grant = store.pageAccess.value;
     if (!grant.browserPermissionGranted || !grant.termsAccepted) {
-      if (requestedUrl.current === null) onRequestPagePermission("media-create");
-      else onRequestPagePermission("media-create", requestedUrl.current);
+      const intent = switching ? `media-switch:${playbackGroupId}` : "media-create";
+      if (requestedUrl.current === null) onRequestPagePermission(intent);
+      else onRequestPagePermission(intent, requestedUrl.current);
       return;
     }
     const current = store.pageAccess.value;
     const tabId = current.tabId;
     const documentRevision = current.documentRevision;
     if (tabId === null || documentRevision === null) return;
+    const expectedContext = {
+      profileId: store.shell.value.selectedProfileId,
+      tabId,
+      documentRevision,
+      ...(requestedRoom.current === null ? {} : { roomId: requestedRoom.current }),
+      ...(requestedUrl.current === null ? {} : { url: requestedUrl.current }),
+    };
     await feedback.run(
-      "开始一起看",
+      switching ? "继续一起看" : "开始一起看",
       () =>
-        store.command({
-          name: "MEDIA_GROUP_CREATE",
-          payload: {
-            expectedContext: {
-              profileId: store.shell.value.selectedProfileId,
-              tabId,
-              documentRevision,
-              ...(requestedRoom.current === null ? {} : { roomId: requestedRoom.current }),
-              ...(requestedUrl.current === null ? {} : { url: requestedUrl.current }),
-            },
-          },
-        }),
-      "播放组已创建，邀请朋友加入跟随",
+        store.command(
+          playbackGroupId === undefined
+            ? { name: "MEDIA_GROUP_CREATE", payload: { expectedContext } }
+            : { name: "MEDIA_GROUP_SWITCH_CURRENT", payload: { playbackGroupId, expectedContext } },
+        ),
+      switching ? "已切换当前视频，同伴继续在原播放组跟随" : "播放组已创建，邀请朋友加入跟随",
     );
   }
 
@@ -119,6 +123,10 @@ export function StartWatchingCard({
     if (inFlight.current || hasGroup) return;
     if (!access.supported || access.tabId === null) {
       feedback.setErrorCode("PROTECTED_PAGE");
+      return;
+    }
+    if (switching && access.documentRevision === null) {
+      feedback.setErrorCode("MEDIA_PAGE_PUBLICATION_REQUIRED");
       return;
     }
     inFlight.current = true;
@@ -211,51 +219,61 @@ export function StartWatchingCard({
       data-watch-stage={visibleStage}
     >
       <div>
-        <h2 id="start-watching-heading">从当前视频开始一起看</h2>
+        <h2 id="start-watching-heading">
+          {switching ? "换个视频，继续一起看" : "从当前视频开始一起看"}
+        </h2>
         <p class="section-description">
-          {!pageShared
-            ? "先分享当前页面，再按需允许此网站的媒体同步。"
-            : !siteAllowed
-              ? "页面已共享，继续允许当前网站后才能创建播放组。"
-              : "页面与网站许可已具备，创建时仍会确认视频能否同步。"}
+          {switching
+            ? pageShared
+              ? "切换到当前视频，保留原播放组和同伴的跟随关系。"
+              : "先在插件底部提交页面更新，再继续原播放组。"
+            : !pageShared
+              ? "先分享当前页面，再按需允许此网站的媒体同步。"
+              : !siteAllowed
+                ? "页面已共享，继续允许当前网站后才能创建播放组。"
+                : "页面与网站许可已具备，创建时仍会确认视频能否同步。"}
         </p>
       </div>
-      <ol class="start-watching__steps" aria-label="开始观看的步骤">
-        <li data-step-state={pageShared ? "DONE" : "ACTIVE"}>
-          <span class="start-watching__step-number" aria-hidden="true">
-            1
-          </span>
-          <span>
-            共享页面
-            <small>
-              {pageShared
-                ? "已共享"
-                : stage === "WAITING_PAGE"
-                  ? "等待房间确认"
-                  : stage === "SHARING"
-                    ? "正在分享"
-                    : "从当前页开始"}
-            </small>
-          </span>
-        </li>
-        <li data-step-state={siteAllowed ? "DONE" : pageShared ? "ACTIVE" : "PENDING"}>
-          <span class="start-watching__step-number" aria-hidden="true">
-            2
-          </span>
-          <span>
-            网站许可<small>{siteAllowed ? "已允许" : "需要本人同意"}</small>
-          </span>
-        </li>
-        <li data-step-state={hasGroup ? "DONE" : pageShared && siteAllowed ? "ACTIVE" : "PENDING"}>
-          <span class="start-watching__step-number" aria-hidden="true">
-            3
-          </span>
-          <span>
-            创建播放组
-            <small>{hasGroup ? "已加入" : creating ? "确认视频中" : "确认可同步的视频"}</small>
-          </span>
-        </li>
-      </ol>
+      {!switching ? (
+        <ol class="start-watching__steps" aria-label="开始观看的步骤">
+          <li data-step-state={pageShared ? "DONE" : "ACTIVE"}>
+            <span class="start-watching__step-number" aria-hidden="true">
+              1
+            </span>
+            <span>
+              共享页面
+              <small>
+                {pageShared
+                  ? "已共享"
+                  : stage === "WAITING_PAGE"
+                    ? "等待房间确认"
+                    : stage === "SHARING"
+                      ? "正在分享"
+                      : "从当前页开始"}
+              </small>
+            </span>
+          </li>
+          <li data-step-state={siteAllowed ? "DONE" : pageShared ? "ACTIVE" : "PENDING"}>
+            <span class="start-watching__step-number" aria-hidden="true">
+              2
+            </span>
+            <span>
+              网站许可<small>{siteAllowed ? "已允许" : "需要本人同意"}</small>
+            </span>
+          </li>
+          <li
+            data-step-state={hasGroup ? "DONE" : pageShared && siteAllowed ? "ACTIVE" : "PENDING"}
+          >
+            <span class="start-watching__step-number" aria-hidden="true">
+              3
+            </span>
+            <span>
+              创建播放组
+              <small>{hasGroup ? "已加入" : creating ? "确认视频中" : "确认可同步的视频"}</small>
+            </span>
+          </li>
+        </ol>
+      ) : null}
       <button
         class="primary-button"
         data-start-watching-action
@@ -271,8 +289,12 @@ export function StartWatchingCard({
             : stage === "WAITING_PAGE"
               ? "正在准备共享页面…"
               : feedback.pending !== null
-                ? "正在创建播放组…"
-                : "开始一起看"}
+                ? switching
+                  ? "正在切换视频…"
+                  : "正在创建播放组…"
+                : switching
+                  ? "用当前视频继续一起看"
+                  : "开始一起看"}
       </button>
       <ActionableStatus errorCode={feedback.errorCode} />
       {feedback.message === null ? null : (

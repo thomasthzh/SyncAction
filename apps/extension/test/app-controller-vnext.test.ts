@@ -1633,6 +1633,33 @@ describe("ExtensionAppController vNext server hub", () => {
       "MEDIA_CONTEXT_CHANGED",
     );
     expect(runtime.createMediaGroup).toHaveBeenCalledTimes(2);
+    runtime.switchMediaGroupCurrent = vi.fn(async () => acknowledgement);
+    const switchCommand = {
+      ...command,
+      name: "MEDIA_GROUP_SWITCH_CURRENT",
+      payload: { playbackGroupId, expectedContext },
+    };
+    await expect(router.execute(switchCommand)).resolves.toEqual(acknowledgement);
+    expect(runtime.switchMediaGroupCurrent).toHaveBeenCalledWith(
+      playbackGroupId,
+      42,
+      expectedContext.documentRevision,
+    );
+    await expect(
+      router.execute({
+        ...switchCommand,
+        payload: {
+          playbackGroupId,
+          expectedContext: { ...expectedContext, profileId: profileBId },
+        },
+      }),
+    ).rejects.toThrow("PAGE_PERMISSION_INTENT_STALE");
+    vi.mocked(runtime.getPageDocumentRevision).mockResolvedValueOnce({
+      roomEpoch: 0,
+      tabUpdatedAtSeq: 2,
+    });
+    await expect(router.execute(switchCommand)).rejects.toThrow("MEDIA_CONTEXT_CHANGED");
+    expect(runtime.switchMediaGroupCurrent).toHaveBeenCalledOnce();
     vi.mocked(runtime.createMediaGroup!).mockRejectedValueOnce(new Error("MEDIA_NOT_READY"));
     await expect(router.execute(command)).rejects.toThrow("MEDIA_NOT_READY");
     vi.mocked(runtime.createMediaGroup!).mockRejectedValueOnce(

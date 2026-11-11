@@ -179,6 +179,32 @@ it.each(["CURRENT_TAB_SHARE", "CURRENT_TAB_SHARE_AS_NEW"] as const)(
   },
 );
 
+it("binds an explicit video switch to the original group, current tab and URL", async () => {
+  const expectedContext = {
+    profileId: "server-a",
+    roomId,
+    tabId: 42,
+    url: "https://news.example/article",
+    documentRevision: { roomEpoch: 0, tabUpdatedAtSeq: 2 },
+  };
+  const ready = createRouter();
+  await ready.router.execute(
+    command("MEDIA_GROUP_SWITCH_CURRENT", { playbackGroupId, expectedContext }),
+  );
+  expect(ready.calls).toEqual([
+    { method: "switchMediaGroupCurrent", args: [playbackGroupId, 42, expectedContext] },
+  ]);
+  const changed = createRouter({
+    tab: { id: 42, url: expectedContext.url, pendingUrl: "https://news.example/new" },
+  });
+  await expect(
+    changed.router.execute(
+      command("MEDIA_GROUP_SWITCH_CURRENT", { playbackGroupId, expectedContext }),
+    ),
+  ).rejects.toThrow("PAGE_PERMISSION_INTENT_STALE");
+  expect(changed.calls).toEqual([]);
+});
+
 const cases: Array<{
   name: UiCommand["name"];
   payload?: unknown;

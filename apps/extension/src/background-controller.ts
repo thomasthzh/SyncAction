@@ -954,6 +954,20 @@ export class BackgroundController {
     this.#notifyStatusChanged();
   }
 
+  public async switchMediaGroupCurrent(
+    playbackGroupId: string,
+    tabId: number,
+    expectedRevision: DocumentRevision,
+  ): Promise<MediaCommandAck> {
+    const acknowledgement = await this.#requireMediaController().switchGroupFromCurrentPage(
+      playbackGroupId,
+      tabId,
+      expectedRevision,
+    );
+    this.#notifyStatusChanged();
+    return acknowledgement;
+  }
+
   public async joinMediaGroup(playbackGroupId: string): Promise<MediaCommandAck> {
     const acknowledgement = await this.#requireMediaController().joinGroup(playbackGroupId);
     if (!acknowledgement.accepted) throw new Error(acknowledgement.code);

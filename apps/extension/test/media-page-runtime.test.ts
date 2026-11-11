@@ -1869,6 +1869,193 @@ describe("MediaPageRuntime", () => {
   });
 });
 
+describe("Bilibili same-piece continuity", () => {
+  function fixture(page = "https://www.bilibili.com/video/BV17x411w7KC?p=1&cid=123") {
+    vi.useFakeTimers();
+    vi.setSystemTime(fixedNow);
+    const metadata = { duration: 200, readyState: 4 };
+    const video = createVideoWithMetadata(metadata, 10);
+    const player = document.createElement("div");
+    player.id = "bilibili-player";
+    player.append(video);
+    document.body.append(player);
+    const emitted: MediaObservedMessage[] = [];
+    let pageUrl = page;
+    const runtime = new MediaPageRuntime({
+      document,
+      window,
+      surface: document.createElement("section"),
+      now: () => fixedNow,
+      readPageUrl: () => pageUrl,
+      emitObserved: (message) => emitted.push(message),
+    });
+    const observe = (target?: MediaObservedMessage["target"], nextContext = context) =>
+      runtime.handle({
+        type: "syncaction.media.command",
+        context: nextContext,
+        operation: { type: "OBSERVE", ...(target == null ? {} : { target }) },
+      });
+    observe();
+    const target = requireDiscoveredTarget(emitted);
+    return {
+      metadata,
+      video,
+      player,
+      runtime,
+      emitted,
+      target,
+      observe,
+      navigate: (url: string) => {
+        pageUrl = url;
+      },
+    };
+  }
+
+  it("keeps the accepted target and temporary correction during duration refinement, and clamps a real seek", async () => {
+    const value = fixture();
+    value.observe(value.target);
+    await value.runtime.handle({
+      type: "syncaction.media.command",
+      context,
+      operation: {
+        type: "APPLY",
+        target: value.target,
+        applyToken,
+        action: {
+          type: "SET_RATE_TEMPORARY",
+          playbackRate: 1.05,
+          restoreRate: 1,
+          durationMs: 3000,
+        },
+      },
+    });
+    value.metadata.duration = 199.31943;
+    value.video.dispatchEvent(new Event("durationchange"));
+    await vi.advanceTimersByTimeAsync(300);
+    expect(value.video.playbackRate).toBe(1.05);
+    expect(value.emitted.some((message) => message.event === "UNSUPPORTED")).toBe(false);
+    value.observe(value.target);
+    expect(value.emitted.at(-1)?.target).toEqual(value.target);
+    await value.runtime.handle({
+      type: "syncaction.media.command",
+      context,
+      operation: {
+        type: "APPLY",
+        target: value.target,
+        applyToken: secondApplyToken,
+        action: { type: "SEEK", positionMs: 200000 },
+      },
+    });
+    expect(value.video.currentTime).toBe(199.319);
+    expect(value.emitted.at(-1)?.resultCode).toBeNull();
+    value.video.dispatchEvent(new Event("ended"));
+    value.observe(value.target);
+    expect(value.emitted.at(-1)?.target).toEqual(value.target);
+    value.runtime.dispose();
+  });
+
+  it("rejects equal-duration part changes, never restores the old rate onto the new piece, and recovers on a published revision", async () => {
+    const value = fixture();
+    await value.runtime.handle({
+      type: "syncaction.media.command",
+      context,
+      operation: {
+        type: "APPLY",
+        target: value.target,
+        applyToken,
+        action: {
+          type: "SET_RATE_TEMPORARY",
+          playbackRate: 1.05,
+          restoreRate: 1,
+          durationMs: 3000,
+        },
+      },
+    });
+    value.navigate("https://www.bilibili.com/video/BV17x411w7KC?p=2&cid=456");
+    value.video.playbackRate = 1.5;
+    value.observe(value.target);
+    expect(value.emitted.at(-1)?.resultCode).toBe("MEDIA_NOT_FOUND");
+    await vi.advanceTimersByTimeAsync(3200);
+    expect(value.video.playbackRate).toBe(1.5);
+    value.navigate("https://www.bilibili.com/video/BV17x411w7KC?p=1&cid=123");
+    value.observe(value.target);
+    expect(value.emitted.at(-1)?.resultCode).toBe("MEDIA_NOT_FOUND");
+    value.observe(null, {
+      ...context,
+      documentRevision: { ...context.documentRevision, tabUpdatedAtSeq: 5 },
+    });
+    expect(value.emitted.at(-1)?.target?.documentRevision.tabUpdatedAtSeq).toBe(5);
+    value.runtime.dispose();
+  });
+
+  it.each(["loadstart", "emptied", "encrypted"])(
+    "does not inherit an old target after %s",
+    (event) => {
+      const value = fixture();
+      value.video.dispatchEvent(new Event(event));
+      value.observe(value.target);
+      expect(value.emitted.at(-1)?.target).toBeNull();
+      value.runtime.dispose();
+    },
+  );
+
+  it("keeps unknown pieces strict and discovers SPA AV changes instead of reusing an unproved adapter", () => {
+    const value = fixture("https://www.bilibili.com/video/BV17x411w7KC");
+    value.metadata.duration = 199.31943;
+    value.observe(value.target);
+    expect(value.emitted.at(-1)?.resultCode).toBe("MEDIA_NOT_FOUND");
+    value.navigate("https://www.bilibili.com/video/av170002");
+    value.observe();
+    expect(value.emitted.at(-1)?.target?.mediaKey).toBe("bilibili:av170002");
+    value.runtime.dispose();
+  });
+
+  it("does not retain a former player when a new principal candidate appears", () => {
+    const value = fixture();
+    const replacement = createVideo(200, 20);
+    Object.defineProperty(replacement, "paused", { configurable: true, value: false });
+    value.player.append(replacement);
+    value.observe(value.target);
+    expect(value.emitted.at(-1)?.resultCode).toBe("MEDIA_NOT_FOUND");
+    value.runtime.dispose();
+  });
+
+  it("keeps the same refined video when scrolling it outside the viewport", () => {
+    const value = fixture();
+    value.metadata.duration = 199.31943;
+    value.video.getBoundingClientRect = () => domRect(0, -1000, 640, 360);
+    value.observe(value.target);
+    expect(value.emitted.at(-1)?.target).toEqual(value.target);
+    value.video.getBoundingClientRect = () => domRect(0, 0, 640, 360);
+    value.observe(value.target);
+    expect(value.emitted.at(-1)?.target).toEqual(value.target);
+    value.runtime.dispose();
+  });
+
+  it("does not acknowledge an old target when the piece changes during an awaited play", async () => {
+    const value = fixture();
+    const pending = createDeferred<void>();
+    Object.defineProperty(value.video, "play", {
+      configurable: true,
+      value: () => pending.promise,
+    });
+    const applying = value.runtime.handle({
+      type: "syncaction.media.command",
+      context,
+      operation: { type: "APPLY", target: value.target, applyToken, action: { type: "PLAY" } },
+    });
+    value.navigate("https://www.bilibili.com/video/BV17x411w7KC?p=2&cid=456");
+    pending.resolve();
+    await applying;
+    expect(value.emitted.at(-1)).toMatchObject({
+      event: "APPLY_RESULT",
+      resultCode: "TARGET_MISMATCH",
+      target: null,
+    });
+    value.runtime.dispose();
+  });
+});
+
 function createRuntime(emitted: MediaObservedMessage[]): MediaPageRuntime {
   return new MediaPageRuntime({
     document,

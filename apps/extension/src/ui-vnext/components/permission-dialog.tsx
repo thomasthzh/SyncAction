@@ -12,7 +12,7 @@ export interface PermissionDialogProps {
   readonly browserPermission: string;
   readonly termsVersion: string;
   readonly privacyPageUrl: string;
-  readonly continuation?: "CREATE_MEDIA_GROUP" | "JOIN_MEDIA_GROUP";
+  readonly continuation?: "CREATE_MEDIA_GROUP" | "JOIN_MEDIA_GROUP" | "SWITCH_MEDIA_GROUP";
   readonly ready?: boolean;
   readonly externalErrorCode?: string | null;
   readonly onConfirm: (agreed: boolean) => PermissionConfirmation | Promise<PermissionConfirmation>;
@@ -54,9 +54,11 @@ export function PermissionDialog({
   }, []);
   const nextAction =
     feature === "MEDIA_CONTROL"
-      ? continuation === "JOIN_MEDIA_GROUP"
-        ? "加入原播放组，跟随领播者播放"
-        : "从当前视频创建播放组"
+      ? continuation === "SWITCH_MEDIA_GROUP"
+        ? "用当前视频继续原播放组，同伴保持跟随"
+        : continuation === "JOIN_MEDIA_GROUP"
+          ? "加入原播放组，跟随领播者播放"
+          : "从当前视频创建播放组"
       : feature === "DANMAKU"
         ? "打开当前页面的弹幕输入框"
         : feature === "DRAWING"
