@@ -534,6 +534,106 @@ async function observe(
 }
 
 describe("creating a playback group from the current shared page", () => {
+  it("prepares without waiting on its caller queue and resumes its real follower membership without rejoining", async () => {
+    const value = harness();
+    await connect(value);
+    const bindings = value.replicaRecord.bindings;
+    value.replicaRecord.bindings = [];
+    await value.controller.handleBindingsChanged();
+    value.replicaRecord.bindings = bindings;
+    await value.controller.handleBindingsChanged();
+    await value.controller.prepareGroup(playbackGroupId, target);
+    expect(value.controller.getStatus()).toMatchObject({
+      controlReady: false,
+      localObservation: null,
+      localMembership: { role: "FOLLOWER" },
+    });
+    await observe(value, { ...playing, paused: true, positionMs: 0 });
+    expect(value.controller.getStatus().controlReady).toBe(false);
+    await value.controller.joinGroup(playbackGroupId, target);
+    expect(value.transport.commands).toEqual([]);
+    expect(value.controller.getStatus()).toMatchObject({
+      controlReady: true,
+      errorCode: null,
+      localMembership: { playbackGroupId, role: "FOLLOWER" },
+    });
+    expect(value.page.applies.some((apply) => apply.action.type === "PLAY")).toBe(true);
+  });
+
+  it("rejects a changed target before preparation and never applies or sends a join", async () => {
+    const value = harness();
+    await connect(value);
+    value.page.applies.length = 0;
+    await expect(
+      value.controller.prepareGroup(playbackGroupId, sameDocumentSecondTarget),
+    ).rejects.toThrow("MEDIA_TARGET_CHANGED");
+    await expect(
+      value.controller.joinGroup(playbackGroupId, sameDocumentSecondTarget),
+    ).rejects.toThrow("MEDIA_TARGET_CHANGED");
+    expect(value.page.applies).toEqual([]);
+    expect(value.transport.commands).toEqual([]);
+  });
+
+  it("bounds follower resume and prevents a delayed native action from committing ready", async () => {
+    const value = harness();
+    await connect(value);
+    const bindings = value.replicaRecord.bindings;
+    value.replicaRecord.bindings = [];
+    await value.controller.handleBindingsChanged();
+    value.replicaRecord.bindings = bindings;
+    await value.controller.handleBindingsChanged();
+    await value.controller.prepareGroup(playbackGroupId, target);
+    await observe(value, { ...playing, paused: true, positionMs: 0 });
+    value.page.applies.length = 0;
+    let complete!: () => void;
+    value.page.applyBarrier = new Promise((resolve) => {
+      complete = resolve;
+    });
+    const joining = value.controller.joinGroup(playbackGroupId, target);
+    const rejection = expect(joining).rejects.toThrow("MEDIA_FOLLOW_TIMEOUT");
+    await vi.waitFor(() => expect(value.page.applies).toHaveLength(1));
+    value.scheduler.advanceBy(5_000);
+    await rejection;
+    const count = value.page.applies.length;
+    const oldToken = value.page.applies[0]!.applyToken;
+    complete();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(value.controller.getStatus()).toMatchObject({
+      controlReady: false,
+      errorCode: "MEDIA_FOLLOW_TIMEOUT",
+    });
+    expect(value.page.applies).toHaveLength(count);
+    value.page.applyBarrier = undefined;
+    await value.controller.joinGroup(playbackGroupId, target);
+    expect(value.controller.getStatus().controlReady).toBe(true);
+    await value.controller.handleMediaObserved(
+      10,
+      0,
+      observedMessage(playing, {
+        event: "APPLY_RESULT",
+        applyToken: oldToken,
+        resultCode: "AUTOPLAY_BLOCKED",
+      }),
+    );
+    expect(value.controller.getStatus()).toMatchObject({ controlReady: true, errorCode: null });
+  });
+
+  it("does not automatically control a ready follower while its new observation is being prepared", async () => {
+    const value = harness();
+    await connect(value);
+    await observe(value);
+    value.page.applies.length = 0;
+    await value.controller.prepareGroup(playbackGroupId, target);
+    await observe(value, { ...playing, paused: true, positionMs: 0 });
+    expect(value.page.applies).toEqual([]);
+    expect(value.controller.getStatus()).toMatchObject({
+      controlReady: false,
+      localObservation: { target },
+      localMembership: { role: "FOLLOWER" },
+    });
+  });
+
   it("switches a stale target on the leader's current published page without recreating the group", async () => {
     const value = harness({ userId: leaderUserId, deviceId: leaderDeviceId });
     await connect(value);
@@ -1046,7 +1146,8 @@ describe("MediaController", () => {
     expect(value.controller.getStatus()).toMatchObject({
       state: "DEGRADED",
       errorCode: "MEDIA_MISMATCH",
-      localMembership: null,
+      localMembership: { playbackGroupId, role: "FOLLOWER", activeDevice: true },
+      controlReady: false,
     });
   });
 
@@ -1063,7 +1164,8 @@ describe("MediaController", () => {
     expect(value.controller.getStatus()).toMatchObject({
       errorCode: "MEDIA_MISMATCH",
       localObservation: null,
-      localMembership: null,
+      localMembership: { playbackGroupId, role: "FOLLOWER", activeDevice: true },
+      controlReady: false,
     });
     const before = value.page.observations.length;
     const appliesBefore = value.page.applies.length;
@@ -1071,7 +1173,11 @@ describe("MediaController", () => {
     expect(value.page.observations).toHaveLength(before);
     await observe(value);
     expect(value.page.applies).toHaveLength(appliesBefore);
-    expect(value.controller.getStatus().localObservation).toBeNull();
+    expect(value.controller.getStatus()).toMatchObject({
+      localObservation: { target },
+      controlReady: false,
+      errorCode: "MEDIA_MISMATCH",
+    });
     compatibility.mediaCompatible = true;
     const bindings = value.replicaRecord.bindings;
     value.replicaRecord.bindings = [];
@@ -1540,7 +1646,8 @@ describe("MediaController", () => {
     expect(value.controller.getStatus()).toMatchObject({
       state: "DEGRADED",
       errorCode: "MEDIA_TARGET_UNBOUND",
-      localMembership: null,
+      localMembership: { playbackGroupId, role: "FOLLOWER", activeDevice: true },
+      controlReady: false,
     });
     expect(value.navigation.activated).toEqual([]);
     expect(value.page.observations).toEqual([]);
@@ -4066,13 +4173,17 @@ describe("MediaController", () => {
     expect(value.page.playbackRate).toBe(1);
     expect(value.controller.getStatus()).toMatchObject({
       localObservation: null,
-      localMembership: null,
+      localMembership: { playbackGroupId, role: "FOLLOWER", activeDevice: true },
+      controlReady: false,
       recommendedPlaybackGroupId: null,
     });
 
     value.replicaRecord.bindings = originalBindings;
     await value.controller.handleBindingsChanged();
-    expect(value.controller.getStatus().localMembership).toBeNull();
+    expect(value.controller.getStatus()).toMatchObject({
+      localMembership: { playbackGroupId, role: "FOLLOWER" },
+      controlReady: false,
+    });
 
     value.transport.emit(snapshot([group()], 3));
     await value.controller.whenIdle();
@@ -4083,7 +4194,7 @@ describe("MediaController", () => {
     });
   });
 
-  it("invalidates membership when its target binding disappears before page observation", async () => {
+  it("retains server participation while invalidating local control when its binding disappears", async () => {
     const value = harness();
     await connect(value);
     expect(value.controller.getStatus().localMembership?.role).toBe("FOLLOWER");
@@ -4093,7 +4204,8 @@ describe("MediaController", () => {
 
     expect(value.controller.getStatus()).toMatchObject({
       localObservation: null,
-      localMembership: null,
+      localMembership: { playbackGroupId, role: "FOLLOWER", activeDevice: true },
+      controlReady: false,
       recommendedPlaybackGroupId: null,
       errorCode: "STALE_MEDIA_CONTEXT",
     });

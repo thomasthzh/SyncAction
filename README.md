@@ -13,24 +13,24 @@ SyncAction 是面向 Chrome 与 Edge 的多人共享浏览器工作区。成员�
 `https://syncaction.example.com`
 是占位地址，安装后请在扩展顶栏配置实际服务器；服务端必须自行初始化管理员，不含默认账号密码。
 
-## v0.9.16 下载
+## v0.9.19 下载
 
-从 [v0.9.16 Release](https://github.com/thomasthzh/SyncAction/releases/tag/v0.9.16) 下载：
+从 [v0.9.19 Release](https://github.com/thomasthzh/SyncAction/releases/tag/v0.9.19) 下载：
 
 | 资产                                                                                                                     | 用途                                           |
 | ------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------- |
-| [Chrome 客户端](https://github.com/thomasthzh/SyncAction/releases/download/v0.9.16/SyncAction-client-chrome-v0.9.16.zip) | 解压后在 Chrome 加载扩展                       |
-| [Edge 客户端](https://github.com/thomasthzh/SyncAction/releases/download/v0.9.16/SyncAction-client-edge-v0.9.16.zip)     | 解压后在 Edge 加载扩展                         |
-| [服务端](https://github.com/thomasthzh/SyncAction/releases/download/v0.9.16/SyncAction-server-v0.9.16.tar.gz)            | 公共服务、管理员服务、数据库模块和通用部署源码 |
-| [SHA256SUMS.txt](https://github.com/thomasthzh/SyncAction/releases/download/v0.9.16/SHA256SUMS.txt)                      | 三个安装资产的 SHA-256 校验值                  |
+| [Chrome 客户端](https://github.com/thomasthzh/SyncAction/releases/download/v0.9.19/SyncAction-client-chrome-v0.9.19.zip) | 解压后在 Chrome 加载扩展                       |
+| [Edge 客户端](https://github.com/thomasthzh/SyncAction/releases/download/v0.9.19/SyncAction-client-edge-v0.9.19.zip)     | 解压后在 Edge 加载扩展                         |
+| [服务端](https://github.com/thomasthzh/SyncAction/releases/download/v0.9.19/SyncAction-server-v0.9.19.tar.gz)            | 公共服务、管理员服务、数据库模块和通用部署源码 |
+| [SHA256SUMS.txt](https://github.com/thomasthzh/SyncAction/releases/download/v0.9.19/SHA256SUMS.txt)                      | 三个安装资产的 SHA-256 校验值                  |
 
-安装与升级分别见[客户端指南](docs/client.md)、[服务端指南](docs/server.md)，变更见[发布说明](docs/releases/v0.9.16.md)。客户端 ZIP 不是浏览器商店安装包；服务端 tarball 不含客户端。
+安装与升级分别见[客户端指南](docs/client.md)、[服务端指南](docs/server.md)，变更见[发布说明](docs/releases/v0.9.19.md)。客户端 ZIP 不是浏览器商店安装包；服务端 tarball 不含客户端。
 
 ### 本版变化
 
-- 新安装先验证并连接实际服务器；注册待批准、批准后登录与入房目标续接有明确入口。
-- 空播放组提供“开始一起看”，串联页面分享、网站同意与有效媒体建组；失败可重试，切换上下文会作废旧意图。
-- 慢业务请求期间仍可读取最近已提交的侧栏状态，状态读取不触发存储写入。
+- “打开并一起看”直接打开选定视频，按需授权并识别后参与跟随；控制中断时保留真实参与身份。
+- 入房申请保留进度，关闭侧栏也不丢失已确认结果；支持查看进度、批准后进入和撤回。
+- 邀请逐人显示结果，只保留失败成员重试；播放器跟随有界等待，浏览器恢复只报告实际结果。
 
 - 320–480px 紧凑侧栏采用真实边缘折射、局部高光和轻量流线背景；玻璃层不扭曲文字与按钮。
 - 观看工作面集中显示当前视频、领播者、进度与本人设备参与状态；多个播放组可切换查看，查看不会改变跟随关系。

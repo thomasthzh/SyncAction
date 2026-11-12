@@ -6,6 +6,7 @@ import { Icon } from "../icons.js";
 import { createSharedTabRows, type PageCompatibility } from "../../ui/collaboration-view-model.js";
 import { createMediaViewModel, type MediaViewIntent } from "../../ui/media-view-model.js";
 import { ActionableStatus, type StatusRecoveryAction } from "./actionable-status.js";
+import { recoveryResult } from "../recovery-result.js";
 import { BottomActionDock } from "./bottom-action-dock.js";
 import { WatchWorkspace } from "./watch-workspace.js";
 import { SharedTabRow } from "./shared-tab-row.js";
@@ -15,6 +16,8 @@ import { useCommandFeedback } from "../use-command-feedback.js";
 import type { UiCommandInput } from "../store.js";
 import { WorkspaceTabs } from "./workspace-tabs.js";
 import { RoomMembersWorkspace } from "./room-members-workspace.js";
+import { useWatchParticipation } from "../use-watch-participation.js";
+import type { PagePermissionRequester } from "../../origin-permission-coordinator.js";
 
 export interface ActiveRoomProps {
   readonly store: UiStore;
@@ -23,7 +26,7 @@ export interface ActiveRoomProps {
   readonly onOpenServerProfiles: () => void;
   readonly onOpenInvite: () => void;
   readonly onOpenRoomLifecycle: () => void;
-  readonly onRequestPagePermission: (intentKey: string, expectedUrl?: string) => void;
+  readonly onRequestPagePermission: PagePermissionRequester;
 }
 
 export function ActiveRoom({
@@ -46,6 +49,7 @@ export function ActiveRoom({
       ? activeElement
       : null;
   const feedback = useCommandFeedback();
+  const participation = useWatchParticipation(store, onRequestPagePermission);
   const shell = store.shell.value;
   const room = store.room.value;
   const collaboration = store.collaboration.value;
@@ -162,18 +166,14 @@ export function ActiveRoom({
           : "需处理";
 
   function sendMediaIntent(intent: MediaViewIntent): void {
-    const access = store.pageAccess.value;
-    if (
-      intent.type === "JOIN_GROUP" &&
-      (!access.browserPermissionGranted || !access.termsAccepted)
-    ) {
-      onRequestPagePermission(`media-join:${intent.playbackGroupId}`);
+    if (intent.type === "JOIN_GROUP") {
+      void participation.follow(intent.playbackGroupId);
       return;
     }
     void feedback.run("media", () => store.command(mediaCommand(intent)));
   }
 
-  function mediaCommand(intent: MediaViewIntent): UiCommandInput {
+  function mediaCommand(intent: Exclude<MediaViewIntent, { type: "JOIN_GROUP" }>): UiCommandInput {
     switch (intent.type) {
       case "JUMP_TO_MEMBER":
         return {
@@ -185,26 +185,6 @@ export function ActiveRoom({
           name: "MEDIA_GROUP_ALIGN_ONCE",
           payload: { playbackGroupId: intent.playbackGroupId },
         };
-      case "JOIN_GROUP": {
-        const access = store.pageAccess.value;
-        const roomId = store.room.value.selectedRoomId;
-        return {
-          name: "MEDIA_GROUP_JOIN",
-          payload: {
-            playbackGroupId: intent.playbackGroupId,
-            ...(access.tabId === null || access.documentRevision === null
-              ? {}
-              : {
-                  expectedContext: {
-                    profileId: store.shell.value.selectedProfileId,
-                    tabId: access.tabId,
-                    documentRevision: access.documentRevision,
-                    ...(roomId === null ? {} : { roomId }),
-                  },
-                }),
-          },
-        };
-      }
       case "LEAVE_GROUP":
         return {
           name: "MEDIA_GROUP_LEAVE",
@@ -235,13 +215,29 @@ export function ActiveRoom({
   function recover(action: StatusRecoveryAction): void {
     switch (action) {
       case "CONFIRM_RECOVERY":
-        void store.command({ name: "BROWSER_RECOVERY_CONFIRM" });
+        if (store.room.value.selectedRoomId === null) return;
+        void feedback.run(
+          "recovery",
+          async () =>
+            recoveryResult(
+              await store.command({
+                name: "BROWSER_RECOVERY_CONFIRM",
+                payload: {
+                  expectedContext: {
+                    profileId: store.shell.value.selectedProfileId,
+                    roomId: store.room.value.selectedRoomId!,
+                  },
+                },
+              }),
+            ),
+          "房间页面已恢复同步",
+        );
         return;
       case "ALLOW_PAGE":
         onRequestPagePermission("page-collaboration");
         return;
       case "RETRY":
-        void store.command({ name: "PAGE_PERMISSION_REFRESH" });
+        void feedback.run("refresh-page", () => store.command({ name: "PAGE_PERMISSION_REFRESH" }));
         return;
       case "SWITCH_SERVER":
       case "UPGRADE_CLIENT":
@@ -298,7 +294,11 @@ export function ActiveRoom({
         ]}
       />
 
-      <ActionableStatus statusCode={statusCode} onAction={recover} />
+      <ActionableStatus
+        statusCode={statusCode}
+        onAction={recover}
+        pending={feedback.pending !== null}
+      />
       {workspace !== "watch" && pendingOwnProposals > 0 ? (
         <button
           class="workspace-pending-action"
@@ -316,6 +316,11 @@ export function ActiveRoom({
         </button>
       ) : null}
       <ActionableStatus errorCode={feedback.errorCode} />
+      {feedback.message !== null ? (
+        <p class="command-feedback" role="status">
+          {feedback.message}
+        </p>
+      ) : null}
       {feedback.pending === "media" ? (
         <p class="command-feedback" role="status">
           正在执行播放操作…
@@ -332,6 +337,26 @@ export function ActiveRoom({
         aria-labelledby="room-workspace-tab-watch"
         hidden={workspace !== "watch"}
       >
+        {participation.phase === null ? null : (
+          <p class="watch-preparation" role="status" data-watch-preparation={participation.phase}>
+            <span class="watch-preparation__spinner" aria-hidden="true" />
+            {participation.phase === "PERMISSION"
+              ? "等待允许视频页面…"
+              : participation.phase === "WAITING_MEDIA"
+                ? "正在识别这段视频…"
+                : participation.phase === "OPENING"
+                  ? "正在打开你选择的视频…"
+                  : participation.phase === "WAITING_PAGE"
+                    ? "等待视频页面就绪…"
+                    : "正在准备本设备跟随…"}
+          </p>
+        )}
+        <ActionableStatus errorCode={participation.errorCode} />
+        {participation.message === null ? null : (
+          <p class="command-feedback" role="status">
+            {participation.message}
+          </p>
+        )}
         {watchAwaiting ? (
           <section
             class="start-watching watch-workspace editorial-surface"
@@ -354,7 +379,7 @@ export function ActiveRoom({
             media={media}
             currentUserId={currentUserId}
             onIntent={sendMediaIntent}
-            busy={feedback.pending === "media"}
+            busy={feedback.pending === "media" || participation.busy}
           />
         ) : null}
         {watchConnected &&

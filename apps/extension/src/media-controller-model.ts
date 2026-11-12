@@ -37,6 +37,7 @@ export interface MediaNavigationStatus {
 
 export interface MediaControllerStatus {
   state: "OFFLINE" | "ONLINE" | "DEGRADED";
+  controlReady?: boolean | undefined;
   roomMediaRevision: number | null;
   playbackGroups: PlaybackGroupSnapshot[];
   localObservation: MediaLocalObservationView | null;
@@ -189,17 +190,20 @@ export function projectMediaControllerStatus(input: {
   navigation: MediaNavigationStatus[];
   nowMs: number;
 }): MediaControllerStatus {
-  const confirmedMembership = deriveMediaMembership(input.groups, input.userId, input.deviceId);
-  // Losing the old target stops control, but does not remove the server's
-  // leader assignment. Keep that identity visible so an explicit switch can recover.
-  const membership =
-    input.controlStateValid || confirmedMembership?.role === "LEADER" ? confirmedMembership : null;
+  // Membership is a server fact. A local target/permission failure stops control,
+  // not participation, and must not invite the same person to join a second time.
+  const membership = deriveMediaMembership(input.groups, input.userId, input.deviceId);
   const recommendation =
     input.controlStateValid && membership === null && input.localObservation !== null
       ? recommendGroup(input.groups, input.localObservation.target, input.nowMs)
       : undefined;
   return {
     state: !input.synchronized ? "OFFLINE" : input.errorCode === null ? "ONLINE" : "DEGRADED",
+    controlReady:
+      input.synchronized &&
+      input.controlStateValid &&
+      input.errorCode === null &&
+      input.localObservation !== null,
     roomMediaRevision: input.roomMediaRevision,
     playbackGroups: structuredClone(input.groups),
     localObservation:

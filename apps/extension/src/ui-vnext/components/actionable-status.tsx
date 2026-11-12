@@ -15,6 +15,11 @@ const ERROR_LABELS: Readonly<Record<string, string>> = {
   MEDIA_NOT_FOUND: "当前视频已变化，请提交页面更新后，用当前视频继续一起看",
   MEDIA_ALREADY_IN_GROUP: "你已在播放组中，可以邀请朋友加入跟随",
   MEDIA_CONTEXT_CHANGED: "页面或房间已变化，请从当前视频重新发起操作",
+  MEDIA_TARGET_CHANGED: "领播的视频已变化，请重新选择一起看",
+  MEDIA_DEVICE_READ_ONLY: "此播放组正由你的另一台设备参与，请先选择在此设备接管",
+  MEDIA_TARGET_PAGE_PREPARING: "视频页面尚未就绪。页面已保留，准备好后可再次继续一起看",
+  MEDIA_FOLLOW_RESULT_UNCONFIRMED: "跟随结果仍待确认，请查看当前视频状态后再继续",
+  MEDIA_FOLLOW_TIMEOUT: "视频尚未响应跟随操作，房间仍保留，请检查视频后重试",
   STALE_MEDIA_CONTEXT: "共享页面已变化，请重新打开视频后再试",
   SHARE_PAGE_LOADING: "页面仍在加载，当前页面未分享，请加载完成后重试",
   SHARE_NOT_SUBMITTED: "当前页面未分享，请确认当前标签页可用后重试",
@@ -31,6 +36,18 @@ const ERROR_LABELS: Readonly<Record<string, string>> = {
   ROOM_CAPACITY_REACHED: "本服务器普通用户同时最多创建 5 个房间",
   ROOM_NOT_FOUND: "房间不存在或已关闭",
   ROOM_OWNER_REQUIRED: "只有房主可以执行此操作",
+  ROOM_CONTEXT_CHANGED: "房间或账号已变化，请从当前房间重新操作",
+  ROOM_NOT_AVAILABLE: "目标房间暂不可加入，请刷新房间列表或联系房主",
+  ROOM_JOIN_IN_PROGRESS: "正在处理加入任务，请稍候",
+  ROOM_JOIN_ALREADY_REQUESTED: "申请已提交，可在加入任务中查看进度",
+  ROOM_JOIN_RESULT_UNCONFIRMED: "尚未确认申请结果，已保留目标房间，请查看进度后再试",
+  ROOM_JOIN_PROGRESS_NOT_SAVED: "无法保存加入进度，请保持侧栏打开后重试",
+  INVITE_RESULT_UNCONFIRMED: "邀请结果尚未确认，已保留所选成员，请刷新房间后再决定是否重试",
+  BROWSER_RECOVERY_RESULT_UNKNOWN: "尚未确认恢复结果，请检查当前房间页面后再试",
+  BROWSER_RECOVERY_CONFIRMATION_REQUIRED: "仍有房间页面等待恢复，请检查恢复提示后继续",
+  BROWSER_RECOVERY_API_FAILURE: "浏览器未完成页面恢复，请稍后重试",
+  BROWSER_RECOVERY_CIRCUIT_BREAKER: "连续恢复未成功，已暂停自动操作，请检查房间窗口后重试",
+  BROWSER_RECOVERY_BLOCKED: "房间页面的绑定状态尚未就绪，请检查房间窗口后重试恢复",
   INVALID_SERVER_URL: "服务器地址无效",
   PAGE_PERMISSION_DENIED: "未授予当前网站权限",
   PAGE_PERMISSION_AGREEMENT_REQUIRED: "请先阅读并同意页面协作说明",
@@ -173,6 +190,7 @@ export interface ActionableStatusProps {
   readonly statusCode?: string | null;
   readonly id?: string;
   readonly onAction?: (action: StatusRecoveryAction) => void;
+  readonly pending?: boolean;
 }
 
 export function ActionableStatus({
@@ -180,6 +198,7 @@ export function ActionableStatus({
   statusCode = null,
   id,
   onAction,
+  pending = false,
 }: ActionableStatusProps): preact.JSX.Element | null {
   const definition = statusCode === null ? null : (STATUS_DEFINITIONS[statusCode] ?? null);
   if (errorCode === null && definition === null) {
@@ -195,8 +214,13 @@ export function ActionableStatus({
       definition?.action !== undefined &&
       definition.actionLabel !== null &&
       onAction !== undefined ? (
-        <button class="text-button" type="button" onClick={() => onAction(definition.action!)}>
-          {definition.actionLabel}
+        <button
+          class="text-button"
+          type="button"
+          disabled={pending}
+          onClick={() => onAction(definition.action!)}
+        >
+          {pending ? "正在处理…" : definition.actionLabel}
         </button>
       ) : null}
     </div>

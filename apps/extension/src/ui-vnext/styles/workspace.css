@@ -1,4 +1,38 @@
 /* Task navigation stays outside the one scrolling content plane in each workspace. */
+.room-destination {
+  margin: 0 0 16px;
+  padding: 18px;
+  border-inline-start: 3px solid var(--sa-accent);
+}
+
+.room-destination h2 {
+  margin: 5px 0 10px;
+  overflow-wrap: anywhere;
+}
+
+.room-destination__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  margin-top: 14px;
+}
+
+.invite-roster,
+.invite-outcomes {
+  min-width: 0;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--sa-accent-soft);
+  overflow-wrap: anywhere;
+}
+
+.invite-roster > strong,
+.invite-outcomes p {
+  display: block;
+  margin: 0 0 6px;
+}
+
 .workspace-tabs {
   flex: none;
   min-width: 0;

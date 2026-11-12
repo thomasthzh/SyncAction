@@ -9,6 +9,7 @@ import {
   type RoomEventMessage,
 } from "@syncaction/protocol";
 import { describe, expect, it, vi } from "vitest";
+import { createPendingRoomJoinStorage } from "../src/pending-room-join.js";
 import {
   SyncActionApiError,
   type PublicAccount,
@@ -592,6 +593,7 @@ function apiFixture(
 }
 
 function createApp(input: {
+  area?: MemoryArea;
   profiles: FakeProfiles;
   sessions?: FakeSessions;
   apis: Map<string, ExtensionProductApi>;
@@ -605,7 +607,7 @@ function createApp(input: {
   const runtimeEvents: string[] = [];
   const app = new ExtensionAppController({
     deviceId,
-    area: new MemoryArea(),
+    area: input.area ?? new MemoryArea(),
     profiles: input.profiles,
     sessions,
     clientVersion: "0.9.0",
@@ -622,6 +624,39 @@ function createApp(input: {
 }
 
 describe("ExtensionAppController vNext server hub", () => {
+  it("persists the authoritative application identity in the background when its sidebar is gone", async () => {
+    const selected = profile(profileAId, serverAUrl, serverAId);
+    const sessions = new FakeSessions();
+    sessions.seed(profileAId, serverAUrl, serverAId);
+    const area = new MemoryArea();
+    const pending = createPendingRoomJoinStorage(area);
+    await pending.write({
+      version: 1,
+      profileId: profileAId,
+      serverOrigin: serverAUrl,
+      serverId: serverAId,
+      roomId,
+      roomName: "一起看",
+      joinPolicy: "APPROVAL",
+      stage: "READY",
+      accountId: userId,
+    });
+    const api = apiFixture("a", selected.metadata!, []);
+    const { app } = createApp({
+      area,
+      profiles: new FakeProfiles([selected], profileAId),
+      sessions,
+      apis: new Map([[serverAUrl, api]]),
+    });
+    await app.start();
+    const request = await app.requestRoomJoin(roomId);
+    expect(request.requestId).toBe(requestId);
+    expect(await createPendingRoomJoinStorage(area).read()).toMatchObject({
+      stage: "REQUESTED",
+      requestId,
+      accountId: userId,
+    });
+  });
   it("returns only the initial committed snapshot during the first startup request", async () => {
     const selected = profile(profileAId, serverAUrl, serverAId);
     const api = apiFixture("a", selected.metadata!, []);
@@ -1793,12 +1828,11 @@ describe("ExtensionAppController vNext server hub", () => {
       await app.selectRoom(roomId);
       const switching =
         boundary === "room" ? app.selectRoom(secondRoomId) : app.selectServer(profileBId);
-      const selecting = boundary === "profile" ? app.selectRoom(roomId) : Promise.resolve();
       const joined = expect(app.joinMediaGroup(playbackGroupId)).rejects.toThrow(
         "MEDIA_CONTEXT_CHANGED",
       );
       await switching;
-      await selecting;
+      if (boundary === "profile") await app.selectRoom(roomId);
       await joined;
       expect(runtimes).toHaveLength(2);
       expect(
@@ -1937,6 +1971,7 @@ describe("ExtensionAppController vNext server hub", () => {
       serverOrigin: serverAUrl,
       serverTermsVersion: "2026-07-30",
       documentRevision: null,
+      logicalTabId: null,
       contentCompatibility: null,
     });
   });

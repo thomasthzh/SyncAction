@@ -1,4 +1,30 @@
 /* A stable content plane below the floating glass controls. */
+.watch-preparation {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--sa-accent);
+  font-size: 12px;
+}
+.watch-preparation__spinner {
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: watch-preparing 0.8s linear infinite;
+}
+@keyframes watch-preparing {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .watch-preparation__spinner {
+    animation: none;
+  }
+}
 .watch-workspace.editorial-surface {
   padding: 0;
   background: var(--sa-paper);

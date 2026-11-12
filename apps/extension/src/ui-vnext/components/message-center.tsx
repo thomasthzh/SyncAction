@@ -73,13 +73,20 @@ export function MessageCenter({ store, onClose }: MessageCenterProps): JSX.Eleme
   const canInvite = room?.role === "OWNER";
 
   async function run(key: string, command: Parameters<UiStore["command"]>[0]): Promise<void> {
+    if (pendingKey !== null) return;
     setPendingKey(key);
     setErrorCode(null);
-    const result = await store.command(command);
-    if (!result.ok) {
-      setErrorCode(result.errorCode);
+    try {
+      const result = await store.command(command);
+      if (!result.ok) {
+        setErrorCode(result.errorCode);
+      }
+      if (result.ok && command.name === "ROOM_SELECT") onClose();
+    } catch {
+      setErrorCode("NETWORK_ERROR");
+    } finally {
+      setPendingKey(null);
     }
-    setPendingKey(null);
   }
 
   const titleId = view === "INVITE" ? "invite-picker-title" : "syncaction-message-center-title";
@@ -95,6 +102,14 @@ export function MessageCenter({ store, onClose }: MessageCenterProps): JSX.Eleme
               <h2 id={titleId}>消息中心</h2>
             </div>
             <div class="dialog-header__actions">
+              <button
+                class="text-button"
+                type="button"
+                disabled={pendingKey !== null}
+                onClick={() => void run("refresh", { name: "PRODUCT_REFRESH" })}
+              >
+                {pendingKey === "refresh" ? "刷新中…" : "刷新消息"}
+              </button>
               {canInvite ? (
                 <button class="compact-button" type="button" onClick={() => setView("INVITE")}>
                   邀请成员
@@ -103,6 +118,7 @@ export function MessageCenter({ store, onClose }: MessageCenterProps): JSX.Eleme
               <button
                 class="text-button"
                 type="button"
+                disabled={pendingKey !== null}
                 onClick={() => void run("all", { name: "NOTIFICATIONS_READ_ALL" })}
               >
                 全部已读
@@ -161,7 +177,7 @@ export function MessageCenter({ store, onClose }: MessageCenterProps): JSX.Eleme
                 <MessageCard
                   thread={thread}
                   store={store}
-                  pending={pendingKey === thread.key}
+                  pending={pendingKey !== null}
                   onCommand={(command) => void run(thread.key, command)}
                   key={thread.key}
                 />
@@ -201,6 +217,10 @@ function MessageCard({
     notification.type === "ROOM_INVITATION_CREATED" &&
     notification.invitationId !== null &&
     store.discovery.value.invitations.some(({ id }) => id === notification.invitationId);
+  const canEnter =
+    notification.type === "ROOM_JOIN_REQUEST_APPROVED" &&
+    notification.room !== null &&
+    store.discovery.value.rooms.some((room) => room.id === notification.room!.roomId);
   return (
     <article
       class={thread.unread ? "message-card is-unread" : "message-card"}
@@ -277,6 +297,20 @@ function MessageCard({
             }
           >
             接受邀请
+          </button>
+        </div>
+      ) : null}
+      {canEnter ? (
+        <div class="message-card__actions">
+          <button
+            class="compact-button"
+            type="button"
+            disabled={pending}
+            onClick={() =>
+              onCommand({ name: "ROOM_SELECT", payload: { roomId: notification.room!.roomId } })
+            }
+          >
+            进入房间
           </button>
         </div>
       ) : null}

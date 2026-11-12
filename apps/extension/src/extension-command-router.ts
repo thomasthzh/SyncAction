@@ -17,6 +17,7 @@ export type ExtensionCommandAppPort = Pick<
   | "selectServer"
   | "dismissVnextOnboarding"
   | "refreshPublicRooms"
+  | "refreshProductData"
   | "createRoom"
   | "updateRoom"
   | "selectRoom"
@@ -24,6 +25,7 @@ export type ExtensionCommandAppPort = Pick<
   | "removeSharedTab"
   | "joinOpenRoom"
   | "requestRoomJoin"
+  | "cancelRoomJoin"
   | "decideJoinRequest"
   | "acceptInvitation"
   | "searchDirectory"
@@ -44,6 +46,7 @@ export type ExtensionCommandAppPort = Pick<
   | "setDanmakuHidden"
   | "togglePagePen"
   | "createMediaGroup"
+  | "prepareMediaGroup"
   | "switchMediaGroupCurrent"
   | "jumpToMediaMember"
   | "alignMediaGroupOnce"
@@ -173,6 +176,9 @@ export class ExtensionCommandRouter {
       case "PUBLIC_ROOMS_REFRESH":
         result = await this.#app.refreshPublicRooms();
         break;
+      case "PRODUCT_REFRESH":
+        result = await this.#app.refreshProductData();
+        break;
       case "ROOM_CREATE":
         result = await this.#app.createRoom(command.payload);
         break;
@@ -183,7 +189,13 @@ export class ExtensionCommandRouter {
         result = await this.#app.selectRoom(command.payload.roomId);
         break;
       case "ROOM_TAB_ACTIVATE":
-        result = await this.#app.activateLogicalTab(command.payload.logicalTabId);
+        result =
+          command.payload.expectedContext === undefined
+            ? await this.#app.activateLogicalTab(command.payload.logicalTabId)
+            : await this.#app.activateLogicalTab(
+                command.payload.logicalTabId,
+                command.payload.expectedContext,
+              );
         break;
       case "ROOM_TAB_REMOVE":
         result = await this.#app.removeSharedTab(command.payload);
@@ -193,6 +205,9 @@ export class ExtensionCommandRouter {
         break;
       case "ROOM_JOIN_REQUEST":
         result = await this.#app.requestRoomJoin(command.payload.roomId);
+        break;
+      case "ROOM_JOIN_CANCEL":
+        result = await this.#app.cancelRoomJoin(command.payload.requestId);
         break;
       case "JOIN_REQUEST_DECIDE":
         result = await this.#app.decideJoinRequest(
@@ -208,7 +223,10 @@ export class ExtensionCommandRouter {
         result = await this.#app.searchDirectory(command.payload);
         break;
       case "INVITE_BATCH":
-        result = await this.#app.batchInvite(command.payload.userIds);
+        result =
+          command.payload.expectedContext === undefined
+            ? await this.#app.batchInvite(command.payload.userIds)
+            : await this.#app.batchInvite(command.payload.userIds, command.payload.expectedContext);
         break;
       case "NOTIFICATION_READ":
         result = await this.#app.markNotificationRead(command.payload.notificationId);
@@ -262,7 +280,10 @@ export class ExtensionCommandRouter {
         break;
       }
       case "BROWSER_RECOVERY_CONFIRM":
-        result = await this.#app.confirmBrowserRecovery();
+        result =
+          command.payload === undefined
+            ? await this.#app.confirmBrowserRecovery()
+            : await this.#app.confirmBrowserRecovery(command.payload.expectedContext);
         break;
       case "PAGE_PERMISSION_REFRESH": {
         const tab = await this.#activeTab();
@@ -325,13 +346,29 @@ export class ExtensionCommandRouter {
         );
         break;
       }
+      case "MEDIA_GROUP_PREPARE": {
+        const { playbackGroupId, expectedContext, expectedTarget } = command.payload;
+        await this.#activeMediaTab(expectedContext);
+        result = await this.#app.prepareMediaGroup(
+          playbackGroupId,
+          expectedContext,
+          expectedTarget,
+        );
+        break;
+      }
       case "MEDIA_GROUP_JOIN": {
         const expected = command.payload.expectedContext;
         if (expected !== undefined) await this.#activeMediaTab(expected);
         result =
-          expected === undefined
-            ? await this.#app.joinMediaGroup(command.payload.playbackGroupId)
-            : await this.#app.joinMediaGroup(command.payload.playbackGroupId, expected);
+          command.payload.expectedTarget !== undefined
+            ? await this.#app.joinMediaGroup(
+                command.payload.playbackGroupId,
+                expected,
+                command.payload.expectedTarget,
+              )
+            : expected === undefined
+              ? await this.#app.joinMediaGroup(command.payload.playbackGroupId)
+              : await this.#app.joinMediaGroup(command.payload.playbackGroupId, expected);
         break;
       }
       case "MEDIA_GROUP_LEAVE":

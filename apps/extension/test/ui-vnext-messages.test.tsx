@@ -259,7 +259,9 @@ describe("vNext message center", () => {
     store.responder = async (command) =>
       command.name === "DIRECTORY_SEARCH"
         ? success({ items: directory, nextCursor: null })
-        : success();
+        : command.name === "INVITE_BATCH"
+          ? success([{ userId: candidateId, status: "CREATED", invitationId }])
+          : success();
     const root = renderPanel(<App store={store} />);
     await click(byRole(root, "button", "消息"));
     await click(byRole(root, "button", "邀请成员"));
@@ -296,7 +298,10 @@ describe("vNext message center", () => {
     await click(byRole(root, "button", "发送邀请"));
     expect(store.commandCalls.at(-1)).toEqual({
       name: "INVITE_BATCH",
-      payload: { userIds: [candidateId] },
+      payload: {
+        userIds: [candidateId],
+        expectedContext: { profileId: store.shell.value.selectedProfileId, roomId },
+      },
     });
   });
 

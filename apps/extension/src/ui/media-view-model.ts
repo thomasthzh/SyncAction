@@ -345,6 +345,15 @@ function groupActions(
     }
     return [
       viewAction({
+        key: `media-group:${group.playbackGroupId}:resume`,
+        label:
+          media.controlReady === false || media.state === "DEGRADED" ? "继续跟随" : "回到一起看",
+        accessibleText: "打开当前视频并继续跟随，不会重新加入或创建播放组",
+        intent: { type: "JOIN_GROUP", playbackGroupId: group.playbackGroupId },
+        disabledReason:
+          media.state === "OFFLINE" || group.target === null ? "视频暂未准备好" : null,
+      }),
+      viewAction({
         key: `media-group:${group.playbackGroupId}:leave`,
         label: "退出播放组",
         accessibleText: `退出播放组 ${group.playbackGroupId.slice(0, 8)}`,
@@ -363,8 +372,8 @@ function groupActions(
     }),
     viewAction({
       key: `media-group:${group.playbackGroupId}:join`,
-      label: "加入播放组",
-      accessibleText: `加入播放组 ${group.playbackGroupId.slice(0, 8)}`,
+      label: "打开并一起看",
+      accessibleText: "打开这段视频，按需授权并跟随领播者",
       intent: { type: "JOIN_GROUP", playbackGroupId: group.playbackGroupId },
       disabledReason: joinDisabledReason,
     }),
@@ -513,6 +522,11 @@ function statusView(
 }
 
 function mediaNotice(media: MediaControllerStatus): MediaViewNotice | null {
+  const localTarget =
+    media.localObservation?.target ??
+    media.playbackGroups.find(
+      (group) => group.playbackGroupId === media.localMembership?.playbackGroupId,
+    )?.target;
   if (media.state === "OFFLINE") {
     return {
       tone: "warning",
@@ -546,7 +560,10 @@ function mediaNotice(media: MediaControllerStatus): MediaViewNotice | null {
     case "ORIGIN_PERMISSION_REVOKED":
       return {
         tone: "warning",
-        text: "媒体所在的子页面未获授权；当前只能跳转，不能同步播放。",
+        text:
+          localTarget !== null && localTarget !== undefined && localTarget.frameKey !== "top"
+            ? "播放器所在的子页面尚未获授权；共享页面和普通跳转仍可使用。"
+            : "这段视频还未获得页面授权。打开视频后继续一起看，共享页面仍然保留。",
       };
     case "MEDIA_METADATA_PENDING":
       return {

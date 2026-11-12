@@ -86,6 +86,7 @@ function createSession(options: {
   apply?(action: MediaPageApplyAction): Promise<void>;
   getGroup?(): ReturnType<typeof group>;
   errors?: string[];
+  lock?(locked: boolean): Promise<void>;
 }) {
   let uuidCounter = 1;
   return new MediaFollowerSession({
@@ -93,7 +94,8 @@ function createSession(options: {
     deviceId: followerDeviceId,
     page: {
       apply: async (_tabId, _frameId, _context, _target, action) => options.apply?.(action),
-      setFollowerLock: async () => undefined,
+      setFollowerLock: async (_tabId, _frameId, _context, _target, locked) =>
+        options.lock?.(locked),
     },
     scheduler: {
       setTimeout: () => Symbol("timer"),
@@ -109,6 +111,29 @@ function createSession(options: {
 }
 
 describe("MediaFollowerSession proposal lifecycle", () => {
+  it("does not let an old lock response unlock a newer recovery on the same video", async () => {
+    const locks: boolean[] = [];
+    let complete!: () => void;
+    let originalCurrent = true;
+    const session = createSession({
+      propose: async () => undefined,
+      lock: async (locked) => {
+        locks.push(locked);
+        if (locks.length === 1)
+          await new Promise<void>((resolve) => {
+            complete = resolve;
+          });
+      },
+    });
+    const first = session.lock(route, target, () => originalCurrent);
+    originalCurrent = false;
+    await session.lock(route, target);
+    complete();
+    await first;
+    expect(locks).toEqual([true, true]);
+    await session.lock(null, null);
+    expect(locks).toEqual([true, true, false]);
+  });
   it.each(["READY", "BUFFERING"] as const)(
     "keeps a playing temporary rate across %s without proposing or forcing a seek",
     async (trigger) => {

@@ -96,7 +96,7 @@ describe("media view model", () => {
       }),
       expect.objectContaining({
         key: `media-group:${groupA}:join`,
-        label: "加入播放组",
+        label: "打开并一起看",
         intent: { type: "JOIN_GROUP", playbackGroupId: groupA },
         disabled: false,
       }),
@@ -246,7 +246,7 @@ describe("media view model", () => {
         .notice,
     ).toEqual({
       tone: "warning",
-      text: "媒体所在的子页面未获授权；当前只能跳转，不能同步播放。",
+      text: "这段视频还未获得页面授权。打开视频后继续一起看，共享页面仍然保留。",
     });
   });
 });

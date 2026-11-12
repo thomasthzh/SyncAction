@@ -41,7 +41,7 @@ export function PlaybackGroupCard({
   const participationDetail =
     membership === null
       ? localMembership === null
-        ? "打开页面只会跳转。加入后参与持续跟随；对齐一次不会加入。"
+        ? "打开并一起看会进入这段视频，在正确的页面授权后持续跟随。"
         : "你仍在原播放组中，查看此组不会改变跟随关系。"
       : readOnly
         ? "播放由另一台设备参与，此设备不会自动跟随。"

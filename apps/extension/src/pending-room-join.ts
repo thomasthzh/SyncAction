@@ -21,14 +21,30 @@ const PendingRoomJoinSchema = z
     roomId: CanonicalUuidSchema,
     roomName: z.string().min(1).max(100),
     joinPolicy: z.enum(["OPEN", "APPROVAL"]),
+    stage: z.enum(["READY", "REQUESTED"]).optional(),
+    requestId: CanonicalUuidSchema.optional(),
+    accountId: CanonicalUuidSchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((intent, context) => {
+    if (
+      intent.stage === "REQUESTED" &&
+      (intent.requestId === undefined ||
+        intent.accountId === undefined ||
+        intent.joinPolicy !== "APPROVAL")
+    )
+      context.addIssue({
+        code: "custom",
+        message: "Requested destination requires its account and request identity",
+      });
+  });
 
 export type PendingRoomJoin = z.infer<typeof PendingRoomJoinSchema>;
 
 export interface PendingRoomJoinStorage {
   read(): Promise<PendingRoomJoin | null>;
   write(intent: PendingRoomJoin | null): Promise<void>;
+  subscribe?(listener: (intent: PendingRoomJoin | null) => void): () => void;
 }
 
 export function pendingJoinMatchesServer(intent: PendingRoomJoin, profile: ServerProfile): boolean {
@@ -39,14 +55,26 @@ export function pendingJoinMatchesServer(intent: PendingRoomJoin, profile: Serve
   );
 }
 
-/** Only a room destination is stored. Credentials and executable commands are excluded. */
-export function createPendingRoomJoinStorage(area: {
-  get(key: string): Promise<Record<string, unknown>>;
-  set(items: Record<string, unknown>): Promise<void>;
-  remove(key: string): Promise<void>;
-}): PendingRoomJoinStorage {
+/** Only destination/approval identity is stored, never credentials or commands. */
+export function createPendingRoomJoinStorage(
+  area: {
+    get(key: string): Promise<Record<string, unknown>>;
+    set(items: Record<string, unknown>): Promise<void>;
+    remove(key: string): Promise<void>;
+  },
+  subscribeToChanges?: (listener: (value: unknown) => void) => () => void,
+): PendingRoomJoinStorage {
   let tail: Promise<void> = Promise.resolve();
   return {
+    ...(subscribeToChanges === undefined
+      ? {}
+      : {
+          subscribe: (listener: (intent: PendingRoomJoin | null) => void) =>
+            subscribeToChanges((value) => {
+              const parsed = PendingRoomJoinSchema.safeParse(value);
+              listener(parsed.success ? parsed.data : null);
+            }),
+        }),
     async read() {
       await tail;
       const value = (await area.get(PENDING_ROOM_JOIN_KEY))[PENDING_ROOM_JOIN_KEY];

@@ -7,6 +7,7 @@ import {
   type ContentCompatibility,
   type DocumentRevision,
   type MediaCommandAck,
+  type MediaTarget,
   type PageCompatibilityReport,
 } from "@syncaction/protocol";
 import {
@@ -593,13 +594,20 @@ export class BackgroundController {
   }
 
   public async getPageDocumentRevision(tabIdInput: unknown) {
+    return (await this.getPageDocumentContext(tabIdInput))?.documentRevision ?? null;
+  }
+
+  public async getPageDocumentContext(tabIdInput: unknown) {
     const tabId = z.number().int().nonnegative().safe().parse(tabIdInput);
     try {
       const route = await this.#requirePageToolRoute();
       if (route.tabId !== tabId) {
         return null;
       }
-      return structuredClone(route.context.documentRevision);
+      return {
+        logicalTabId: route.context.logicalTabId,
+        documentRevision: structuredClone(route.context.documentRevision),
+      };
     } catch {
       return null;
     }
@@ -968,9 +976,24 @@ export class BackgroundController {
     return acknowledgement;
   }
 
-  public async joinMediaGroup(playbackGroupId: string): Promise<MediaCommandAck> {
-    const acknowledgement = await this.#requireMediaController().joinGroup(playbackGroupId);
-    if (!acknowledgement.accepted) throw new Error(acknowledgement.code);
+  public async prepareMediaGroup(
+    playbackGroupId: string,
+    expectedTarget: MediaTarget,
+  ): Promise<void> {
+    await this.#requireMediaController().prepareGroup(playbackGroupId, expectedTarget);
+    this.#notifyStatusChanged();
+  }
+
+  public async joinMediaGroup(
+    playbackGroupId: string,
+    expectedTarget?: MediaTarget,
+  ): Promise<MediaCommandAck | void> {
+    const acknowledgement = await this.#requireMediaController().joinGroup(
+      playbackGroupId,
+      expectedTarget,
+    );
+    if (acknowledgement !== undefined && !acknowledgement.accepted)
+      throw new Error(acknowledgement.code);
     this.#notifyStatusChanged();
     return acknowledgement;
   }
