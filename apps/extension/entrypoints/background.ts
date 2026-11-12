@@ -4,6 +4,7 @@ import { SyncActionApiClient } from "../src/api-client.js";
 import { ExtensionAppController, type ExtensionAppStorageArea } from "../src/app-controller.js";
 import { AnnotationReplica } from "../src/annotation-replica.js";
 import { BackgroundController } from "../src/background-controller.js";
+import { createWatchPreparationStorage } from "../src/watch-preparation.js";
 import {
   getOrCreateBrowserSessionId,
   type BrowserSessionStorageArea,
@@ -47,6 +48,8 @@ import { projectDocumentFeatureAccess } from "../src/page-access-policy.js";
 import {
   PageToolShortcutIntentMessageSchema,
   PageToolShortcutIntentStore,
+  PageToolShortcutContextSchema,
+  type PageToolShortcutContext,
   type PageToolShortcutIntentStorageArea,
 } from "../src/page-tool-shortcut-intent.js";
 import { PublicCatalogTransport } from "../src/public-catalog-transport.js";
@@ -66,7 +69,15 @@ export default defineBackground(() => {
   let listAllowedOrigins = async (): Promise<readonly string[]> => [];
   let isOriginAllowed: (origin: string) => Promise<boolean> = async () => false;
   let handlePermissionBoundaryChanged = async (): Promise<void> => undefined;
-  let currentPageAccess: UiPageAccessSlice | null = null;
+  let currentPageAccess: {
+    access: UiPageAccessSlice;
+    context: PageToolShortcutContext | null;
+  } | null = null;
+  let pageAccessGeneration = 0;
+  const invalidatePageAccess = (): void => {
+    currentPageAccess = null;
+    pageAccessGeneration += 1;
+  };
   const localArea = browser.storage.local as unknown as ChromeStorageArea &
     ExtensionAppStorageArea &
     ExtensionSessionStorageArea &
@@ -79,7 +90,7 @@ export default defineBackground(() => {
   const sidePanelApi = browser as unknown as {
     sidePanel?: {
       setPanelBehavior(options: { openPanelOnActionClick: boolean }): Promise<void>;
-      open(options: { tabId: number }): Promise<void>;
+      open(options: { tabId: number } | { windowId: number }): Promise<void>;
     };
   };
   const pageCollaborationPort = new ChromePageCollaborationPort(
@@ -89,7 +100,7 @@ export default defineBackground(() => {
         void ready.then((app) => app.handlePageCapability(report)).catch(() => undefined);
       },
       onPermissionBoundaryChanged: () => {
-        currentPageAccess = null;
+        invalidatePageAccess();
         return handlePermissionBoundaryChanged();
       },
       onPageToolFrameUnavailable: (tabId, frameId, frameKey) => {
@@ -173,6 +184,8 @@ export default defineBackground(() => {
       browserSessionId,
     );
     const app = new ExtensionAppController({
+      watchPreparations: createWatchPreparationStorage(browser.storage.session),
+      pageToolShortcuts: shortcutIntents,
       deviceId,
       area: localArea,
       profiles,
@@ -277,6 +290,7 @@ export default defineBackground(() => {
       await app.handleActiveTabChanged(activeTabs[0].id);
     }
     const readPageAccess = async (): Promise<UiPageAccessSlice> => {
+      const generation = pageAccessGeneration;
       const [tabs, bindings] = await Promise.all([
         browser.tabs.query({ active: true, lastFocusedWindow: true }),
         readPageToolCommandBindings(commandApi),
@@ -357,7 +371,28 @@ export default defineBackground(() => {
           .length,
         reason,
       });
-      currentPageAccess = access;
+      const status = await app.getStatus();
+      const context = PageToolShortcutContextSchema.safeParse({
+        profileId: status.selectedProfileId,
+        serverOrigin: status.selectedProfile?.baseUrl,
+        serverId: status.selectedProfile?.metadata?.serverId ?? null,
+        accountId: status.account?.id,
+        roomId: status.selectedRoomId,
+        tabId: access.tabId,
+        windowId: tab?.windowId,
+        url: access.url,
+        documentRevision: access.documentRevision,
+      });
+      if (generation !== pageAccessGeneration) return access;
+      currentPageAccess = {
+        access,
+        context:
+          context.success &&
+          status.selectedProfileId === pageContext.profileId &&
+          status.selectedProfile?.baseUrl === pageContext.serverOrigin
+            ? context.data
+            : null,
+      };
       return access;
     };
     await readPageAccess();
@@ -379,7 +414,7 @@ export default defineBackground(() => {
         execute: (command) => commandRouter.execute(command),
       },
     });
-    return { app, uiStateHub };
+    return { app, uiStateHub, readPageAccess };
   })();
   const ready = readyState.then(({ app }) => app);
   type NamedUiStateHubPort = UiStateHubPort & { name: string };
@@ -389,36 +424,93 @@ export default defineBackground(() => {
       attach: (port: NamedUiStateHubPort) => uiStateHub.attach(port),
     })),
   );
-  subscribePageToolCommands(commandApi, (command) =>
-    (() => {
-      const intent = command === PAGE_TOOL_COMMANDS.danmaku ? "danmaku" : "pen";
-      const feature = command === PAGE_TOOL_COMMANDS.danmaku ? "DANMAKU" : "DRAWING";
-      const access = currentPageAccess;
-      if (access?.enabledFeatures.includes(feature)) {
-        return ready.then((app) =>
-          command === PAGE_TOOL_COMMANDS.danmaku ? app.toggleDanmakuInput() : app.togglePagePen(),
-        );
-      }
-      const queued = shortcutIntents.enqueue(intent);
-      void queued
-        .then(() =>
-          browser.runtime.sendMessage(
-            PageToolShortcutIntentMessageSchema.parse({
-              type: "syncaction.ui.page-tool-shortcut-intent",
-              intent,
-            }),
-          ),
+  subscribePageToolCommands(commandApi, (command, invokedTab) => {
+    const invokedAtMs = Date.now();
+    const identity = ready.then((app) => app.getStatus());
+    const intent = command === PAGE_TOOL_COMMANDS.danmaku ? "danmaku" : "pen";
+    const feature = intent === "danmaku" ? "DANMAKU" : "DRAWING";
+    const cached = currentPageAccess;
+    const sourceTab = invokedTab;
+    const sourceUrl = sourceTab?.pendingUrl ?? sourceTab?.url;
+    const context = cached?.context;
+    if (
+      context?.documentRevision != null &&
+      cached!.access.enabledFeatures.includes(feature) &&
+      sourceTab?.id === context.tabId &&
+      sourceTab.windowId === context.windowId &&
+      sourceUrl === context.url
+    ) {
+      return ready.then(async (app) => {
+        const tabs = await browser.tabs.query({ active: true, lastFocusedWindow: true });
+        const status = await app.getStatus();
+        if (
+          tabs[0]?.id !== context.tabId ||
+          (tabs[0]?.pendingUrl ?? tabs[0]?.url) !== context.url ||
+          status.selectedProfileId !== context.profileId ||
+          status.selectedProfile?.baseUrl !== context.serverOrigin ||
+          (status.selectedProfile.metadata?.serverId ?? null) !== context.serverId ||
+          status.account?.id !== context.accountId ||
+          status.selectedRoomId !== context.roomId
+        )
+          return;
+        const expected = {
+          profileId: context.profileId,
+          roomId: context.roomId,
+          tabId: context.tabId,
+          url: context.url,
+          documentRevision: context.documentRevision!,
+        };
+        return intent === "danmaku"
+          ? app.toggleDanmakuInput(expected)
+          : app.togglePagePen(expected);
+      });
+    }
+    // Open synchronously in the command event; awaiting initialization loses Chrome's user gesture.
+    const opened =
+      sourceTab?.windowId === undefined
+        ? Promise.resolve()
+        : (sidePanelApi.sidePanel?.open({ windowId: sourceTab.windowId }) ?? Promise.resolve());
+    void opened.catch(() => undefined);
+    return readyState.then(async ({ readPageAccess }) => {
+      const sourceIdentity = await identity;
+      await readPageAccess();
+      const current = currentPageAccess?.context;
+      if (
+        current == null ||
+        sourceTab?.id !== current.tabId ||
+        sourceTab.windowId !== current.windowId ||
+        sourceUrl !== current.url
+      )
+        return;
+      if (
+        sourceIdentity.selectedProfileId !== current.profileId ||
+        sourceIdentity.selectedProfile?.baseUrl !== current.serverOrigin ||
+        (sourceIdentity.selectedProfile.metadata?.serverId ?? null) !== current.serverId ||
+        sourceIdentity.account?.id !== current.accountId ||
+        sourceIdentity.selectedRoomId !== current.roomId
+      )
+        return;
+      // A cold worker has no cache; an existing cache must still describe the same identity.
+      if (
+        context != null &&
+        (context.profileId !== current.profileId ||
+          context.accountId !== current.accountId ||
+          context.roomId !== current.roomId ||
+          context.serverId !== current.serverId ||
+          context.serverOrigin !== current.serverOrigin)
+      )
+        return;
+      await shortcutIntents.enqueue(intent, current, invokedAtMs);
+      await browser.runtime
+        .sendMessage(
+          PageToolShortcutIntentMessageSchema.parse({
+            type: "syncaction.ui.page-tool-shortcut-intent",
+            intent,
+          }),
         )
         .catch(() => undefined);
-      if (access?.tabId !== null && access?.tabId !== undefined) {
-        return sidePanelApi.sidePanel?.open({ tabId: access.tabId });
-      }
-      return browser.tabs.query({ active: true, lastFocusedWindow: true }).then((tabs) => {
-        const tabId = tabs[0]?.id;
-        return tabId === undefined ? undefined : sidePanelApi.sidePanel?.open({ tabId });
-      });
-    })(),
-  );
+    });
+  });
 
   browser.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
     let pageMessage;
@@ -563,11 +655,11 @@ export default defineBackground(() => {
     });
   });
   browser.tabs.onActivated.addListener(({ tabId }) => {
-    currentPageAccess = null;
+    invalidatePageAccess();
     dispatchActiveTab(ready, tabId);
   });
   browser.windows.onFocusChanged.addListener(() => {
-    currentPageAccess = null;
+    invalidatePageAccess();
     void browser.tabs
       .query({ active: true, lastFocusedWindow: true })
       .then((tabs) => {
@@ -578,8 +670,8 @@ export default defineBackground(() => {
       .catch(() => undefined);
   });
   browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
-    if (currentPageAccess?.tabId === tabId) {
-      currentPageAccess = null;
+    if (currentPageAccess?.access.tabId === tabId) {
+      invalidatePageAccess();
     }
     const groupId = (changeInfo as { groupId?: number }).groupId;
     if (groupId !== undefined) {
@@ -603,8 +695,8 @@ export default defineBackground(() => {
     });
   });
   browser.tabs.onRemoved.addListener((tabId, removeInfo) => {
-    if (currentPageAccess?.tabId === tabId) {
-      currentPageAccess = null;
+    if (currentPageAccess?.access.tabId === tabId) {
+      invalidatePageAccess();
     }
     dispatch(ready, {
       type: "TAB_REMOVED",
@@ -626,8 +718,8 @@ export default defineBackground(() => {
     });
   });
   browser.tabs.onReplaced.addListener((addedTabId, removedTabId) => {
-    if (currentPageAccess?.tabId === removedTabId) {
-      currentPageAccess = null;
+    if (currentPageAccess?.access.tabId === removedTabId) {
+      invalidatePageAccess();
     }
     dispatch(ready, {
       type: "TAB_REPLACED",
@@ -636,7 +728,7 @@ export default defineBackground(() => {
     });
   });
 
-  void pageCollaborationPort.announceExistingPages().catch(() => undefined);
+  void ready.then(() => pageCollaborationPort.announceExistingPages()).catch(() => undefined);
   void ready.catch(() => undefined);
 });
 

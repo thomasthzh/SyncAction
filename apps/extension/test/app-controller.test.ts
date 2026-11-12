@@ -1,3 +1,4 @@
+import { type WatchPreparation } from "../src/watch-preparation.js";
 import type { BrowserActuatorResult, BrowserObserverResult } from "@syncaction/browser-sync";
 import {
   PageCompatibilityReportSchema,
@@ -1462,3 +1463,145 @@ async function settleMicrotasks(): Promise<void> {
     await Promise.resolve();
   }
 }
+
+describe("session watch preparation ownership", () => {
+  async function setup(options: { readFails?: boolean; cleanupFails?: boolean } = {}) {
+    const events: string[] = [];
+    const sessions = new FakeSessions(events);
+    sessions.status = {
+      kind: "AUTHENTICATED",
+      account,
+      deviceId,
+      accessTokenExpiresAt: Date.now() + 10000,
+      refreshTokenExpiresAt: Date.now() + 20000,
+    };
+    let record: WatchPreparation | null = null;
+    const read = vi.fn(async () => {
+      if (options.readFails) throw new Error("unavailable");
+      return record;
+    });
+    const write = vi.fn(async (value: WatchPreparation | null) => {
+      if (value === null && options.cleanupFails) throw new Error("unavailable");
+      record = value;
+    });
+    const target = {
+      logicalTabId: "018f8f8e-4b5c-7d6e-8f90-123456789ab6",
+      documentRevision: { roomEpoch: 0, tabUpdatedAtSeq: 4 },
+      frameKey: "top",
+      provider: "YOUTUBE",
+      mediaKey: "youtube:dQw4w9WgXcQ",
+      durationMs: 212000,
+    };
+    const group = PlaybackGroupSnapshotSchema.parse({
+      playbackGroupId,
+      roomId: firstRoomId,
+      groupRevision: 4,
+      status: "PLAYING",
+      leaderUserId: userId,
+      leaderDeviceId: deviceId,
+      members: [
+        {
+          userId,
+          username: "thomas",
+          displayName: "Thomas",
+          activeDeviceId: deviceId,
+          joinedAtServerMs: 1700000000000,
+          online: true,
+        },
+      ],
+      target,
+      observed: {
+        observedAtClientMs: 1700000000000,
+        positionMs: 42000,
+        paused: false,
+        playbackRate: 1,
+        ended: false,
+        buffering: false,
+      },
+      observedAtServerMs: 1700000000000,
+      proposals: [],
+      leaderGraceExpiresAtServerMs: null,
+      updatedAtServerMs: 1700000000000,
+    });
+    const state = await new FakeRuntime(firstRoomId, events).getStatus();
+    state.tabs = [
+      { logicalTabId: group.target!.logicalTabId, title: "Original video", domain: "youtube.com" },
+    ];
+    state.media = {
+      state: "ONLINE",
+      roomMediaRevision: 4,
+      playbackGroups: [group],
+      localObservation: null,
+      localMembership: null,
+      recommendedPlaybackGroupId: null,
+      navigation: [],
+      errorCode: null,
+    };
+    const app = new ExtensionAppController({
+      serverUrl,
+      deviceId,
+      area: new MemoryArea(),
+      sessions,
+      api: createApi(),
+      watchPreparations: { read, write },
+      runtimeFactory: ({ room }) => new FakeRuntime(room.id, events, false, state),
+    });
+    await app.start();
+    await app.selectRoom(firstRoomId);
+    const input = {
+      id: crypto.randomUUID(),
+      groupId: playbackGroupId,
+      target: group.target!,
+      action: "ALIGN" as "ALIGN" | "JOIN",
+      profileId: (await app.getStatus()).selectedProfileId,
+      roomId: firstRoomId,
+    };
+    return { app, events, read, write, input, getRecord: () => record };
+  }
+  it.each(["ALIGN", "JOIN"] as const)(
+    "keeps successful %s truthful when record cleanup fails and rejects replay",
+    async (action) => {
+      const h = await setup({ cleanupFails: true });
+      const input = { ...h.input, action };
+      await h.app.saveWatchPreparation(input);
+      const execute = () =>
+        action === "ALIGN"
+          ? h.app.alignMediaGroupOnce(playbackGroupId, undefined, input.target, input.id)
+          : h.app.joinMediaGroup(playbackGroupId, undefined, input.target, input.id);
+      await expect(execute()).resolves.toBeUndefined();
+      expect(h.getRecord()?.stage).toBe("SUBMITTED");
+      await expect(execute()).rejects.toThrow();
+      expect(
+        h.events.filter((e) => e.startsWith(action === "ALIGN" ? "media-align:" : "media-join:")),
+      ).toHaveLength(1);
+    },
+  );
+  it("projects configured persistence even on startup read failure, blocks submission, and retries on a new explicit action", async () => {
+    const h = await setup({ readFails: true });
+    expect(await h.app.getStatus()).toMatchObject({
+      watchPreparationAvailable: true,
+      watchPreparation: null,
+    });
+    await expect(h.app.saveWatchPreparation(h.input)).rejects.toThrow(
+      "WATCH_PREPARATION_UNAVAILABLE",
+    );
+    expect(h.events.some((e) => e.startsWith("media-align:"))).toBe(false);
+    h.read.mockResolvedValueOnce(null);
+    await h.app.saveWatchPreparation(h.input);
+    expect(h.getRecord()?.stage).toBe("PREPARING");
+  });
+  it("does not let a stale dismiss clear a newer task or expose it in another room", async () => {
+    const h = await setup();
+    await h.app.saveWatchPreparation(h.input);
+    const next = { ...h.input, id: crypto.randomUUID() };
+    await h.app.saveWatchPreparation(next);
+    await expect(h.app.dismissWatchPreparation(h.input.id)).rejects.toThrow(
+      "WATCH_PREPARATION_CHANGED",
+    );
+    expect(h.getRecord()?.id).toBe(next.id);
+    await h.app.selectRoom(secondRoomId);
+    expect((await h.app.getStatus()).watchPreparation).toBeNull();
+    await h.app.selectRoom(firstRoomId);
+    expect((await h.app.getStatus()).watchPreparation?.id).toBe(next.id);
+  });
+});

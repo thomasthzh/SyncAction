@@ -9,6 +9,7 @@ import {
 } from "@syncaction/protocol";
 import { act } from "preact/test-utils";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { type PageToolShortcutRequest } from "../src/page-tool-shortcut-intent.js";
 import { App } from "../src/ui-vnext/app.js";
 import { ActionableStatus } from "../src/ui-vnext/components/actionable-status.js";
 import { avatarForMember, createSharedTabRows } from "../src/ui/collaboration-view-model.js";
@@ -1254,6 +1255,16 @@ describe("vNext active room", () => {
 
   it("opens a queued keyboard-shortcut permission intent when the side panel mounts", async () => {
     const store = roomStore();
+    store.update({
+      pageAccess: {
+        ...store.pageAccess.value,
+        tabId: 42,
+        url: "https://video.example/watch",
+        origin: "https://video.example",
+        supported: true,
+        documentRevision: { roomEpoch: 0, tabUpdatedAtSeq: 1 },
+      },
+    });
     const capture = vi.fn(async () => {
       throw new Error("BROWSER_PERMISSION_REQUIRED");
     });
@@ -1262,7 +1273,7 @@ describe("vNext active room", () => {
         store={store}
         now={() => nowMs}
         pagePermissionCoordinator={{ capture, confirm: vi.fn() }}
-        initialPagePermissionIntent="pen"
+        initialPagePermissionIntent={shortcutRequest(store, "pen")}
       />,
     );
 
@@ -1274,10 +1285,20 @@ describe("vNext active room", () => {
 
   it("opens a keyboard-shortcut permission intent in an already mounted side panel", async () => {
     const store = roomStore();
+    store.update({
+      pageAccess: {
+        ...store.pageAccess.value,
+        tabId: 42,
+        url: "https://video.example/watch",
+        origin: "https://video.example",
+        supported: true,
+        documentRevision: { roomEpoch: 0, tabUpdatedAtSeq: 1 },
+      },
+    });
     const capture = vi.fn(async () => {
       throw new Error("BROWSER_PERMISSION_REQUIRED");
     });
-    let listener: ((intent: "danmaku" | "pen") => void) | undefined;
+    let listener: ((intent: PageToolShortcutRequest) => void) | undefined;
     const root = renderPanel(
       <App
         store={store}
@@ -1294,7 +1315,7 @@ describe("vNext active room", () => {
       />,
     );
 
-    act(() => listener?.("danmaku"));
+    act(() => listener?.(shortcutRequest(store, "danmaku")));
     await vi.waitFor(() => {
       expect(root.textContent).toContain("允许页面协作");
     });
@@ -1646,3 +1667,141 @@ function deferred<T>(): {
     resolve: resolvePromise,
   };
 }
+
+function shortcutRequest(store: TestUiStore, intent: "danmaku" | "pen"): PageToolShortcutRequest {
+  const shell = store.shell.value;
+  const profile = shell.profiles.find((p) => p.profileId === shell.selectedProfileId)!;
+  return {
+    id: crypto.randomUUID(),
+    intent,
+    queuedAtMs: Date.now(),
+    context: {
+      profileId: shell.selectedProfileId,
+      serverOrigin: profile.baseUrl,
+      serverId: profile.metadata?.serverId ?? null,
+      accountId: shell.account!.id,
+      roomId: store.room.value.selectedRoomId!,
+      tabId: store.pageAccess.value.tabId!,
+      windowId: 1,
+      url: store.pageAccess.value.url!,
+      documentRevision: store.pageAccess.value.documentRevision,
+    },
+  };
+}
+
+describe("resumable watch preparation UI", () => {
+  function withRecord(
+    stage: "PREPARING" | "SUBMITTED" = "PREPARING",
+    action: "ALIGN" | "JOIN" = "ALIGN",
+  ) {
+    const store = roomStore();
+    const shell = store.shell.value;
+    const profile = shell.profiles[0]!;
+    store.update({
+      room: {
+        ...store.room.value,
+        watchPreparationAvailable: true,
+        watchPreparation: {
+          id: crypto.randomUUID(),
+          profileId: shell.selectedProfileId,
+          serverOrigin: profile.baseUrl,
+          serverId: profile.metadata?.serverId ?? null,
+          accountId: shell.account!.id,
+          roomId,
+          groupId,
+          target: playbackGroup().target!,
+          title: "Original saved video",
+          action,
+          stage,
+        },
+      },
+    });
+    return store;
+  }
+  it("shows original preparation after remount, never executes until continue, and saves before opening", async () => {
+    const store = withRecord();
+    let root = renderPanel(<App store={store} now={() => nowMs} />);
+    expect(root.textContent).toContain("Original saved video");
+    expect(store.commandCalls).toHaveLength(0);
+    unmountPanel();
+    root = renderPanel(<App store={store} now={() => nowMs} />);
+    expect(store.commandCalls).toHaveLength(0);
+    await click(byRole(root, "button", "继续准备"));
+    expect(store.commandCalls[0]?.name).toBe("WATCH_PREPARATION_SAVE");
+    expect(store.commandCalls[1]?.name).toBe("ROOM_TAB_ACTIVATE");
+  });
+  it.each(["ALIGN", "JOIN"] as const)(
+    "does not replay submitted %s when reopening",
+    async (action) => {
+      const store = withRecord("SUBMITTED", action);
+      const root = renderPanel(<App store={store} now={() => nowMs} />);
+      expect(root.textContent).toContain("结果待确认");
+      expect(root.querySelector(".watch-recovery .primary-button")).toBeNull();
+      expect(store.commandCalls).toHaveLength(0);
+      await click(byRole(root, "button", "不再保留"));
+      expect(store.commandCalls).toEqual([
+        {
+          name: "WATCH_PREPARATION_DISMISS",
+          payload: { id: store.room.value.watchPreparation!.id },
+        },
+      ]);
+    },
+  );
+  it("hides an old account record and disables continuation for a changed target", () => {
+    const store = withRecord();
+    store.update({
+      room: {
+        ...store.room.value,
+        watchPreparation: { ...store.room.value.watchPreparation!, accountId: leaderId },
+      },
+    });
+    let root = renderPanel(<App store={store} now={() => nowMs} />);
+    expect(root.querySelector(".watch-recovery")).toBeNull();
+    unmountPanel();
+    store.update({
+      room: {
+        ...store.room.value,
+        watchPreparation: {
+          ...store.room.value.watchPreparation!,
+          accountId: ownerId,
+          target: { ...store.room.value.watchPreparation!.target, mediaKey: "other-video" },
+        },
+      },
+    });
+    root = renderPanel(<App store={store} now={() => nowMs} />);
+    expect(root.textContent).toContain("原视频已变化");
+    expect(root.querySelector(".watch-recovery .primary-button")).toBeNull();
+  });
+  it("waits for real snapshots and discards shortcuts from another tab", async () => {
+    const store = roomStore();
+    store.update({
+      pageAccess: {
+        ...store.pageAccess.value,
+        tabId: 42,
+        url: "https://video.example/watch",
+        origin: "https://video.example",
+        supported: true,
+        documentRevision: { roomEpoch: 0, tabUpdatedAtSeq: 1 },
+      },
+    });
+    const request = shortcutRequest(store, "pen");
+    store.transport.value = "RECONNECTING";
+    const capture = vi.fn();
+    const root = renderPanel(
+      <App
+        store={store}
+        initialPagePermissionIntent={request}
+        pagePermissionCoordinator={{ capture, confirm: vi.fn() }}
+      />,
+    );
+    await act(async () => Promise.resolve());
+    expect(capture).not.toHaveBeenCalled();
+    await act(async () => {
+      store.update({ pageAccess: { ...store.pageAccess.value, tabId: 43 } });
+      store.transport.value = "CONNECTED";
+    });
+    await vi.waitFor(() => expect(root.textContent).toContain("重新使用快捷键"));
+    expect(capture).not.toHaveBeenCalled();
+    expect(store.commandCalls).toHaveLength(0);
+  });
+});

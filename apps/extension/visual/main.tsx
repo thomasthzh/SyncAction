@@ -16,7 +16,9 @@ const fixture: VisualFixture =
   requestedFixture === "room-journey" ||
   requestedFixture === "room-continuity" ||
   requestedFixture === "room-watch-recovery" ||
-  requestedFixture === "room-watch-once"
+  requestedFixture === "room-watch-once" ||
+  requestedFixture === "room-watch-prepare" ||
+  requestedFixture === "room-watch-submitted"
     ? requestedFixture
     : requestedFixture === "room-unshared"
       ? "room-unshared"

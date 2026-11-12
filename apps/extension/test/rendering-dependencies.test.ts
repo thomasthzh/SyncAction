@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   loadDanmakuRenderingDependency,
   loadDrawingRenderingDependency,
@@ -23,4 +23,25 @@ describe("page rendering dependencies", () => {
       ),
     ).not.toEqual([]);
   });
+});
+
+it("releases a failed import so the next explicit request can load the dependency", async () => {
+  vi.resetModules();
+  vi.doMock("danmaku", () => {
+    throw new Error("transient import failure");
+  });
+  try {
+    const loader = await import("../src/page-collaboration/rendering-dependencies.js");
+    const first = loader.loadDanmakuRenderingDependency();
+    await expect(first).rejects.toThrow();
+    class Dependency {}
+    vi.doMock("danmaku", () => ({ default: Dependency }));
+    const retry = loader.loadDanmakuRenderingDependency();
+    expect(retry).not.toBe(first);
+    await expect(retry).resolves.toBe(Dependency);
+    expect(loader.loadDanmakuRenderingDependency()).toBe(retry);
+  } finally {
+    vi.doUnmock("danmaku");
+    vi.resetModules();
+  }
 });

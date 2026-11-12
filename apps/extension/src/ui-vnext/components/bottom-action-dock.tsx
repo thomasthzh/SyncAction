@@ -1,5 +1,9 @@
 import type { JSX } from "preact";
-import { useRef, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
+import {
+  matchesPageToolShortcut,
+  type PageToolShortcutRequest,
+} from "../../page-tool-shortcut-intent.js";
 import type { UiCommandInput, UiStore } from "../store.js";
 import { useCommandFeedback } from "../use-command-feedback.js";
 import { Icon, type IconName } from "../icons.js";
@@ -15,6 +19,8 @@ export interface BottomActionDockProps {
   readonly onOpenInvite: () => void;
   readonly onOpenRoomLifecycle: () => void;
   readonly onRequestPagePermission: (intentKey: string, expectedUrl?: string) => void;
+  readonly shortcut?: PageToolShortcutRequest | null | undefined;
+  readonly onShortcutHandled?: ((id: string) => void) | undefined;
 }
 
 interface DockTool {
@@ -57,12 +63,33 @@ export function BottomActionDock({
   onOpenInvite,
   onOpenRoomLifecycle,
   onRequestPagePermission,
+  shortcut,
+  onShortcutHandled,
 }: BottomActionDockProps): JSX.Element {
   const feedback = useCommandFeedback();
   const preparation = usePageToolPreparation(store, onRequestPagePermission);
   const [showCommandFeedback, setShowCommandFeedback] = useState(true);
   const commandInFlight = useRef(false);
+  const handledShortcut = useRef<string | null>(null);
   const busy = preparation.busy || feedback.pending !== null;
+  useEffect(() => {
+    if (
+      busy ||
+      shortcut == null ||
+      handledShortcut.current === shortcut.id ||
+      store.transport.value !== "CONNECTED"
+    )
+      return;
+    handledShortcut.current = shortcut.id;
+    onShortcutHandled?.(shortcut.id);
+    if (!matchesPageToolShortcut(shortcut, store)) {
+      setShowCommandFeedback(true);
+      feedback.setErrorCode("PAGE_TOOL_CONTEXT_CHANGED");
+      return;
+    }
+    const tool = tools.find(({ intentKey }) => intentKey === shortcut.intent);
+    if (tool !== undefined) void run(tool);
+  }, [shortcut, store.transport.value, busy]);
   const pendingPublication = store.pageAccess.value.pendingPublication != null;
   const mediaScopedCollaboration =
     store.pageAccess.value.contentCompatibility === "MISMATCH" &&
@@ -125,6 +152,18 @@ export function BottomActionDock({
       return;
     }
     let command = tool.command;
+    if (command.name === "DANMAKU_TOGGLE" || command.name === "PEN_TOGGLE") {
+      const page = store.pageAccess.value;
+      const context = capturePageShareContext(store);
+      if (context === null || page.documentRevision === null) {
+        feedback.setErrorCode("PAGE_TOOL_CONTEXT_CHANGED");
+        return;
+      }
+      command = {
+        name: command.name,
+        payload: { expectedContext: { ...context, documentRevision: page.documentRevision } },
+      };
+    }
     if (command.name === "CURRENT_TAB_SHARE") {
       const expectedContext = capturePageShareContext(store);
       if (expectedContext === null) {

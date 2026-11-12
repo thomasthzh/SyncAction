@@ -184,7 +184,17 @@ describe("page tool preparation continuation", () => {
         expect.objectContaining({ name: "PEN_TOGGLE" }),
       );
       await click(byRole(root, "button", "弹幕"));
-      expect(store.commandCalls.at(-1)).toEqual({ name: "DANMAKU_TOGGLE" });
+      expect(store.commandCalls.at(-1)).toEqual({
+        name: "DANMAKU_TOGGLE",
+        payload: {
+          expectedContext: {
+            profileId: store.shell.value.selectedProfileId,
+            roomId: store.room.value.selectedRoomId,
+            tabId: 42,
+            documentRevision: revision,
+          },
+        },
+      });
     },
   );
 
@@ -343,7 +353,19 @@ describe("page tool preparation continuation", () => {
       reason: null,
     });
     await click(byRole(root, "button", "画笔"));
-    expect(store.commandCalls).toEqual([{ name: "PEN_TOGGLE" }]);
+    expect(store.commandCalls).toEqual([
+      {
+        name: "PEN_TOGGLE",
+        payload: {
+          expectedContext: {
+            profileId: store.shell.value.selectedProfileId,
+            roomId: store.room.value.selectedRoomId,
+            tabId: 42,
+            documentRevision: revision,
+          },
+        },
+      },
+    ]);
     act(() =>
       store.update({
         pageAccess: {

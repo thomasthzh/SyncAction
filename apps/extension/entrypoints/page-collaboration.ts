@@ -1,3 +1,4 @@
+import extensionPackage from "../package.json";
 import { browser } from "wxt/browser";
 import { defineUnlistedScript } from "wxt/utils/define-unlisted-script";
 import {
@@ -279,6 +280,15 @@ class PageCollaborationRuntime {
     browser.runtime.onMessage.addListener(this.#listener);
   }
 
+  public isAlive(): boolean {
+    return (
+      !this.#disposed &&
+      this.#host.state === "ACTIVE" &&
+      this.#host.element.isConnected &&
+      browser.runtime.id !== undefined
+    );
+  }
+
   public dispose(reason: PageDisposeReason): void {
     if (this.#disposed) {
       return;
@@ -287,7 +297,11 @@ class PageCollaborationRuntime {
     this.#toolGeneration += 1;
     this.#danmakuGeneration += 1;
     this.#drawingGeneration += 1;
-    browser.runtime.onMessage.removeListener(this.#listener);
+    try {
+      browser.runtime.onMessage.removeListener(this.#listener);
+    } catch {
+      /* A replaced extension context may already have lost its listener API. */
+    }
     this.#compatibilityReporter?.dispose();
     this.#compatibilityReporter = undefined;
     this.#compatibilityReporterRoomId = undefined;
@@ -965,6 +979,7 @@ export default defineUnlistedScript(() => {
   const installed = installPageCollaborationRuntime(
     globalThis as unknown as Record<string, unknown>,
     () => new PageCollaborationRuntime(() => uninstall()),
+    extensionPackage.version,
   );
   uninstall = installed.uninstall;
   installed.runtime.announce();

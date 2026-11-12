@@ -15,6 +15,8 @@ const ERROR_LABELS: Readonly<Record<string, string>> = {
   MEDIA_NOT_FOUND: "当前视频已变化，请提交页面更新后，用当前视频继续一起看",
   MEDIA_ALREADY_IN_GROUP: "你已在播放组中，可以邀请朋友加入跟随",
   MEDIA_CONTEXT_CHANGED: "页面或房间已变化，请从当前视频重新发起操作",
+  WATCH_PREPARATION_CHANGED: "上次准备已提交或已被新任务替代，请查看当前视频后重新选择",
+  WATCH_PREPARATION_UNAVAILABLE: "暂时无法保存准备进度，请稍后重试；本次尚未执行播放操作",
   MEDIA_TARGET_CHANGED: "领播的视频已变化，请重新选择一起看",
   MEDIA_DEVICE_READ_ONLY: "此播放组正由你的另一台设备参与，请先选择在此设备接管",
   MEDIA_TARGET_PAGE_PREPARING: "视频页面尚未就绪。页面已保留，准备好后可再次继续一起看",
@@ -28,6 +30,8 @@ const ERROR_LABELS: Readonly<Record<string, string>> = {
   SHARE_RESULT_UNKNOWN: "尚未确认分享结果，请检查共享页面列表后重试",
   ROOM_DOCUMENT_UNAVAILABLE: "当前页面尚未共享到房间，请先分享当前页再启用页面协作",
   PAGE_TOOL_CONTEXT_CHANGED: "页面、房间或服务器已变化，请从当前页面重新启用",
+  PAGE_RUNTIME_RESTART_REQUIRED: "旧页面协作未能重新连接，请保存页面内容后刷新网页，再启用协作",
+  PAGE_INJECTION_FAILED: "页面协作未能载入，请保存页面内容后刷新网页，再启用协作",
   PAGE_PUBLICATION_STALE:
     "房间中的原页面已被更新或移除。请打开最新共享页面后再继续，当前改动尚未提交。",
   ROOM_TAB_NOT_AVAILABLE: "共享页面已变化或连接尚未准备好，请重新打开页面后再试",

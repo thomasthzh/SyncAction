@@ -6,20 +6,21 @@ import {
   readPageToolCommandBindings,
   subscribePageToolCommands,
   type ChromiumCommandBindingsApi,
+  type PageToolCommandTab,
 } from "../src/command-bindings.js";
 
 class FakeCommandsApi implements ChromiumCommandBindingsApi {
   public commandEntries: Array<{ name: string; shortcut?: string }> = [];
   public readonly createdTabs: string[] = [];
-  public commandListener: ((command: string) => void) | undefined;
+  public commandListener: ((command: string, tab?: PageToolCommandTab) => void) | undefined;
 
   public readonly commands = {
     getAll: async () => structuredClone(this.commandEntries),
     onCommand: {
-      addListener: (listener: (command: string) => void) => {
+      addListener: (listener: (command: string, tab?: PageToolCommandTab) => void) => {
         this.commandListener = listener;
       },
-      removeListener: (listener: (command: string) => void) => {
+      removeListener: (listener: (command: string, tab?: PageToolCommandTab) => void) => {
         if (this.commandListener === listener) {
           this.commandListener = undefined;
         }
@@ -110,6 +111,9 @@ describe("page tool command bindings", () => {
     api.commandListener?.(PAGE_TOOL_COMMANDS.pen);
     expect(onCommand.mock.calls).toEqual([[PAGE_TOOL_COMMANDS.danmaku], [PAGE_TOOL_COMMANDS.pen]]);
 
+    const sourceTab = { id: 42, windowId: 2, url: "https://video.example/watch" };
+    api.commandListener?.(PAGE_TOOL_COMMANDS.pen, sourceTab);
+    expect(onCommand).toHaveBeenLastCalledWith(PAGE_TOOL_COMMANDS.pen, sourceTab);
     unsubscribe();
     expect(api.commandListener).toBeUndefined();
   });

@@ -336,3 +336,75 @@ function domRect(x: number, y: number, width: number, height: number): DOMRect {
     toJSON: () => ({}),
   };
 }
+
+describe("versioned page runtime replacement", () => {
+  it("reuses only a live current runtime and preserves a replacement from old uninstall", () => {
+    const scope = {};
+    const dispose = vi.fn();
+    let alive = true;
+    const first = installPageCollaborationRuntime(
+      scope,
+      () => ({ dispose, isAlive: () => alive }),
+      "21",
+    );
+    expect(
+      installPageCollaborationRuntime(
+        scope,
+        () => {
+          throw new Error("unexpected");
+        },
+        "21",
+      ).created,
+    ).toBe(false);
+    alive = false;
+    const second = installPageCollaborationRuntime(
+      scope,
+      () => ({ dispose: vi.fn(), isAlive: () => true }),
+      "21",
+    );
+    expect(second.created).toBe(true);
+    expect(dispose).toHaveBeenCalledOnce();
+    first.uninstall();
+    expect(
+      installPageCollaborationRuntime(
+        scope,
+        () => {
+          throw new Error("unexpected");
+        },
+        "21",
+      ).runtime,
+    ).toBe(second.runtime);
+    expect(installPageCollaborationRuntime(scope, () => ({ dispose: vi.fn() }), "22").created).toBe(
+      true,
+    );
+  });
+  it("keeps refresh-required after a real v21 cleanup stops at an invalid extension listener", () => {
+    const scope = {};
+    const host = document.createElement("div");
+    host.setAttribute(PAGE_OVERLAY_HOST_ATTRIBUTE, "");
+    document.body.append(host);
+    let disposed = false;
+    const removeListener = vi.fn(() => {
+      throw new Error("Extension context invalidated");
+    });
+    const legacy = {
+      dispose: () => {
+        if (disposed) return;
+        disposed = true;
+        removeListener();
+        host.remove();
+      },
+    };
+    installPageCollaborationRuntime(scope, () => legacy);
+    const create = vi.fn();
+    expect(() => installPageCollaborationRuntime(scope, create, "22")).toThrow(
+      "PAGE_RUNTIME_RESTART_REQUIRED",
+    );
+    expect(() => installPageCollaborationRuntime(scope, create, "22")).toThrow(
+      "PAGE_RUNTIME_RESTART_REQUIRED",
+    );
+    expect(create).not.toHaveBeenCalled();
+    expect(host.isConnected).toBe(true);
+    expect(removeListener).toHaveBeenCalledOnce();
+  });
+});

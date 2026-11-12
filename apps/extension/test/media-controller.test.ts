@@ -534,6 +534,19 @@ async function observe(
 }
 
 describe("creating a playback group from the current shared page", () => {
+  it("does not clear current leader control while preparing an old follow task", async () => {
+    const value = harness({ userId: leaderUserId, deviceId: leaderDeviceId });
+    await connect(value);
+    await observe(value);
+    const before = value.controller.getStatus();
+    const observations = value.page.observations.length;
+    await expect(value.controller.prepareGroup(playbackGroupId, target)).rejects.toThrow(
+      "MEDIA_ALREADY_IN_GROUP",
+    );
+    expect(value.controller.getStatus().controlReady).toBe(before.controlReady);
+    expect(value.controller.getStatus().localObservation).toEqual(before.localObservation);
+    expect(value.page.observations).toHaveLength(observations);
+  });
   it("prepares without waiting on its caller queue and resumes its real follower membership without rejoining", async () => {
     const value = harness();
     await connect(value);

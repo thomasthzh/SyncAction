@@ -1,3 +1,4 @@
+import { WatchPreparationSchema } from "../watch-preparation.js";
 import {
   CanonicalUuidSchema,
   ContentCompatibilitySchema,
@@ -444,6 +445,8 @@ export const UiDiscoverySliceSchema = z
 
 export const UiRoomSliceSchema = z
   .object({
+    watchPreparationAvailable: z.boolean().optional(),
+    watchPreparation: WatchPreparationSchema.nullable().optional(),
     selectedRoomId: RoomIdSchema.nullable(),
     detail: PublicRoomDetailSchema.nullable(),
     runtime: ExtensionStatusUiSchema.nullable(),
@@ -732,6 +735,9 @@ export const UiCommandNameSchema = z.enum([
   "MEDIA_MEMBER_JUMP",
   "MEDIA_GROUP_ALIGN_ONCE",
   "MEDIA_GROUP_JOIN",
+  "WATCH_PREPARATION_SAVE",
+  "WATCH_PREPARATION_DISMISS",
+  "PAGE_TOOL_SHORTCUT_CONSUME",
   "MEDIA_GROUP_LEAVE",
   "MEDIA_GROUP_CLOSE",
   "MEDIA_DEVICE_TAKEOVER",
@@ -1041,8 +1047,15 @@ export const UiCommandSchema = z.discriminatedUnion("name", [
         playbackGroupId: CanonicalUuidSchema,
         expectedContext: MediaGroupCreateExpectedContextSchema.optional(),
         expectedTarget: MediaTargetSchema.optional(),
+        preparationId: CanonicalUuidSchema.optional(),
       })
-      .strict(),
+      .strict()
+      .refine(
+        (payload) =>
+          payload.preparationId === undefined ||
+          (payload.expectedContext !== undefined && payload.expectedTarget !== undefined),
+        { message: "Preparation requires its original context and target" },
+      ),
   ),
   commandWithPayload(
     "MEDIA_GROUP_JOIN",
@@ -1051,8 +1064,33 @@ export const UiCommandSchema = z.discriminatedUnion("name", [
         playbackGroupId: CanonicalUuidSchema,
         expectedContext: MediaGroupCreateExpectedContextSchema.optional(),
         expectedTarget: MediaTargetSchema.optional(),
+        preparationId: CanonicalUuidSchema.optional(),
+      })
+      .strict()
+      .refine(
+        (payload) =>
+          payload.preparationId === undefined ||
+          (payload.expectedContext !== undefined && payload.expectedTarget !== undefined),
+        { message: "Preparation requires its original context and target" },
+      ),
+  ),
+  commandWithPayload(
+    "WATCH_PREPARATION_SAVE",
+    z
+      .object({
+        id: CanonicalUuidSchema,
+        groupId: CanonicalUuidSchema,
+        target: MediaTargetSchema,
+        action: z.enum(["JOIN", "ALIGN"]),
+        profileId: ServerProfileIdSchema,
+        roomId: RoomIdSchema,
       })
       .strict(),
+  ),
+  commandWithPayload("WATCH_PREPARATION_DISMISS", z.object({ id: CanonicalUuidSchema }).strict()),
+  commandWithPayload(
+    "PAGE_TOOL_SHORTCUT_CONSUME",
+    z.object({ windowId: NonNegativeIntegerSchema }).strict(),
   ),
   commandWithPayload(
     "MEDIA_GROUP_LEAVE",
