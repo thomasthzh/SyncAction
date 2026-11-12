@@ -357,9 +357,18 @@ export class BrowserObserver {
       if (isRoomTabCapacityRejection(cause)) {
         return this.#cleanUpRejectedCreate(logicalTabId, browserTab.tabId);
       }
-      // An uncertain submitted create is recovered by the existing outbox. Do
-      // not keep an old-page association that could offer a second publication.
-      if (options.asNew === true) this.#pendingPublications.delete(tabId);
+      if (options.asNew === true) {
+        // Only a persisted or confirmed create owns recovery. A failure before
+        // persistence or a permanent rejection must retain the old-page choice.
+        const current = await this.#replica.getRecord().catch(() => null);
+        const submitted =
+          current?.outbox.some(
+            ({ envelope: { operation: queued } }) =>
+              queued.type === "tab.create" && queued.logicalTabId === logicalTabId,
+          ) === true ||
+          current?.confirmedSnapshot?.tabs.some((tab) => tab.id === logicalTabId) === true;
+        if (submitted) this.#pendingPublications.delete(tabId);
+      }
       throw cause;
     }
     if (options.asNew === true) this.#pendingPublications.delete(tabId);

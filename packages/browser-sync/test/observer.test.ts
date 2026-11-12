@@ -293,6 +293,31 @@ describe("browser observer", () => {
       expect(browser.state.tabs.some((tab) => tab.tabId === 10)).toBe(true);
     });
 
+    it.each(["BEFORE_PERSIST", "PERMANENT_REJECTION"] as const)(
+      "retains the old-page choice when a new create has no recovery owner: %s",
+      async (failureStage) => {
+        const failure = new Error(failureStage);
+        const rejectingWriter: LocalOperationWriter = {
+          async enqueueLocalOperation(operation, afterPersist) {
+            if (failureStage === "BEFORE_PERSIST") throw failure;
+            const item = await replica.enqueueLocalOperation(operation);
+            await afterPersist?.(item);
+            await replica.reject(item.envelope.clientOpId);
+            throw failure;
+          },
+        };
+        observer = createObserver(() => true, rejectingWriter, "MANUAL");
+        browser.state.tabs.find((tab) => tab.tabId === 10)!.url =
+          "https://example.com/private-draft";
+        await observer.observe({ type: "TAB_UPDATED", tabId: 10 });
+        const pending = observer.readPendingPublication(10);
+        expect(pending).not.toBeNull();
+        await expect(observer.shareTab(10, { asNew: true })).rejects.toBe(failure);
+        expect(observer.readPendingPublication(10)).toEqual(pending);
+        expect((await replica.getRecord()).outbox).toHaveLength(0);
+      },
+    );
+
     it("leaves an uncertain new-page submission to outbox recovery without offering the old association again", async () => {
       const failure = new Error("connection lost after persistence");
       observer = createObserver(() => true, new FailingWriter(replica, failure), "MANUAL");
