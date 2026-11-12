@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { act } from "preact/test-utils";
+import { LogicalTabIdSchema } from "@syncaction/protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/ui-vnext/app.js";
 import { InvitePicker } from "../src/ui-vnext/components/invite-picker.js";
@@ -36,6 +37,145 @@ const requestId = "00000000-0000-4000-8000-00000000a001";
 const invitationId = "00000000-0000-4000-8000-00000000a002";
 
 describe("complete collaboration tasks", () => {
+  it("keeps the first-watch task alive when sharing adds the first room page", async () => {
+    const store = scenario("room");
+    const page = store.collaboration.value.pages[0]!;
+    const revision = store.pageAccess.value.documentRevision!;
+    const url = "https://video.example/first";
+    store.update({
+      collaboration: { ...store.collaboration.value, pages: [] },
+      pageAccess: { ...store.pageAccess.value, documentRevision: null, url },
+      room: {
+        ...store.room.value,
+        runtime: {
+          ...store.room.value.runtime!,
+          media: { ...store.room.value.runtime!.media!, playbackGroups: [], localMembership: null },
+        },
+      },
+    });
+    store.responder = async (command) => {
+      if (command.name === "CURRENT_TAB_SHARE") {
+        store.update({ collaboration: { ...store.collaboration.value, pages: [page] } });
+        return success({
+          kind: "INTENT_RECORDED",
+          sharedPageContext: { tabId: store.pageAccess.value.tabId, url },
+        });
+      }
+      return success();
+    };
+    const root = renderPanel(<App store={store} />);
+    await click(byRole(root, "button", "开始一起看"));
+    await vi.waitFor(() =>
+      expect(root.querySelector('[data-watch-stage="WAITING_PAGE"]')).not.toBeNull(),
+    );
+    act(() =>
+      store.update({ pageAccess: { ...store.pageAccess.value, documentRevision: revision } }),
+    );
+    await vi.waitFor(() => expect(store.commandCalls.at(-1)?.name).toBe("MEDIA_GROUP_CREATE"));
+    expect(
+      store.commandCalls.filter((command) => command.name === "CURRENT_TAB_SHARE"),
+    ).toHaveLength(1);
+  });
+  it("starts at the existing shared scene before offering an unrelated current video", async () => {
+    const store = scenario("room");
+    store.update({
+      room: {
+        ...store.room.value,
+        runtime: {
+          ...store.room.value.runtime!,
+          media: { ...store.room.value.runtime!.media!, playbackGroups: [], localMembership: null },
+        },
+      },
+    });
+    const root = renderPanel(<App store={store} />);
+    expect(root.querySelector('[aria-labelledby="room-meeting-title"]')).not.toBeNull();
+    const action = root.querySelector<HTMLButtonElement>(".meeting-page button")!;
+    await click(action);
+    expect(store.commandCalls.at(-1)).toMatchObject({
+      name: "ROOM_TAB_ACTIVATE",
+      payload: {
+        expectedContext: {
+          profileId: store.shell.value.selectedProfileId,
+          roomId: store.room.value.selectedRoomId,
+        },
+      },
+    });
+    expect(
+      store.commandCalls.some(
+        (command) => command.name === "CURRENT_TAB_SHARE" || command.name === "MEDIA_GROUP_CREATE",
+      ),
+    ).toBe(false);
+  });
+
+  it("finds pending pages after switching away, including an orphan, and previews without publishing", async () => {
+    const store = scenario("room");
+    const logicalTabId = store.collaboration.value.pages[0]!.pageId;
+    const removed = LogicalTabIdSchema.parse("00000000-0000-4000-8000-00000000c099");
+    store.update({
+      room: {
+        ...store.room.value,
+        runtime: {
+          ...store.room.value.runtime!,
+          browser: {
+            ...store.room.value.runtime!.browser!,
+            pendingPublications: [
+              { tabId: 84, logicalTabId },
+              { tabId: 85, logicalTabId: removed },
+            ],
+          },
+        },
+      },
+    });
+    const root = renderPanel(<App store={store} />);
+    await click(byRole(root, "button", "2 个本机页面尚未提交"));
+    expect(root.textContent).toContain("原共享页已不在房间");
+    expect(root.querySelector(`[data-page-id="${logicalTabId}"]`)?.textContent).toContain(
+      "1 个本机页面待提交",
+    );
+    await click(root.querySelector<HTMLButtonElement>(".local-page-update button")!);
+    expect(store.commandCalls).toEqual([
+      {
+        name: "LOCAL_PAGE_ACTIVATE",
+        payload: {
+          tabId: 84,
+          logicalTabId,
+          profileId: store.shell.value.selectedProfileId,
+          roomId: store.room.value.selectedRoomId,
+        },
+      },
+    ]);
+  });
+
+  it("lets a member with several device pages choose an exact shared page without media navigation", async () => {
+    const store = scenario("room");
+    const target = store.collaboration.value.members[1]!;
+    const ids = store.collaboration.value.pages.slice(0, 2).map((page) => page.pageId);
+    store.update({
+      collaboration: {
+        ...store.collaboration.value,
+        members: store.collaboration.value.members.map((member) =>
+          member.userId === target.userId
+            ? { ...member, activePageIds: ids, deviceCount: 2 }
+            : member,
+        ),
+      },
+      room: { ...store.room.value, runtime: { ...store.room.value.runtime!, media: null } },
+    });
+    const root = renderPanel(<App store={store} />);
+    await click(root.querySelector("#room-workspace-tab-members")!);
+    const choices = root.querySelector(
+      `.workspace-member-row[data-member-id="${target.userId}"] details`,
+    )!;
+    expect(choices).not.toBeNull();
+    const buttons = choices.querySelectorAll("button");
+    expect(buttons).toHaveLength(2);
+    await click(buttons[1]!);
+    expect(store.commandCalls.at(-1)).toMatchObject({
+      name: "ROOM_TAB_ACTIVATE",
+      payload: { logicalTabId: ids[1] },
+    });
+    expect(store.commandCalls.some((command) => command.name === "MEDIA_MEMBER_JUMP")).toBe(false);
+  });
   it("receives a confirmed request after reopening before its original response", async () => {
     const store = scenario("lobby");
     const target = store.discovery.value.publicRooms.find(

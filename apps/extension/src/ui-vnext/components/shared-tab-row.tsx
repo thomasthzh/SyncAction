@@ -8,9 +8,9 @@ export interface SharedTabRowProps {
   readonly row: SharedTabRowModel;
   readonly memberById: ReadonlyMap<string, ExtensionCollaborationMemberSummary>;
   readonly currentUserId: string | null;
-  readonly isMediaPage: boolean;
+  readonly isCurrentPage?: boolean;
+  readonly pendingCount?: number;
   readonly onActivate: (pageId: string) => void;
-  readonly onMediaMemberJump: (userId: string) => void;
   readonly onRemove?: (pageId: string) => Promise<boolean>;
 }
 
@@ -18,9 +18,9 @@ export function SharedTabRow({
   row,
   memberById,
   currentUserId,
-  isMediaPage,
+  isCurrentPage = false,
+  pendingCount = 0,
   onActivate,
-  onMediaMemberJump,
   onRemove,
 }: SharedTabRowProps): JSX.Element {
   const [confirmRemove, setConfirmRemove] = useState(false);
@@ -59,9 +59,7 @@ export function SharedTabRow({
     <article
       class="shared-tab-row"
       data-page-id={row.pageKey}
-      data-current-page={
-        currentUserId !== null && row.viewerAccountIds.includes(currentUserId) ? "true" : "false"
-      }
+      data-current-page={isCurrentPage ? "true" : "false"}
     >
       <div class="favicon-fallback" data-favicon-fallback aria-hidden="true">
         {(row.domain[0] ?? "·").toUpperCase()}
@@ -76,17 +74,14 @@ export function SharedTabRow({
             {compatibilityCopy}
           </span>
         )}
+        {pendingCount > 0 ? (
+          <span class="local-update-marker">{pendingCount} 个本机页面待提交</span>
+        ) : null}
         <div class="shared-tab-row__presence">
           <MemberCluster
             members={viewers}
             currentUserId={currentUserId}
-            onMemberClick={(member) => {
-              if (isMediaPage) {
-                onMediaMemberJump(member.userId);
-              } else {
-                onActivate(row.pageKey);
-              }
-            }}
+            onMemberClick={() => onActivate(row.pageKey)}
           />
           <span>{viewers.length} 人正在查看</span>
         </div>

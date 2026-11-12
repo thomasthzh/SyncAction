@@ -1,4 +1,96 @@
 /* Task navigation stays outside the one scrolling content plane in each workspace. */
+.watch-primary-start > summary {
+  display: none;
+}
+
+.room-meeting-place header {
+  margin-bottom: 14px;
+}
+
+.room-meeting-place h2,
+.room-page-updates h3 {
+  margin: 4px 0 6px;
+}
+
+.meeting-page,
+.local-page-update {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-block: 12px;
+}
+
+.meeting-page > span,
+.local-page-update > span {
+  flex: 1;
+  min-width: 0;
+}
+
+.meeting-page strong,
+.local-page-update strong {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.meeting-page small,
+.local-page-update small,
+.member-page-picker small {
+  display: block;
+  margin-top: 4px;
+  color: var(--sa-text-muted);
+  font-size: 11px;
+}
+
+.room-page-updates {
+  margin-block: 14px;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--sa-accent-soft);
+}
+
+.room-page-updates h3 {
+  font-size: 14px;
+}
+
+.room-page-updates header p {
+  margin: 6px 0;
+  color: var(--sa-text-muted);
+  font-size: 12px;
+}
+
+.local-update-marker {
+  color: var(--sa-accent-strong);
+  font-size: 11px;
+}
+
+.member-page-picker {
+  grid-column: 2 / -1;
+  min-width: 0;
+}
+
+.member-page-picker summary {
+  cursor: pointer;
+  width: fit-content;
+}
+
+.member-page-picker > div {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+  border-left: 2px solid var(--sa-line);
+  padding-left: 12px;
+}
+
+.member-page-picker button {
+  min-width: 0;
+  text-align: left;
+  white-space: normal;
+}
+
 .room-destination {
   margin: 0 0 16px;
   padding: 18px;

@@ -276,6 +276,59 @@ describe("browser observer", () => {
       observer = createObserver(() => true, writer, "MANUAL");
     });
 
+    it("retains a local pending candidate when sharing it as another page is rejected by capacity", async () => {
+      observer = createObserver(() => true, new CapacityRejectingWriter(replica), "MANUAL");
+      browser.state.tabs.find((tab) => tab.tabId === 10)!.url = "https://example.com/private-draft";
+      await observer.observe({ type: "TAB_UPDATED", tabId: 10 });
+      const pending = observer.readPendingPublication(10);
+      expect(pending).not.toBeNull();
+      const copy = observer.readPendingPublications();
+      copy.length = 0;
+      expect(observer.readPendingPublications()).toEqual([pending]);
+      await expect(observer.shareTab(10, { asNew: true })).resolves.toMatchObject({
+        kind: "BLOCKED",
+        reason: "ROOM_TAB_LIMIT_REACHED",
+      });
+      expect(observer.readPendingPublication(10)).toEqual(pending);
+      expect(browser.state.tabs.some((tab) => tab.tabId === 10)).toBe(true);
+    });
+
+    it.each(["BEFORE_PERSIST", "PERMANENT_REJECTION"] as const)(
+      "retains the old-page choice when a new create has no recovery owner: %s",
+      async (failureStage) => {
+        const failure = new Error(failureStage);
+        const rejectingWriter: LocalOperationWriter = {
+          async enqueueLocalOperation(operation, afterPersist) {
+            if (failureStage === "BEFORE_PERSIST") throw failure;
+            const item = await replica.enqueueLocalOperation(operation);
+            await afterPersist?.(item);
+            await replica.reject(item.envelope.clientOpId);
+            throw failure;
+          },
+        };
+        observer = createObserver(() => true, rejectingWriter, "MANUAL");
+        browser.state.tabs.find((tab) => tab.tabId === 10)!.url =
+          "https://example.com/private-draft";
+        await observer.observe({ type: "TAB_UPDATED", tabId: 10 });
+        const pending = observer.readPendingPublication(10);
+        expect(pending).not.toBeNull();
+        await expect(observer.shareTab(10, { asNew: true })).rejects.toBe(failure);
+        expect(observer.readPendingPublication(10)).toEqual(pending);
+        expect((await replica.getRecord()).outbox).toHaveLength(0);
+      },
+    );
+
+    it("leaves an uncertain new-page submission to outbox recovery without offering the old association again", async () => {
+      const failure = new Error("connection lost after persistence");
+      observer = createObserver(() => true, new FailingWriter(replica, failure), "MANUAL");
+      browser.state.tabs.find((tab) => tab.tabId === 10)!.url = "https://example.com/private-draft";
+      await observer.observe({ type: "TAB_UPDATED", tabId: 10 });
+      await expect(observer.shareTab(10, { asNew: true })).rejects.toBe(failure);
+      expect(observer.readPendingPublication(10)).toBeNull();
+      expect((await replica.getRecord()).outbox).toHaveLength(1);
+      expect(browser.state.tabs.some((tab) => tab.tabId === 10)).toBe(true);
+    });
+
     it.each([false, true])(
       "checks the fresh URL before publication or discarding a draft (asNew=%s)",
       async (asNew) => {

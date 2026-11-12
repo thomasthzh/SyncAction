@@ -913,10 +913,32 @@ describe("BackgroundController", () => {
     await controller.handleBrowserEvent({ type: "TAB_UPDATED", tabId: 20 });
     expect(transport.submissions).toEqual([]);
     expect(controller.getPendingPagePublication(20)?.logicalTabId).toBe(logicalTabId);
+    expect((await controller.getStatus()).browser?.pendingPublications).toEqual([
+      { tabId: 20, logicalTabId },
+    ]);
+    const count = browserPort.createCount;
+    await controller.activatePendingPage(20, logicalTabId);
+    expect(activated.at(-1)).toBe(20);
+    expect(browserPort.createCount).toBe(count);
+    await expect(controller.activatePendingPage(999, logicalTabId)).rejects.toThrow(
+      "LOCAL_PAGE_NOT_AVAILABLE",
+    );
+    const session = browserPort.state.browserSessionId;
+    browserPort.state.browserSessionId = "018f8f8e-4b5c-7d6e-8f90-123456789abb";
+    await expect(controller.activatePendingPage(20, logicalTabId)).rejects.toThrow(
+      "LOCAL_PAGE_NOT_AVAILABLE",
+    );
+    browserPort.state.browserSessionId = session;
+    browserPort.state.tabs.find((tab) => tab.tabId === 20)!.pinned = true;
+    await expect(controller.activatePendingPage(20, logicalTabId)).rejects.toThrow(
+      "LOCAL_PAGE_NOT_AVAILABLE",
+    );
+    browserPort.state.tabs.find((tab) => tab.tabId === 20)!.pinned = false;
     expect(await controller.getPageDocumentRevision(20)).toBeNull();
 
     await controller.shareBrowserTab(20);
     await controller.whenIdle();
+    expect((await controller.getStatus()).browser?.pendingPublications).toEqual([]);
     const submission = transport.submissions.at(-1)!;
     expect(submission.operation).toEqual({
       type: "tab.navigate",

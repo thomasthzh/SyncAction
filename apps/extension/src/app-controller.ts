@@ -299,6 +299,7 @@ export interface RoomRuntime {
   closeMediaGroup?(playbackGroupId?: string): Promise<void>;
   takeOverMediaDevice?(playbackGroupId: string): Promise<void>;
   activateLogicalTab?(logicalTabId: string): Promise<void>;
+  activatePendingPage?(tabId: number, logicalTabId: string): Promise<void>;
   removeSharedTab?(logicalTabId: string): Promise<void>;
   getPendingPagePublication?(tabId: unknown): { logicalTabId: string } | null;
   decideMediaProposal(
@@ -1038,6 +1039,28 @@ export class ExtensionAppController {
         throw new Error("ROOM_TAB_NOT_AVAILABLE");
       }
       await runtime.activateLogicalTab(logicalTabId);
+    });
+  }
+
+  public activatePendingPage(input: {
+    tabId: number;
+    logicalTabId: string;
+    profileId: string;
+    roomId: string;
+  }): Promise<void> {
+    const captured = this.#captureMediaCommandContext();
+    return this.#enqueue(async () => {
+      const runtime = this.#requireRuntime();
+      if (
+        captured.runtime !== runtime ||
+        captured.generation !== this.#runtimeGeneration ||
+        input.profileId !== this.#profileId ||
+        input.roomId !== this.#selection?.roomId
+      )
+        throw new Error("ROOM_CONTEXT_CHANGED");
+      if (runtime.activatePendingPage === undefined) throw new Error("LOCAL_PAGE_NOT_AVAILABLE");
+      await runtime.activatePendingPage(input.tabId, input.logicalTabId);
+      this.#emitChanged(["room", "collaboration", "pageAccess"]);
     });
   }
 

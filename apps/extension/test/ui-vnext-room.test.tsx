@@ -256,7 +256,10 @@ describe("vNext active room", () => {
     await click(byRole(videoRow, "button", "打开"));
     expect(store.commandCalls.at(-1)).toEqual({
       name: "ROOM_TAB_ACTIVATE",
-      payload: { logicalTabId: videoPageId },
+      payload: {
+        logicalTabId: videoPageId,
+        expectedContext: { profileId: store.shell.value.selectedProfileId, roomId },
+      },
     });
     await click(byRole(cluster, "button", "查看 林岚 当前页面"));
     expect(store.commandCalls.at(-1)).toEqual({
@@ -265,13 +268,19 @@ describe("vNext active room", () => {
     });
     await click(byRole(videoRow, "button", "查看 房主 Thomas 当前页面"));
     expect(store.commandCalls.at(-1)).toEqual({
-      name: "MEDIA_MEMBER_JUMP",
-      payload: { userId: ownerId },
+      name: "ROOM_TAB_ACTIVATE",
+      payload: {
+        logicalTabId: videoPageId,
+        expectedContext: { profileId: store.shell.value.selectedProfileId, roomId },
+      },
     });
     await click(byRole(documentRow, "button", "查看 文档用户 当前页面"));
     expect(store.commandCalls.at(-1)).toEqual({
       name: "ROOM_TAB_ACTIVATE",
-      payload: { logicalTabId: documentPageId },
+      payload: {
+        logicalTabId: documentPageId,
+        expectedContext: { profileId: store.shell.value.selectedProfileId, roomId },
+      },
     });
     await click(byRole(groupCard, "button", "对齐一次"));
     expect(store.commandCalls.at(-1)).toEqual({

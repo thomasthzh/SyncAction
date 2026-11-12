@@ -16,6 +16,8 @@ import { useCommandFeedback } from "../use-command-feedback.js";
 import type { UiCommandInput } from "../store.js";
 import { WorkspaceTabs } from "./workspace-tabs.js";
 import { RoomMembersWorkspace } from "./room-members-workspace.js";
+import { RoomPageUpdates } from "./room-page-updates.js";
+import { RoomMeetingPlace } from "./room-meeting-place.js";
 import { useWatchParticipation } from "../use-watch-participation.js";
 import type { PagePermissionRequester } from "../../origin-permission-coordinator.js";
 
@@ -96,6 +98,10 @@ export function ActiveRoom({
     media?.state !== "OFFLINE" &&
     (media === null || media.roomMediaRevision !== null);
   const watchAwaiting = mediaView.groups.length === 0 && !watchConnected;
+  const currentSharedVideo =
+    store.pageAccess.value.documentRevision !== null &&
+    media?.localObservation != null &&
+    media.localObservation.target.logicalTabId === store.pageAccess.value.logicalTabId;
   const pendingOwnProposals = mediaView.groups
     .filter((group) =>
       group.members.some((member) => member.userId === currentUserId && member.role === "LEADER"),
@@ -134,15 +140,13 @@ export function ActiveRoom({
     () => createSharedTabRows({ pages, members, currentUserId, compatibilityByPage }),
     [pages, members, currentUserId, compatibilityByPage],
   );
-  const mediaPageIds = useMemo(() => {
-    const pageIds = new Set<string>();
-    for (const group of mediaView.groups) {
-      if (group.target !== null) {
-        pageIds.add(group.target.pageId);
-      }
-    }
-    return pageIds;
-  }, [mediaView.groups]);
+  const pendingPublications = runtime?.browser?.pendingPublications ?? [];
+  const pendingByPage = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const item of pendingPublications)
+      counts.set(item.logicalTabId, (counts.get(item.logicalTabId) ?? 0) + 1);
+    return counts;
+  }, [pendingPublications]);
   const normalizedQuery = pageQuery.trim().toLocaleLowerCase();
   const visibleRows = useMemo(
     () =>
@@ -165,6 +169,36 @@ export function ActiveRoom({
           ? "载入中"
           : "需处理";
 
+  function viewPages(): void {
+    setWorkspace("pages");
+    queueMicrotask(() =>
+      surface.current?.querySelector<HTMLElement>("#room-workspace-tab-pages")?.focus(),
+    );
+  }
+  function openSharedPage(pageId: string): void {
+    if (room.selectedRoomId === null) return;
+    const expectedContext = { profileId: shell.selectedProfileId, roomId: room.selectedRoomId };
+    void feedback.run("page", () =>
+      store.command({
+        name: "ROOM_TAB_ACTIVATE",
+        payload: { logicalTabId: LogicalTabIdSchema.parse(pageId), expectedContext },
+      }),
+    );
+  }
+  function previewLocalPage(tabId: number, logicalTabId: string): void {
+    if (room.selectedRoomId === null) return;
+    void feedback.run("local-page", () =>
+      store.command({
+        name: "LOCAL_PAGE_ACTIVATE",
+        payload: {
+          tabId,
+          logicalTabId: LogicalTabIdSchema.parse(logicalTabId),
+          profileId: shell.selectedProfileId,
+          roomId: room.selectedRoomId!,
+        },
+      }),
+    );
+  }
   function sendMediaIntent(intent: MediaViewIntent): void {
     if (intent.type === "JOIN_GROUP") {
       void participation.follow(intent.playbackGroupId);
@@ -316,6 +350,13 @@ export function ActiveRoom({
         </button>
       ) : null}
       <ActionableStatus errorCode={feedback.errorCode} />
+      {workspace !== "pages" && pendingPublications.length > 0 ? (
+        <button class="workspace-pending-action" type="button" onClick={viewPages}>
+          <Icon name="share" size={16} />
+          <span>{pendingPublications.length} 个本机页面尚未提交</span>
+          <Icon name="chevron" size={16} />
+        </button>
+      ) : null}
       {feedback.message !== null ? (
         <p class="command-feedback" role="status">
           {feedback.message}
@@ -370,7 +411,24 @@ export function ActiveRoom({
             </p>
           </section>
         ) : mediaView.groups.length === 0 ? (
-          <StartWatchingCard store={store} onRequestPagePermission={onRequestPagePermission} />
+          <>
+            {rows.length > 0 && !currentSharedVideo ? (
+              <RoomMeetingPlace
+                rows={rows}
+                members={memberById}
+                currentUserId={currentUserId}
+                busy={feedback.pending !== null}
+                onOpen={openSharedPage}
+                onViewAll={viewPages}
+              />
+            ) : null}
+            <StartWatchingCard
+              key="initial-watch"
+              store={store}
+              collapsible={rows.length > 0 && !currentSharedVideo}
+              onRequestPagePermission={onRequestPagePermission}
+            />
+          </>
         ) : null}
         {media !== null && mediaView.groups.length > 0 ? (
           <WatchWorkspace
@@ -424,6 +482,11 @@ export function ActiveRoom({
             {collaboration.capacity.limit === null ? "" : `/${collaboration.capacity.limit}`}
           </span>
         </header>
+        <RoomPageUpdates
+          store={store}
+          busy={feedback.pending !== null}
+          onPreview={previewLocalPage}
+        />
         {rows.length > 4 || pageQuery !== "" ? (
           <label class="room-search shared-page-search">
             <Icon name="search" size={18} />
@@ -438,7 +501,9 @@ export function ActiveRoom({
           </label>
         ) : null}
         {rows.length === 0 ? (
-          <p class="section-description">还没有共享页面</p>
+          <p class="section-description">
+            {runtime?.state === "SYNCED" ? "还没有共享页面" : "正在读取共享页面…"}
+          </p>
         ) : visibleRows.length === 0 ? (
           <div class="empty-state">
             <strong>没有找到共享页面</strong>
@@ -453,15 +518,12 @@ export function ActiveRoom({
                 row={row}
                 memberById={memberById}
                 currentUserId={currentUserId}
-                isMediaPage={mediaPageIds.has(row.pageKey)}
-                onActivate={(pageId) =>
-                  void feedback.run("page", () =>
-                    store.command({
-                      name: "ROOM_TAB_ACTIVATE",
-                      payload: { logicalTabId: LogicalTabIdSchema.parse(pageId) },
-                    }),
-                  )
+                isCurrentPage={
+                  store.pageAccess.value.logicalTabId === row.pageKey &&
+                  store.pageAccess.value.documentRevision !== null
                 }
+                pendingCount={pendingByPage.get(row.pageKey) ?? 0}
+                onActivate={openSharedPage}
                 onRemove={async (pageId) => {
                   if (shell.selectedProfileId === null || room.selectedRoomId === null)
                     return false;
@@ -482,12 +544,6 @@ export function ActiveRoom({
                   );
                   return result?.ok === true;
                 }}
-                onMediaMemberJump={(userId) =>
-                  void store.command({
-                    name: "MEDIA_MEMBER_JUMP",
-                    payload: { userId },
-                  })
-                }
                 key={row.pageKey}
               />
             ))}

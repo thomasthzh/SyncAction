@@ -95,6 +95,42 @@ beforeEach(() => {
 });
 
 describe("PageContentCompatibilityReporter", () => {
+  it("refreshes at the first deadline while a page keeps mutating every half second", async () => {
+    await reporter.setContext({ logicalTabId, documentRevision: revision });
+    viewport = { widthCssPx: 900, heightCssPx: 720 };
+    notifyMutation?.();
+    const first = scheduler.callback;
+    for (let index = 0; index < 9; index += 1) {
+      now += 500;
+      notifyMutation?.();
+      expect(scheduler.callback).toBe(first);
+    }
+    expect(scheduler.clearCount).toBe(0);
+    now += 500;
+    scheduler.run();
+    await reporter.whenIdle();
+    expect(reports).toHaveLength(2);
+    expect(reports[1]!.contentContext.contentSignature).not.toEqual(
+      reports[0]!.contentContext.contentSignature,
+    );
+  });
+
+  it("rechecks the minimum interval if an immediate identity refresh overtakes the dirty timer", async () => {
+    await reporter.setContext({ logicalTabId, documentRevision: revision });
+    notifyMutation?.();
+    now += 4_000;
+    await reporter.setMedia({ provider: "YOUTUBE", mediaKey: "youtube:dQw4w9WgXcQ" });
+    now += 1_000;
+    viewport = { widthCssPx: 800, heightCssPx: 720 };
+    scheduler.run();
+    await reporter.whenIdle();
+    expect(reports).toHaveLength(2);
+    expect(scheduler.delayMs).toBe(4_000);
+    now += 4_000;
+    scheduler.run();
+    await reporter.whenIdle();
+    expect(reports).toHaveLength(3);
+  });
   it("refreshes a resized viewport without mutations, coalesces the burst, and stops on dispose", async () => {
     await reporter.setContext({ logicalTabId, documentRevision: revision });
     const original = reports[0]!.contentContext.contentSignature;

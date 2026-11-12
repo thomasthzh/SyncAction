@@ -365,9 +365,9 @@ export class PageContentCompatibilityReporter {
     if (this.#disposed || this.#context === undefined) {
       return;
     }
-    if (this.#mutationTimer !== undefined) {
-      this.#scheduler.clearTimeout(this.#mutationTimer);
-    }
+    // Keep the first dirty deadline: live counters/animations must not postpone
+    // viewport and content compatibility forever.
+    if (this.#mutationTimer !== undefined) return;
     const now = this.#now();
     const rateLimitDelay =
       this.#lastComputedAt === null
@@ -376,12 +376,22 @@ export class PageContentCompatibilityReporter {
     const delayMs = Math.max(MUTATION_DEBOUNCE_MS, rateLimitDelay);
     this.#mutationTimer = this.#scheduler.setTimeout(() => {
       this.#mutationTimer = undefined;
-      void this.#enqueueCompute();
+      void this.#enqueueCompute(true);
     }, delayMs);
   }
 
-  #enqueueCompute(): Promise<void> {
-    const result = this.#tail.then(async () => this.#computeAndEmit());
+  #enqueueCompute(throttled = false): Promise<void> {
+    const result = this.#tail.then(async () => {
+      if (
+        throttled &&
+        this.#lastComputedAt !== null &&
+        this.#now() < this.#lastComputedAt + MIN_SIGNATURE_INTERVAL_MS
+      ) {
+        this.#scheduleMutationReport();
+        return;
+      }
+      await this.#computeAndEmit();
+    });
     this.#tail = result.catch(() => undefined);
     return result;
   }

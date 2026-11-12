@@ -12,7 +12,9 @@ if (root === null) {
 
 const requestedFixture = new URLSearchParams(globalThis.location.search).get("fixture");
 const fixture: VisualFixture =
-  requestedFixture === "journey" || requestedFixture === "room-journey"
+  requestedFixture === "journey" ||
+  requestedFixture === "room-journey" ||
+  requestedFixture === "room-continuity"
     ? requestedFixture
     : requestedFixture === "room-unshared"
       ? "room-unshared"

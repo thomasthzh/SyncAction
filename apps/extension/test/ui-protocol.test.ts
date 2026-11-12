@@ -210,6 +210,7 @@ describe("side-panel UI protocol", () => {
       "ROOM_UPDATE",
       "ROOM_SELECT",
       "ROOM_TAB_ACTIVATE",
+      "LOCAL_PAGE_ACTIVATE",
       "ROOM_TAB_REMOVE",
       "ROOM_JOIN_OPEN",
       "ROOM_JOIN_REQUEST",

@@ -5,6 +5,7 @@ import { avatarForMember } from "../../ui/collaboration-view-model.js";
 import { Icon } from "../icons.js";
 import { useCommandFeedback } from "../use-command-feedback.js";
 import { ActionableStatus } from "./actionable-status.js";
+import { LogicalTabIdSchema } from "@syncaction/protocol";
 
 export function RoomMembersWorkspace({
   store,
@@ -27,6 +28,20 @@ export function RoomMembersWorkspace({
     `${member.displayName} ${member.username}`.toLocaleLowerCase().includes(normalized),
   );
   const selfId = store.shell.value.account?.id;
+  const profileId = store.shell.value.selectedProfileId;
+  const roomId = store.room.value.selectedRoomId;
+  function openPage(memberId: string, pageId: string): void {
+    if (roomId === null) return;
+    void feedback.run(memberId, () =>
+      store.command({
+        name: "ROOM_TAB_ACTIVATE",
+        payload: {
+          logicalTabId: LogicalTabIdSchema.parse(pageId),
+          expectedContext: { profileId, roomId },
+        },
+      }),
+    );
+  }
   return (
     <section class="room-members-workspace" aria-labelledby="room-members-title">
       <header class="workspace-heading">
@@ -59,11 +74,6 @@ export function RoomMembersWorkspace({
           const pages = store.collaboration.value.pages.filter(({ pageId }) =>
             live?.activePageIds.includes(pageId),
           );
-          const navigation = store.room.value.runtime?.media?.navigation
-            .filter((entry) => entry.userId === member.userId && entry.logicalTabId !== null)
-            .sort((left, right) => left.deviceId.localeCompare(right.deviceId))[0];
-          const targetPage = pages.find((page) => page.pageId === navigation?.logicalTabId);
-          const jumpUnavailable = navigation?.canJump !== true;
           const avatar = avatarForMember(member.displayName, member.userId);
           return (
             <article
@@ -89,37 +99,47 @@ export function RoomMembersWorkspace({
                   {live === undefined ? "状态待同步" : live.online ? "在线" : "离线"}
                 </span>
                 <small>
-                  {targetPage?.title ??
-                    (pages.length > 1 ? `${pages.length} 个共享页面` : pages[0]?.title) ??
+                  {(pages.length > 1
+                    ? `${pages.length} 个共享页面${live?.deviceCount ? ` · ${live.deviceCount} 台设备` : ""}`
+                    : pages[0]?.title) ??
                     (live === undefined
                       ? "正在读取页面状态"
                       : live.online
                         ? "尚未查看共享页面"
                         : "当前不在线")}
                 </small>
-                {member.userId !== selfId && live?.online && pages.length > 0 && jumpUnavailable ? (
-                  <small>当前客户端尚未绑定对方的共享页面</small>
-                ) : null}
               </div>
-              {member.userId !== selfId && live?.online && pages.length > 0 ? (
+              {member.userId !== selfId && live?.online && pages.length === 1 ? (
                 <button
                   class="compact-button"
                   type="button"
                   aria-label={`打开 ${member.displayName} 的页面`}
                   aria-describedby={`member-identity-${member.userId}`}
-                  disabled={feedback.pending !== null || jumpUnavailable}
-                  onClick={() =>
-                    void feedback.run(member.userId, () =>
-                      store.command({
-                        name: "MEDIA_MEMBER_JUMP",
-                        payload: { userId: member.userId },
-                      }),
-                    )
-                  }
+                  disabled={feedback.pending !== null}
+                  onClick={() => openPage(member.userId, pages[0]!.pageId)}
                 >
                   <Icon name="share" size={16} />
                   <span>打开</span>
                 </button>
+              ) : null}
+              {member.userId !== selfId && live?.online && pages.length > 1 ? (
+                <details class="member-page-picker">
+                  <summary class="compact-button">选择页面 ({pages.length})</summary>
+                  <div aria-label={`${member.displayName} 正在查看的共享页面`}>
+                    {pages.map((page) => (
+                      <button
+                        class="text-button"
+                        type="button"
+                        key={page.pageId}
+                        disabled={feedback.pending !== null}
+                        onClick={() => openPage(member.userId, page.pageId)}
+                      >
+                        <strong>{page.title}</strong>
+                        <small>{page.domain}</small>
+                      </button>
+                    ))}
+                  </div>
+                </details>
               ) : null}
             </article>
           );
