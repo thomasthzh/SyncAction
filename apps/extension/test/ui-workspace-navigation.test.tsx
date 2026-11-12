@@ -103,8 +103,14 @@ describe("unified task workspaces", () => {
     );
     expect(store.commandCalls).toEqual([
       {
-        name: "MEDIA_MEMBER_JUMP",
-        payload: { userId: store.collaboration.value.members[1]!.userId },
+        name: "ROOM_TAB_ACTIVATE",
+        payload: {
+          logicalTabId: store.collaboration.value.members[1]!.activePageIds[0],
+          expectedContext: {
+            profileId: store.shell.value.selectedProfileId,
+            roomId: store.room.value.selectedRoomId,
+          },
+        },
       },
     ]);
     expect(store.commandCalls.some((c) => c.name === "MEDIA_GROUP_JOIN")).toBe(false);
@@ -118,7 +124,7 @@ describe("unified task workspaces", () => {
     expect(root.querySelector(".workspace-member-row")?.textContent).not.toContain("离线");
   });
 
-  it("checks a member's own binding even when another member can be opened", async () => {
+  it("opens a member's shared page even when this device has no previous local binding", async () => {
     const store = fixture();
     const target = store.collaboration.value.members[1]!.userId;
     const runtime = store.room.value.runtime!;
@@ -142,9 +148,12 @@ describe("unified task workspaces", () => {
     const root = renderPanel(<App store={store} now={() => FIXTURE_NOW_MS} />);
     await click(root.querySelector("#room-workspace-tab-members")!);
     const button = byRole(root, "button", "打开 林岚 的页面") as HTMLButtonElement;
-    expect(button.disabled).toBe(true);
-    expect(button.closest("article")?.textContent).toContain("当前客户端尚未绑定");
-    expect(store.commandCalls).toEqual([]);
+    expect(button.disabled).toBe(false);
+    await click(button);
+    expect(store.commandCalls.at(-1)).toMatchObject({
+      name: "ROOM_TAB_ACTIVATE",
+      payload: { logicalTabId: store.collaboration.value.members[1]!.activePageIds[0] },
+    });
   });
 
   it("does not probe the placeholder server from settings", async () => {

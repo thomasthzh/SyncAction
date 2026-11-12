@@ -31,6 +31,7 @@ const ERROR_LABELS: Readonly<Record<string, string>> = {
   PAGE_PUBLICATION_STALE:
     "房间中的原页面已被更新或移除。请打开最新共享页面后再继续，当前改动尚未提交。",
   ROOM_TAB_NOT_AVAILABLE: "共享页面已变化或连接尚未准备好，请重新打开页面后再试",
+  LOCAL_PAGE_NOT_AVAILABLE: "这份本机页面已关闭或状态已变化，请检查本机标签页后再试",
   PAGE_DOCUMENT_PREPARING: "页面协作仍在准备，请稍后从当前页面重试",
   PAGE_TOOL_RESULT_UNCONFIRMED: "尚未确认操作结果，请先检查当前页面后再决定是否重试",
   ROOM_CAPACITY_REACHED: "本服务器普通用户同时最多创建 5 个房间",

@@ -114,6 +114,12 @@ const RoomBrowserStatusSchema = z
     reason: BrowserStatusReasonSchema.nullable(),
     missingTabCount: NonNegativeIntegerSchema,
     effectsApplied: NonNegativeIntegerSchema,
+    pendingPublications: z
+      .array(
+        z.object({ tabId: NonNegativeIntegerSchema, logicalTabId: LogicalTabIdSchema }).strict(),
+      )
+      .max(2_000)
+      .optional(),
   })
   .strict();
 
@@ -694,6 +700,7 @@ export const UiCommandNameSchema = z.enum([
   "ROOM_UPDATE",
   "ROOM_SELECT",
   "ROOM_TAB_ACTIVATE",
+  "LOCAL_PAGE_ACTIVATE",
   "ROOM_TAB_REMOVE",
   "ROOM_JOIN_OPEN",
   "ROOM_JOIN_REQUEST",
@@ -905,6 +912,17 @@ export const UiCommandSchema = z.discriminatedUnion("name", [
     "ROOM_TAB_REMOVE",
     z
       .object({
+        logicalTabId: LogicalTabIdSchema,
+        profileId: ServerProfileIdSchema,
+        roomId: RoomIdSchema,
+      })
+      .strict(),
+  ),
+  commandWithPayload(
+    "LOCAL_PAGE_ACTIVATE",
+    z
+      .object({
+        tabId: NonNegativeIntegerSchema,
         logicalTabId: LogicalTabIdSchema,
         profileId: ServerProfileIdSchema,
         roomId: RoomIdSchema,

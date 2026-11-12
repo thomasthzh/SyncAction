@@ -9,12 +9,14 @@ import { ActionableStatus } from "./actionable-status.js";
 interface StartWatchingCardProps {
   readonly store: UiStore;
   readonly playbackGroupId?: string;
+  readonly collapsible?: boolean;
   readonly onRequestPagePermission: (intentKey: string, expectedUrl?: string) => void;
 }
 
 export function StartWatchingCard({
   store,
   playbackGroupId,
+  collapsible = false,
   onRequestPagePermission,
 }: StartWatchingCardProps): JSX.Element {
   const feedback = useCommandFeedback();
@@ -26,6 +28,7 @@ export function StartWatchingCard({
   const requestedRoom = useRef<typeof store.room.value.selectedRoomId>(null);
   const requestedRevision = useRef<typeof access.documentRevision>(null);
   const requestedUrl = useRef<string | null>(null);
+  const requestedPageUrl = useRef<string | null>(null);
   const inFlight = useRef(false);
   const mounted = useRef(true);
   const membership = store.room.value.runtime?.media?.localMembership;
@@ -48,6 +51,9 @@ export function StartWatchingCard({
       store.room.value.selectedRoomId === requestedRoom.current &&
       current.tabId === requestedTab.current &&
       current.origin === requestedOrigin.current &&
+      (requestedPageUrl.current === null ||
+        current.url === undefined ||
+        current.url === requestedPageUrl.current) &&
       (revision === null ||
         (revision.roomEpoch === current.documentRevision?.roomEpoch &&
           revision.tabUpdatedAtSeq === current.documentRevision?.tabUpdatedAtSeq))
@@ -114,6 +120,7 @@ export function StartWatchingCard({
     stage,
     access.tabId,
     access.origin,
+    access.url,
     access.documentRevision,
     store.shell.value.selectedProfileId,
     store.room.value.selectedRoomId,
@@ -125,10 +132,6 @@ export function StartWatchingCard({
       feedback.setErrorCode("PROTECTED_PAGE");
       return;
     }
-    if (switching && access.documentRevision === null) {
-      feedback.setErrorCode("MEDIA_PAGE_PUBLICATION_REQUIRED");
-      return;
-    }
     inFlight.current = true;
     requestedTab.current = access.tabId;
     requestedProfile.current = store.shell.value.selectedProfileId;
@@ -136,6 +139,7 @@ export function StartWatchingCard({
     requestedOrigin.current = access.origin;
     requestedRevision.current = access.documentRevision;
     requestedUrl.current = access.url ?? null;
+    requestedPageUrl.current = access.url ?? null;
     feedback.setErrorCode(null);
     if (access.documentRevision !== null) {
       try {
@@ -162,7 +166,10 @@ export function StartWatchingCard({
     );
     if (!isCurrent()) {
       inFlight.current = false;
-      if (mounted.current) setStage("IDLE");
+      if (mounted.current) {
+        setStage("IDLE");
+        feedback.setErrorCode("MEDIA_CONTEXT_CHANGED");
+      }
       return;
     }
     if (result?.ok !== true) {
@@ -212,7 +219,7 @@ export function StartWatchingCard({
           : !siteAllowed
             ? "NEEDS_PERMISSION"
             : "READY";
-  return (
+  const card = (
     <section
       class="start-watching watch-workspace editorial-surface"
       aria-labelledby="start-watching-heading"
@@ -226,7 +233,7 @@ export function StartWatchingCard({
           {switching
             ? pageShared
               ? "切换到当前视频，保留原播放组和同伴的跟随关系。"
-              : "先在插件底部提交页面更新，再继续原播放组。"
+              : "提交当前页面并切换视频，同伴继续留在原播放组。"
             : !pageShared
               ? "先分享当前页面，再按需允许此网站的媒体同步。"
               : !siteAllowed
@@ -293,7 +300,9 @@ export function StartWatchingCard({
                   ? "正在切换视频…"
                   : "正在创建播放组…"
                 : switching
-                  ? "用当前视频继续一起看"
+                  ? pageShared
+                    ? "用当前视频继续一起看"
+                    : "分享当前视频并继续一起看"
                   : "开始一起看"}
       </button>
       <ActionableStatus errorCode={feedback.errorCode} />
@@ -303,5 +312,14 @@ export function StartWatchingCard({
         </p>
       )}
     </section>
+  );
+  return (
+    <details
+      class={collapsible ? "watch-new-group" : "watch-primary-start"}
+      open={!collapsible || pending ? true : undefined}
+    >
+      <summary hidden={!collapsible}>用当前视频开始一起看</summary>
+      {card}
+    </details>
   );
 }

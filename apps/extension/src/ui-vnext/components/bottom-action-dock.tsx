@@ -271,13 +271,12 @@ export function BottomActionDock({
       <ActionableStatus
         errorCode={showCommandFeedback ? feedback.errorCode : preparation.errorCode}
       />
-      {pendingPublication &&
-      (feedback.errorCode === "PAGE_PUBLICATION_STALE" ||
-        preparation.errorCode === "PAGE_PUBLICATION_STALE") ? (
+      {pendingPublication ? (
         <button
           class="secondary-button"
           type="button"
           disabled={busy}
+          title="保留房间原页面，把当前页另外分享"
           onClick={() => void shareAsNew()}
         >
           作为新页面分享

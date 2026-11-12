@@ -22,6 +22,7 @@ export type ExtensionCommandAppPort = Pick<
   | "updateRoom"
   | "selectRoom"
   | "activateLogicalTab"
+  | "activatePendingPage"
   | "removeSharedTab"
   | "joinOpenRoom"
   | "requestRoomJoin"
@@ -199,6 +200,9 @@ export class ExtensionCommandRouter {
         break;
       case "ROOM_TAB_REMOVE":
         result = await this.#app.removeSharedTab(command.payload);
+        break;
+      case "LOCAL_PAGE_ACTIVATE":
+        result = await this.#app.activatePendingPage(command.payload);
         break;
       case "ROOM_JOIN_OPEN":
         result = await this.#app.joinOpenRoom(command.payload.roomId);

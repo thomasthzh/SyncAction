@@ -10,7 +10,12 @@ import {
 
 export interface RoomBrowserControllerOptions {
   observer: Pick<BrowserObserver, "observe" | "shareTab"> &
-    Partial<Pick<BrowserObserver, "readPendingPublication" | "discardPendingPublication">>;
+    Partial<
+      Pick<
+        BrowserObserver,
+        "readPendingPublication" | "readPendingPublications" | "discardPendingPublication"
+      >
+    >;
   actuator: Pick<BrowserActuator, "reconcile"> & Partial<Pick<BrowserActuator, "openSharedTab">>;
   browserChangePolicy?: BrowserChangePolicy;
 }
@@ -26,6 +31,7 @@ export interface RoomBrowserStatus {
   reason: ObserverStatusReason | ActuatorStatusReason | null;
   missingTabCount: number;
   effectsApplied: number;
+  pendingPublications?: { tabId: number; logicalTabId: string }[] | undefined;
 }
 
 export function browserRecoveryMessage(status: RoomBrowserStatus | null): string {
@@ -62,6 +68,10 @@ export class RoomBrowserController {
 
   public readPendingPublication(tabId: unknown): PendingTabPublication | null {
     return this.#observer.readPendingPublication?.(tabId) ?? null;
+  }
+
+  public readPendingPublications(): PendingTabPublication[] {
+    return this.#observer.readPendingPublications?.() ?? [];
   }
 
   public openSharedTab(logicalTabId: unknown): Promise<BrowserActuatorResult> {

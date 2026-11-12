@@ -1108,7 +1108,20 @@ export class BackgroundController {
             binding.validatedAtServerSeq,
           ]),
       ),
-      browser: this.#roomBrowserController?.getStatus() ?? null,
+      browser:
+        this.#roomBrowserController === undefined
+          ? null
+          : {
+              ...this.#roomBrowserController.getStatus(),
+              pendingPublications: this.#roomBrowserController
+                .readPendingPublications()
+                .filter(
+                  (item) =>
+                    this.#browserSessionId === undefined ||
+                    item.browserSessionId === this.#browserSessionId,
+                )
+                .map(({ tabId, logicalTabId }) => ({ tabId, logicalTabId })),
+            },
       presence: this.#presenceController?.getStatus() ?? null,
       pointer: this.#pointerController?.getStatus() ?? null,
       media: this.#mediaController?.getStatus() ?? null,
@@ -1116,6 +1129,45 @@ export class BackgroundController {
       drawing: this.#drawingController?.getStatus() ?? null,
       tabs,
     };
+  }
+
+  public async activatePendingPage(tabIdInput: unknown, logicalTabIdInput: unknown): Promise<void> {
+    const tabId = z.number().int().nonnegative().safe().parse(tabIdInput);
+    const logicalTabId = LogicalTabIdSchema.parse(logicalTabIdInput);
+    const replica = this.#replica;
+    const controller = this.#roomBrowserController;
+    const navigation = this.#mediaNavigationPort;
+    const pending = controller?.readPendingPublication(tabId);
+    if (
+      this.#state !== "SYNCED" ||
+      replica === undefined ||
+      controller === undefined ||
+      this.#browserPort === undefined ||
+      navigation === undefined ||
+      pending?.logicalTabId !== logicalTabId
+    )
+      throw new Error("LOCAL_PAGE_NOT_AVAILABLE");
+    const state = await this.#browserPort.readState();
+    const tab = state.tabs.find((tab) => tab.tabId === tabId);
+    const window = state.windows.find((window) => window.windowId === tab?.windowId);
+    const current = controller.readPendingPublication(tabId);
+    if (
+      this.#state !== "SYNCED" ||
+      this.#replica !== replica ||
+      this.#roomBrowserController !== controller ||
+      current?.logicalTabId !== logicalTabId ||
+      current.browserSessionId !== state.browserSessionId ||
+      (this.#browserSessionId !== undefined &&
+        current.browserSessionId !== this.#browserSessionId) ||
+      tab === undefined ||
+      tab.pinned ||
+      window?.type !== "normal" ||
+      window.incognito
+    )
+      throw new Error("LOCAL_PAGE_NOT_AVAILABLE");
+    await navigation.activateTab(tabId);
+    await this.handleActiveTabChanged(tabId);
+    this.#notifyStatusChanged();
   }
 
   public async activateLogicalTab(logicalTabIdInput: unknown): Promise<void> {

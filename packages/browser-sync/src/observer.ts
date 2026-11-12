@@ -197,6 +197,12 @@ export class BrowserObserver {
     this.#pendingPublications.delete(BrowserObjectIdSchema.parse(tabIdInput));
   }
 
+  public readPendingPublications(): PendingTabPublication[] {
+    return [...this.#pendingPublications.values()]
+      .sort((left, right) => left.tabId - right.tabId)
+      .map((item) => structuredClone(item));
+  }
+
   public async shareTab(
     tabIdInput: unknown,
     options: ShareTabOptions = {},
@@ -246,7 +252,6 @@ export class BrowserObserver {
     if (url === undefined) {
       return { kind: "RECOVERY_REQUIRED", reason: "UNSUPPORTED_ROOM_TAB" };
     }
-    if (options.asNew === true) this.#pendingPublications.delete(tabId);
     if (this.#browserChangePolicy === "MANUAL") {
       const optimistic = projectOptimisticState(record);
       const existing =
@@ -274,7 +279,7 @@ export class BrowserObserver {
         );
         await this.#replica.removeBinding(existing.id);
       }
-      const pending = this.#pendingPublications.get(tabId);
+      const pending = options.asNew === true ? undefined : this.#pendingPublications.get(tabId);
       if (pending !== undefined) {
         const confirmed = record.confirmedSnapshot.tabs.find(
           (tab) => tab.id === pending.logicalTabId,
@@ -354,6 +359,7 @@ export class BrowserObserver {
       }
       throw cause;
     }
+    if (options.asNew === true) this.#pendingPublications.delete(tabId);
     return { kind: "INTENT_RECORDED", operation };
   }
 

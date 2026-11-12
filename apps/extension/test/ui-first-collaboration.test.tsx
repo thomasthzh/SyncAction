@@ -61,19 +61,90 @@ describe("first collaboration recovery and truthful results", () => {
     expect(root.textContent).toContain("同伴继续在原播放组跟随");
   });
 
-  it("requires explicit page publication before switching and never silently shares the new page", async () => {
+  it("publishes only on the explicit combined action and switches the original group after its document is ready", async () => {
     const store = roomStore();
-    store.update({ pageAccess: { ...store.pageAccess.value, documentRevision: null } });
+    const revision = store.pageAccess.value.documentRevision!;
+    const playbackGroupId = store.room.value.runtime!.media!.playbackGroups[0]!.playbackGroupId;
+    const url = "https://video.example/watch/next";
+    store.update({ pageAccess: { ...store.pageAccess.value, url, documentRevision: null } });
+    store.responder = async (command) =>
+      success(
+        command.name === "CURRENT_TAB_SHARE"
+          ? {
+              kind: "INTENT_RECORDED",
+              sharedPageContext: { tabId: store.pageAccess.value.tabId, url },
+            }
+          : undefined,
+      );
     const root = renderPanel(
       <StartWatchingCard
         store={store}
-        playbackGroupId="00000000-0000-4000-8000-000000000101"
+        playbackGroupId={playbackGroupId}
         onRequestPagePermission={vi.fn()}
       />,
     );
-    await click(byRole(root, "button", "用当前视频继续一起看"));
     expect(store.commandCalls).toEqual([]);
-    expect(root.textContent).toContain("先在插件底部提交页面更新");
+    await click(byRole(root, "button", "分享当前视频并继续一起看"));
+    expect(store.commandCalls.map((command) => command.name)).toEqual([
+      "CURRENT_TAB_SHARE",
+      "PAGE_PERMISSION_REFRESH",
+    ]);
+    act(() =>
+      store.update({
+        pageAccess: {
+          ...store.pageAccess.value,
+          documentRevision: { ...revision, tabUpdatedAtSeq: revision.tabUpdatedAtSeq + 1 },
+        },
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(store.commandCalls.at(-1)?.name).toBe("MEDIA_GROUP_SWITCH_CURRENT"),
+    );
+    expect(store.commandCalls.at(-1)).toMatchObject({
+      payload: { playbackGroupId, expectedContext: { url } },
+    });
+    expect(store.commandCalls.some((command) => command.name === "MEDIA_GROUP_CREATE")).toBe(false);
+  });
+
+  it("stops a combined switch when the same tab navigates to another URL on the same site", async () => {
+    const store = roomStore();
+    store.update({
+      pageAccess: {
+        ...store.pageAccess.value,
+        url: "https://video.example/first",
+        documentRevision: null,
+      },
+    });
+    let complete!: (value: UiCommandResult) => void;
+    store.responder = () =>
+      new Promise((resolve) => {
+        complete = resolve;
+      });
+    const permission = vi.fn();
+    const root = renderPanel(
+      <StartWatchingCard
+        store={store}
+        playbackGroupId={store.room.value.runtime!.media!.playbackGroups[0]!.playbackGroupId}
+        onRequestPagePermission={permission}
+      />,
+    );
+    await click(byRole(root, "button", "分享当前视频并继续一起看"));
+    await act(async () => {
+      store.update({
+        pageAccess: { ...store.pageAccess.value, url: "https://video.example/second" },
+      });
+      complete(
+        success({
+          kind: "INTENT_RECORDED",
+          sharedPageContext: {
+            tabId: store.pageAccess.value.tabId,
+            url: "https://video.example/first",
+          },
+        }),
+      );
+    });
+    expect(store.commandCalls.map((command) => command.name)).toEqual(["CURRENT_TAB_SHARE"]);
+    expect(permission).not.toHaveBeenCalled();
   });
 
   it("carries the original group through the switch permission dialog", async () => {

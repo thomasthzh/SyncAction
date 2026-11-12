@@ -8,8 +8,9 @@ pages; it is not a mirror of every action performed in a participant's browser t
 - **Share current page** publishes the current tab.
 - Navigating a shared tab locally detaches its collaboration binding and keeps a local pending
   publication. **Submit page update** explicitly updates the original shared page's address.
-- If the original page has changed or been removed, preserve the local page and show a conflict.
-  **Share as a new page** is a separate explicit choice.
+- Preserve the local page if the original has changed or been removed. A pending local page may also
+  be explicitly **shared as a new page**, retaining the original room page. A rejected create must
+  retain the pending association for another attempt.
 - **Open** opens or focuses the selected shared page only.
 - **Remove shared page** requires confirmation in the extension and submits a durable close. Other
   participants' still-bound room tabs may close as a result.
@@ -49,6 +50,12 @@ Pending associations and validated URL baselines are local to the current backgr
 do not survive a browser/background restart. When no safe baseline exists, preserve the local page
 and require an explicit Open or Share; do not guess that it should be overwritten. Concurrent
 submissions retain the existing server ordering semantics, not a distributed compare-and-swap.
+
+The page workspace projects the existing pending collection as local physical/logical identifiers
+only, including orphaned candidates. It does not upload draft URLs. Previewing a candidate validates
+the fresh browser session and eligible local tab, then focuses it without publishing or opening the
+room's canonical version. Member navigation and page-row avatars instead open the explicit canonical
+logical page; multiple member pages require an explicit choice rather than an arbitrary device.
 
 ## Presence and page access
 

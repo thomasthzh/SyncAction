@@ -16,7 +16,8 @@ export type VisualFixture =
   | "room-leader"
   | "room-leader-unshared"
   | "journey"
-  | "room-journey";
+  | "room-journey"
+  | "room-continuity";
 
 export const FIXTURE_NOW_MS = Date.parse("2026-08-24T08:00:00.000Z");
 
@@ -326,6 +327,38 @@ export function createVisualStore(fixture: VisualFixture): UiStore {
       reason: "ROOM_DOCUMENT_UNAVAILABLE",
     };
   }
+  if (fixture === "room-continuity") {
+    slices.collaboration.pages = slices.collaboration.pages.slice(0, 3);
+    slices.collaboration.capacity = { ...slices.collaboration.capacity, openTabCount: 3 };
+    slices.collaboration.members = slices.collaboration.members.map((member) => ({
+      ...member,
+      activePageIds: member.activePageIds.filter((id) =>
+        slices.collaboration.pages.some((page) => page.pageId === id),
+      ),
+    }));
+    const runtime = slices.room.runtime!;
+    slices.room = {
+      ...slices.room,
+      runtime: {
+        ...runtime,
+        sharedTabCount: 3,
+        media: { ...runtime.media!, playbackGroups: [], localMembership: null },
+        browser: {
+          ...runtime.browser!,
+          pendingPublications: [
+            { tabId: 84, logicalTabId: pageIds[0]! },
+            { tabId: 85, logicalTabId: pageIds[1]! },
+            { tabId: 86, logicalTabId: LogicalTabIdSchema.parse(uuid(999)) },
+          ],
+        },
+      },
+    };
+    slices.collaboration.members[1] = {
+      ...slices.collaboration.members[1]!,
+      activePageIds: [pageIds[0]!, pageIds[1]!],
+      deviceCount: 2,
+    };
+  }
   if (fixture === "guest") {
     slices.shell = { ...slices.shell, phase: "SIGNED_OUT", account: null };
     slices.discovery = { ...slices.discovery, rooms: [], invitations: [] };
@@ -333,7 +366,7 @@ export function createVisualStore(fixture: VisualFixture): UiStore {
   return new VisualUiStore(
     slices,
     fixture === "room-unshared",
-    fixture === "journey" || fixture === "room-journey",
+    fixture === "journey" || fixture === "room-journey" || fixture === "room-continuity",
   );
 }
 
@@ -356,6 +389,7 @@ class VisualUiStore implements UiStore {
   public readonly pendingCommands = signal<ReadonlySet<string>>(new Set());
   public readonly commandError = signal<UiCommandError | null>(null);
   private requestedRoom: UiStateSlices["discovery"]["publicRooms"][number] | undefined;
+  private nextLocalPage = 950;
 
   public constructor(
     state: UiStateSlices,
@@ -379,6 +413,73 @@ class VisualUiStore implements UiStore {
         ...(value === undefined ? {} : { value }),
       });
     if (this.journeyFixture) {
+      if (_command.name === "LOCAL_PAGE_ACTIVATE") {
+        this.pageAccess.value = {
+          ...this.pageAccess.value,
+          tabId: _command.payload.tabId,
+          logicalTabId: null,
+          documentRevision: null,
+          pendingPublication: { logicalTabId: _command.payload.logicalTabId },
+          origin: "https://video.example",
+          url: `https://video.example/candidate/${_command.payload.tabId}`,
+        };
+      }
+      if (
+        (_command.name === "CURRENT_TAB_SHARE" || _command.name === "CURRENT_TAB_SHARE_AS_NEW") &&
+        this.pageAccess.value.pendingPublication != null
+      ) {
+        const access = this.pageAccess.value;
+        const logicalTabId = LogicalTabIdSchema.parse(
+          _command.name === "CURRENT_TAB_SHARE_AS_NEW"
+            ? uuid(this.nextLocalPage++)
+            : access.pendingPublication!.logicalTabId,
+        );
+        const runtime = this.room.value.runtime!;
+        this.room.value = {
+          ...this.room.value,
+          runtime: {
+            ...runtime,
+            browser: {
+              ...runtime.browser!,
+              pendingPublications: runtime.browser!.pendingPublications!.filter(
+                (item) => item.tabId !== access.tabId,
+              ),
+            },
+          },
+        };
+        this.pageAccess.value = {
+          ...access,
+          logicalTabId,
+          documentRevision: { roomEpoch: 0, tabUpdatedAtSeq: 43 },
+          pendingPublication: null,
+        };
+        this.collaboration.value = {
+          ...this.collaboration.value,
+          pages: [
+            ...this.collaboration.value.pages.filter((page) => page.pageId !== logicalTabId),
+            {
+              pageId: logicalTabId,
+              title: "刚刚分享的共同片段",
+              domain: "video.example",
+              state: "OPEN",
+              compatibility: "EXACT",
+            },
+          ],
+          capacity: {
+            ...this.collaboration.value.capacity,
+            openTabCount:
+              this.collaboration.value.capacity.openTabCount +
+              (_command.name === "CURRENT_TAB_SHARE_AS_NEW" ? 1 : 0),
+          },
+        };
+        return done({
+          kind: "INTENT_RECORDED",
+          operation: {
+            type: _command.name === "CURRENT_TAB_SHARE_AS_NEW" ? "tab.create" : "tab.navigate",
+          },
+          sharedPageContext: { tabId: access.tabId, url: access.url },
+        });
+      }
       if (_command.name === "ROOM_JOIN_REQUEST") {
         this.requestedRoom = this.discovery.value.publicRooms.find(
           (room) => room.roomId === _command.payload.roomId,
@@ -449,6 +550,18 @@ class VisualUiStore implements UiStore {
             tabId: 42,
             logicalTabId: group.target.logicalTabId,
             documentRevision: group.target.documentRevision,
+          };
+        else if (
+          this.collaboration.value.pages.some(
+            (page) => page.pageId === _command.payload.logicalTabId,
+          )
+        )
+          this.pageAccess.value = {
+            ...this.pageAccess.value,
+            tabId: 42,
+            logicalTabId: _command.payload.logicalTabId,
+            documentRevision: { roomEpoch: 0, tabUpdatedAtSeq: 12 },
+            pendingPublication: null,
           };
       }
       if (_command.name === "MEDIA_GROUP_PREPARE") {

@@ -276,6 +276,23 @@ describe("browser observer", () => {
       observer = createObserver(() => true, writer, "MANUAL");
     });
 
+    it("retains a local pending candidate when sharing it as another page is rejected by capacity", async () => {
+      observer = createObserver(() => true, new CapacityRejectingWriter(replica), "MANUAL");
+      browser.state.tabs.find((tab) => tab.tabId === 10)!.url = "https://example.com/private-draft";
+      await observer.observe({ type: "TAB_UPDATED", tabId: 10 });
+      const pending = observer.readPendingPublication(10);
+      expect(pending).not.toBeNull();
+      const copy = observer.readPendingPublications();
+      copy.length = 0;
+      expect(observer.readPendingPublications()).toEqual([pending]);
+      await expect(observer.shareTab(10, { asNew: true })).resolves.toMatchObject({
+        kind: "BLOCKED",
+        reason: "ROOM_TAB_LIMIT_REACHED",
+      });
+      expect(observer.readPendingPublication(10)).toEqual(pending);
+      expect(browser.state.tabs.some((tab) => tab.tabId === 10)).toBe(true);
+    });
+
     it.each([false, true])(
       "checks the fresh URL before publication or discarding a draft (asNew=%s)",
       async (asNew) => {
