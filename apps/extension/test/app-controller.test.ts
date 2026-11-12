@@ -236,8 +236,9 @@ class FakeRuntime implements RoomRuntime {
   public async handlePageCompatibilityReport(
     tabId: unknown,
     report: PageCompatibilityReport,
-  ): Promise<void> {
+  ): Promise<boolean> {
     this.events.push(`page-compatibility:${this.roomId}:${String(tabId)}:${report.logicalTabId}`);
+    return true;
   }
 
   public async handleMediaPageReady(
@@ -1213,6 +1214,7 @@ describe("ExtensionAppController", () => {
     const status = await app.getStatus();
 
     expect(status.collaboration).toEqual({
+      presenceKnown: false,
       capacity: {
         openTabCount: 1,
         limit: 20,

@@ -9,11 +9,13 @@ type Participation = {
   roomId: NonNullable<UiStore["room"]["value"]["selectedRoomId"]>;
   groupId: string;
   target: MediaTarget;
+  action: "JOIN" | "ALIGN";
   tabId: number | null;
+  url: string | null;
   started: boolean;
   preparation: "NEW" | "PERMISSION" | "IN_FLIGHT" | "READY";
 };
-type Phase = "OPENING" | "WAITING_PAGE" | "PERMISSION" | "WAITING_MEDIA" | "JOINING";
+type Phase = "OPENING" | "WAITING_PAGE" | "PERMISSION" | "WAITING_MEDIA" | "JOINING" | "ALIGNING";
 
 /** One explicit user action opens the chosen video and continues on that page.
  * No local browsing is published and a changed target is never silently followed. */
@@ -44,6 +46,7 @@ export function useWatchParticipation(store: UiStore, requestPermission: PagePer
       store.shell.value.selectedProfileId === task.profileId &&
       store.room.value.selectedRoomId === task.roomId &&
       (task.tabId === null || store.pageAccess.value.tabId === task.tabId) &&
+      (task.url === null || store.pageAccess.value.url === task.url) &&
       group?.target != null &&
       sameMediaTarget(group.target, task.target)
     );
@@ -73,22 +76,27 @@ export function useWatchParticipation(store: UiStore, requestPermission: PagePer
     if (task.started || !isCurrent(task) || !pageReady(task)) return;
     if (task.preparation === "PERMISSION" || task.preparation === "IN_FLIGHT") return;
     const latest = store.pageAccess.value;
+    task.url ??= latest.url ?? null;
     if (!latest.browserPermissionGranted || !latest.termsAccepted) {
       task.preparation = "PERMISSION";
       setPending({ task, phase: "PERMISSION" });
-      requestPermission(`media-join:${task.groupId}`, latest.url ?? undefined, (granted) => {
-        if (!isCurrent(task)) {
-          finish(task, "MEDIA_CONTEXT_CHANGED");
-          return;
-        }
-        if (!granted) {
-          finish(task);
-          return;
-        }
-        task.preparation = "READY";
-        setPending({ task, phase: "WAITING_MEDIA" });
-        void participate(task);
-      });
+      requestPermission(
+        `media-${task.action === "ALIGN" ? "align" : "join"}:${task.groupId}`,
+        latest.url ?? undefined,
+        (granted) => {
+          if (!isCurrent(task)) {
+            finish(task, "MEDIA_CONTEXT_CHANGED");
+            return;
+          }
+          if (!granted) {
+            finish(task);
+            return;
+          }
+          task.preparation = "READY";
+          setPending({ task, phase: "WAITING_MEDIA" });
+          void participate(task);
+        },
+      );
       return;
     }
     const expectedContext = {
@@ -96,7 +104,7 @@ export function useWatchParticipation(store: UiStore, requestPermission: PagePer
       roomId: task.roomId,
       tabId: task.tabId!,
       documentRevision: task.target.documentRevision,
-      ...(latest.url == null ? {} : { url: latest.url }),
+      ...(task.url === null ? {} : { url: task.url }),
     };
     if (task.preparation === "NEW") {
       task.preparation = "IN_FLIGHT";
@@ -142,10 +150,10 @@ export function useWatchParticipation(store: UiStore, requestPermission: PagePer
       return;
     }
     task.started = true;
-    setPending({ task, phase: "JOINING" });
+    setPending({ task, phase: task.action === "ALIGN" ? "ALIGNING" : "JOINING" });
     try {
       const result = await store.command({
-        name: "MEDIA_GROUP_JOIN",
+        name: task.action === "ALIGN" ? "MEDIA_GROUP_ALIGN_ONCE" : "MEDIA_GROUP_JOIN",
         payload: {
           playbackGroupId: task.groupId,
           expectedTarget: task.target,
@@ -161,16 +169,18 @@ export function useWatchParticipation(store: UiStore, requestPermission: PagePer
         task,
         result.ok ? null : result.errorCode,
         result.ok
-          ? membership?.playbackGroupId === task.groupId && membership.activeDevice
-            ? "已参与跟随，播放状态见当前视频"
-            : "跟随请求已提交，正在确认本设备状态"
+          ? task.action === "ALIGN"
+            ? "进度对齐已发出，请以播放器为准；不会持续跟随"
+            : membership?.playbackGroupId === task.groupId && membership.activeDevice
+              ? "已参与跟随，播放状态见当前视频"
+              : "跟随请求已提交，正在确认本设备状态"
           : null,
       );
     } catch {
       if (isCurrent(task)) finish(task, "NETWORK_ERROR");
     }
   }
-  async function follow(groupId: string): Promise<void> {
+  async function follow(groupId: string, action: "JOIN" | "ALIGN" = "JOIN"): Promise<void> {
     if (current.current !== null) return;
     const group = store.room.value.runtime?.media?.playbackGroups.find(
       (group) => group.playbackGroupId === groupId,
@@ -185,7 +195,9 @@ export function useWatchParticipation(store: UiStore, requestPermission: PagePer
       roomId: selectedRoomId,
       groupId,
       target: structuredClone(group.target),
+      action,
       tabId: null,
+      url: null,
       started: false,
       preparation: "NEW",
     };
@@ -254,7 +266,7 @@ export function useWatchParticipation(store: UiStore, requestPermission: PagePer
       () =>
         finish(
           pending.task,
-          pending.phase === "JOINING"
+          pending.phase === "JOINING" || pending.phase === "ALIGNING"
             ? "MEDIA_FOLLOW_RESULT_UNCONFIRMED"
             : "MEDIA_TARGET_PAGE_PREPARING",
         ),
@@ -262,5 +274,17 @@ export function useWatchParticipation(store: UiStore, requestPermission: PagePer
     );
     return () => clearTimeout(timer);
   }, [pending]);
-  return { follow, busy: pending !== null, errorCode, message, phase: pending?.phase ?? null };
+  function cancel(): void {
+    if (current.current?.started === true) return;
+    if (current.current !== null) finish(current.current, null, "已停止准备，打开的页面仍保留");
+  }
+  return {
+    follow,
+    cancel,
+    canCancel: pending !== null && !pending.task.started,
+    busy: pending !== null,
+    errorCode,
+    message,
+    phase: pending?.phase ?? null,
+  };
 }

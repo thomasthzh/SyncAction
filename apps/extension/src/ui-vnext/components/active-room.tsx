@@ -19,6 +19,7 @@ import { RoomMembersWorkspace } from "./room-members-workspace.js";
 import { RoomPageUpdates } from "./room-page-updates.js";
 import { RoomMeetingPlace } from "./room-meeting-place.js";
 import { useWatchParticipation } from "../use-watch-participation.js";
+import { sameMediaTarget } from "../../media-controller-model.js";
 import type { PagePermissionRequester } from "../../origin-permission-coordinator.js";
 
 export interface ActiveRoomProps {
@@ -42,12 +43,16 @@ export function ActiveRoom({
 }: ActiveRoomProps): JSX.Element {
   const [pageQuery, setPageQuery] = useState("");
   const [workspace, setWorkspace] = useState("watch");
+  const [watchSelection, setWatchSelection] = useState<{
+    groupId: string | null;
+    membershipId: string | null;
+  }>({ groupId: null, membershipId: null });
   const surface = useRef<HTMLDivElement>(null);
   const activeElement = document.activeElement;
   const focusedWatchControl =
     activeElement instanceof HTMLElement &&
     surface.current?.contains(activeElement) &&
-    activeElement.closest(".watch-workspace") !== null
+    activeElement.closest(".watch-workspace, .watch-preparation") !== null
       ? activeElement
       : null;
   const feedback = useCommandFeedback();
@@ -59,6 +64,7 @@ export function ActiveRoom({
   const runtime = room.runtime;
   const pages = collaboration.pages;
   const members = collaboration.members;
+  const presenceKnown = collaboration.presenceKnown !== false;
   const nowMs = now();
   const currentUserId = shell.account?.id ?? null;
   const memberById = useMemo(
@@ -92,6 +98,37 @@ export function ActiveRoom({
     () => createMediaViewModel({ media, pages, members, nowMs }),
     [media, pages, members, nowMs],
   );
+  const membershipId = media?.localMembership?.playbackGroupId ?? null;
+  const ownGroup = mediaView.groups.find((group) => group.groupId === membershipId);
+  const defaultGroup =
+    ownGroup ?? mediaView.groups.find((group) => group.recommended) ?? mediaView.groups[0];
+  const selectedWatchGroup =
+    (watchSelection.membershipId === membershipId
+      ? mediaView.groups.find((group) => group.groupId === watchSelection.groupId)
+      : undefined) ?? defaultGroup;
+  useLayoutEffect(() => {
+    const groupId = selectedWatchGroup?.groupId ?? null;
+    if (watchSelection.membershipId !== membershipId || watchSelection.groupId !== groupId)
+      setWatchSelection({ groupId, membershipId });
+  }, [membershipId, selectedWatchGroup?.groupId, watchSelection]);
+  const ownTarget = media?.playbackGroups.find(
+    (group) => group.playbackGroupId === membershipId,
+  )?.target;
+  const localPrepared =
+    media?.state === "ONLINE" &&
+    media.controlReady === true &&
+    ownTarget != null &&
+    media.localObservation != null &&
+    sameMediaTarget(media.localObservation.target, ownTarget);
+  const ownReadiness = !media?.localMembership?.activeDevice
+    ? "由你的另一台设备参与"
+    : media.state === "OFFLINE"
+      ? "连接恢复后可继续"
+      : !localPrepared
+        ? "本设备尚未跟上当前视频"
+        : media.localMembership.role === "LEADER"
+          ? "本设备领播"
+          : "本设备跟随已准备";
   const watchConnected =
     runtime?.state === "SYNCED" &&
     store.transport.value !== "RECONNECTING" &&
@@ -121,7 +158,12 @@ export function ActiveRoom({
         )
         ?.focus();
     }
-  }, [mediaView.groups.length, media?.localMembership?.playbackGroupId, watchAwaiting]);
+  }, [
+    mediaView.groups.length,
+    media?.localMembership?.playbackGroupId,
+    watchAwaiting,
+    participation.phase,
+  ]);
   const compatibilityByPage = useMemo(
     () =>
       Object.fromEntries(
@@ -185,6 +227,13 @@ export function ActiveRoom({
       }),
     );
   }
+  function viewWatchGroup(groupId: string): void {
+    setWatchSelection({ groupId, membershipId });
+    setWorkspace("watch");
+    queueMicrotask(() =>
+      surface.current?.querySelector<HTMLElement>("#room-workspace-tab-watch")?.focus(),
+    );
+  }
   function previewLocalPage(tabId: number, logicalTabId: string): void {
     if (room.selectedRoomId === null) return;
     void feedback.run("local-page", () =>
@@ -200,6 +249,14 @@ export function ActiveRoom({
     );
   }
   function sendMediaIntent(intent: MediaViewIntent): void {
+    if (intent.type === "OPEN_PAGE") {
+      if (intent.pageId !== null) openSharedPage(intent.pageId);
+      return;
+    }
+    if (intent.type === "ALIGN_ONCE") {
+      void participation.follow(intent.playbackGroupId, "ALIGN");
+      return;
+    }
     if (intent.type === "JOIN_GROUP") {
       void participation.follow(intent.playbackGroupId);
       return;
@@ -207,18 +264,10 @@ export function ActiveRoom({
     void feedback.run("media", () => store.command(mediaCommand(intent)));
   }
 
-  function mediaCommand(intent: Exclude<MediaViewIntent, { type: "JOIN_GROUP" }>): UiCommandInput {
+  function mediaCommand(
+    intent: Exclude<MediaViewIntent, { type: "JOIN_GROUP" | "ALIGN_ONCE" | "OPEN_PAGE" }>,
+  ): UiCommandInput {
     switch (intent.type) {
-      case "JUMP_TO_MEMBER":
-        return {
-          name: "MEDIA_MEMBER_JUMP",
-          payload: { userId: intent.userId },
-        };
-      case "ALIGN_ONCE":
-        return {
-          name: "MEDIA_GROUP_ALIGN_ONCE",
-          payload: { playbackGroupId: intent.playbackGroupId },
-        };
       case "LEAVE_GROUP":
         return {
           name: "MEDIA_GROUP_LEAVE",
@@ -290,7 +339,7 @@ export function ActiveRoom({
         />
         <div class="room-header__meta" data-room-presence-summary>
           <strong>
-            {onlineCount} 在线 · {totalCount} 位成员
+            {presenceKnown ? `${onlineCount} 在线` : "在线状态恢复中"} · {totalCount} 位成员
           </strong>
           <span>{serverHost}</span>
         </div>
@@ -333,6 +382,42 @@ export function ActiveRoom({
         onAction={recover}
         pending={feedback.pending !== null}
       />
+      {ownGroup !== undefined &&
+      (workspace !== "watch" || selectedWatchGroup?.groupId !== ownGroup.groupId) ? (
+        <section class="watch-return" aria-label="我的一起看">
+          <div>
+            <span class="eyebrow">我的一起看</span>
+            <strong>{ownGroup.target?.pageTitle ?? ownGroup.name}</strong>
+            <p>{ownReadiness}</p>
+          </div>
+          <div class="watch-return__actions">
+            <button
+              class="compact-button"
+              type="button"
+              onClick={() => viewWatchGroup(ownGroup.groupId)}
+            >
+              返回我的播放组
+            </button>
+            {watchConnected &&
+            media?.localMembership?.role === "FOLLOWER" &&
+            media.localMembership.activeDevice &&
+            !localPrepared &&
+            ownTarget != null ? (
+              <button
+                class="primary-button"
+                type="button"
+                disabled={participation.busy}
+                onClick={() => {
+                  viewWatchGroup(ownGroup.groupId);
+                  void participation.follow(ownGroup.groupId);
+                }}
+              >
+                跟上当前视频
+              </button>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
       {workspace !== "watch" && pendingOwnProposals > 0 ? (
         <button
           class="workspace-pending-action"
@@ -371,6 +456,20 @@ export function ActiveRoom({
         <p class={`media-notice media-notice--${mediaView.notice.tone}`}>{mediaView.notice.text}</p>
       )}
 
+      {participation.phase !== null && workspace !== "watch" ? (
+        <button
+          class="workspace-pending-action"
+          type="button"
+          onClick={() => {
+            setWorkspace("watch");
+            queueMicrotask(() =>
+              surface.current?.querySelector<HTMLElement>("#room-workspace-tab-watch")?.focus(),
+            );
+          }}
+        >
+          视频准备仍在进行 · 查看进度
+        </button>
+      ) : null}
       <div
         class="workspace-panel"
         id="room-workspace-panel-watch"
@@ -389,7 +488,14 @@ export function ActiveRoom({
                   ? "正在打开你选择的视频…"
                   : participation.phase === "WAITING_PAGE"
                     ? "等待视频页面就绪…"
-                    : "正在准备本设备跟随…"}
+                    : participation.phase === "ALIGNING"
+                      ? "正在对齐当前进度…"
+                      : "正在准备本设备跟随…"}
+            {participation.canCancel ? (
+              <button class="text-button" type="button" onClick={participation.cancel}>
+                停止准备
+              </button>
+            ) : null}
           </p>
         )}
         <ActionableStatus errorCode={participation.errorCode} />
@@ -434,7 +540,10 @@ export function ActiveRoom({
           <WatchWorkspace
             key={`${shell.selectedProfileId}:${room.selectedRoomId}`}
             view={mediaView}
+            selectedGroup={selectedWatchGroup!}
+            onViewGroup={(groupId) => setWatchSelection({ groupId, membershipId })}
             media={media}
+            presenceKnown={presenceKnown}
             currentUserId={currentUserId}
             onIntent={sendMediaIntent}
             busy={feedback.pending === "media" || participation.busy}
@@ -515,6 +624,7 @@ export function ActiveRoom({
           <div class="shared-tab-stream__list divided-list">
             {visibleRows.map((row) => (
               <SharedTabRow
+                presenceKnown={presenceKnown}
                 row={row}
                 memberById={memberById}
                 currentUserId={currentUserId}

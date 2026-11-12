@@ -113,6 +113,7 @@ export const PointerContextMessageSchema = z
   .object({
     type: z.literal("syncaction.pointer.context"),
     context: PointerPageContextSchema,
+    revalidateContent: z.boolean().optional(),
   })
   .strict();
 

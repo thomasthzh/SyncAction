@@ -1027,6 +1027,7 @@ export class ChromePageCollaborationPort
     tabIdInput: number,
     contextInput: PointerPageContext,
     frameIdInput = 0,
+    revalidateContent = false,
   ): Promise<void> {
     const context = PointerPageContextSchema.parse(contextInput);
     await this.#send(
@@ -1034,6 +1035,7 @@ export class ChromePageCollaborationPort
       PointerContextMessageSchema.parse({
         type: "syncaction.pointer.context",
         context,
+        ...(revalidateContent ? { revalidateContent: true } : {}),
       }),
       frameIdInput,
     );

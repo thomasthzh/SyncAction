@@ -160,6 +160,19 @@ beforeEach(() => {
 });
 
 describe("ActiveTabPresenceController", () => {
+  it("keeps member presence unknown until a real snapshot and invalidates it on reconnect", async () => {
+    expect(presence.getStatus().snapshotKnown).toBe(false);
+    await presence.setSynchronized(true);
+    expect(presence.getStatus().snapshotKnown).toBe(false);
+    presence.handleMessage(snapshotV2(1, now + 30_000));
+    expect(presence.getStatus().snapshotKnown).toBe(true);
+    await presence.setSynchronized(false);
+    expect(presence.getStatus().snapshotKnown).toBe(false);
+    await presence.setSynchronized(true);
+    expect(presence.getStatus().snapshotKnown).toBe(false);
+    presence.handleMessage(snapshot(roomId, now + 30_000));
+    expect(presence.getStatus().snapshotKnown).toBe(true);
+  });
   it("renews an existing self lease from its ACK without extending peer evidence", async () => {
     await presence.handleActiveTabChanged(7);
     await presence.setSynchronized(true);
@@ -834,6 +847,8 @@ describe("ActiveTabPresenceController", () => {
     await presence.setSynchronized(true);
     transport.handler?.(snapshotV2(2, now + 30_000));
     const beforeGap = presence.getStatus().presences;
+    const beforeGapChanges = statusChanges;
+    expect(presence.getStatus().snapshotKnown).toBe(true);
 
     transport.handler?.(
       deltaV2(3, {
@@ -851,9 +866,14 @@ describe("ActiveTabPresenceController", () => {
     );
     await presence.whenIdle();
     expect(presence.getStatus().presences).toEqual(beforeGap);
+    expect(presence.getStatus().snapshotKnown).toBe(false);
+    expect(statusChanges).toBeGreaterThan(beforeGapChanges);
     expect(roomSyncRequests).toBe(1);
 
+    const gapChanges = statusChanges;
     transport.handler?.(snapshotV2(5, now + 40_000));
+    expect(presence.getStatus().snapshotKnown).toBe(true);
+    expect(statusChanges).toBeGreaterThan(gapChanges);
     transport.handler?.(
       deltaV2(5, {
         kind: "REMOVE",
@@ -873,6 +893,7 @@ describe("ActiveTabPresenceController", () => {
     expect(scheduler.clearCount).toBe(1);
     expect(presence.getStatus()).toEqual({
       state: "OFFLINE",
+      snapshotKnown: false,
       presences: [],
       compatibilities: [],
       lastAckExpiresAt: null,

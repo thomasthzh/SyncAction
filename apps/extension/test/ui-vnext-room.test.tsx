@@ -237,9 +237,15 @@ describe("vNext active room", () => {
     expect(groupCard.textContent).toContain("3 人");
     expect(groupCard.textContent).not.toContain("跳转并同步");
     const commandsBeforeOpeningPage = store.commandCalls.length;
-    await click(byRole(groupCard, "button", "打开领播页面"));
+    await click(byRole(groupCard, "button", "打开视频页面"));
     expect(store.commandCalls.slice(commandsBeforeOpeningPage)).toEqual([
-      { name: "MEDIA_MEMBER_JUMP", payload: { userId: leaderId } },
+      {
+        name: "ROOM_TAB_ACTIVATE",
+        payload: {
+          logicalTabId: videoPageId,
+          expectedContext: { profileId: store.shell.value.selectedProfileId, roomId },
+        },
+      },
     ]);
     expect(documentRow.textContent).toContain("协作文档");
     expect(documentRow.textContent).toContain("docs.example");
@@ -263,8 +269,11 @@ describe("vNext active room", () => {
     });
     await click(byRole(cluster, "button", "查看 林岚 当前页面"));
     expect(store.commandCalls.at(-1)).toEqual({
-      name: "MEDIA_MEMBER_JUMP",
-      payload: { userId: leaderId },
+      name: "ROOM_TAB_ACTIVATE",
+      payload: {
+        logicalTabId: videoPageId,
+        expectedContext: { profileId: store.shell.value.selectedProfileId, roomId },
+      },
     });
     await click(byRole(videoRow, "button", "查看 房主 Thomas 当前页面"));
     expect(store.commandCalls.at(-1)).toEqual({
@@ -283,10 +292,17 @@ describe("vNext active room", () => {
       },
     });
     await click(byRole(groupCard, "button", "对齐一次"));
-    expect(store.commandCalls.at(-1)).toEqual({
-      name: "MEDIA_GROUP_ALIGN_ONCE",
-      payload: { playbackGroupId: groupId },
+    expect(store.commandCalls).toContainEqual({
+      name: "ROOM_TAB_ACTIVATE",
+      payload: {
+        logicalTabId: videoPageId,
+        expectedContext: { profileId: store.shell.value.selectedProfileId, roomId },
+      },
     });
+    expect(store.commandCalls.some((command) => command.name === "MEDIA_GROUP_ALIGN_ONCE")).toBe(
+      false,
+    );
+    await click(byRole(root, "button", "停止准备"));
     await click(byRole(groupCard, "button", "打开并一起看"));
     expect(store.commandCalls).toContainEqual({
       name: "ROOM_TAB_ACTIVATE",
@@ -445,7 +461,7 @@ describe("vNext active room", () => {
     });
     const root = renderPanel(<App store={store} now={() => nowMs} />);
     const card = root.querySelector(`[data-group-id="${groupId}"]`)!;
-    const focused = byRole(card, "button", "打开领播页面");
+    const focused = byRole(card, "button", "打开视频页面");
     focused.focus();
     act(() =>
       store.update({
@@ -564,7 +580,7 @@ describe("vNext active room", () => {
       byRole(
         root.querySelector(`[data-group-id="${smallerGroupId}"]`)!,
         "button",
-        "打开领播页面",
+        "打开视频页面",
       ).focus();
       act(() =>
         store.update({
@@ -683,7 +699,7 @@ describe("vNext active room", () => {
       expect(close.disabled).toBe(false);
       expect(close.getAttribute("aria-disabled")).toBe("true");
       expect(document.activeElement).toBe(close);
-      expect((byRole(card, "button", "打开领播页面") as HTMLButtonElement).disabled).toBe(true);
+      expect((byRole(card, "button", "打开视频页面") as HTMLButtonElement).disabled).toBe(true);
       await click(close);
       await click(close);
       expect(store.commandCalls).toEqual([
@@ -728,7 +744,7 @@ describe("vNext active room", () => {
     });
     const root = renderPanel(<App store={store} now={() => nowMs} />);
     const card = root.querySelector(`[data-group-id="${groupId}"]`)!;
-    byRole(card, "button", "打开领播页面").focus();
+    byRole(card, "button", "打开视频页面").focus();
     act(() =>
       store.update({
         room: {

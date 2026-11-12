@@ -95,6 +95,78 @@ beforeEach(() => {
 });
 
 describe("PageContentCompatibilityReporter", () => {
+  it("deduplicates an equivalent context received while its report ACK is pending", async () => {
+    reporter.dispose();
+    const context = { logicalTabId, documentRevision: revision };
+    let queued: Promise<void> | undefined;
+    const emit = vi.fn(async () => {
+      queued = reporter.setContext(structuredClone(context));
+    });
+    reporter = new PageContentCompatibilityReporter({
+      document,
+      roomId,
+      readPageUrl: () => pageUrl,
+      readViewport: () => viewport,
+      emit,
+    });
+    await reporter.setContext(context);
+    await queued;
+    await reporter.whenIdle();
+    expect(emit).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries ordinary evidence after a failed explicit revalidation invalidates the old cache", async () => {
+    reporter.dispose();
+    const emit = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("report not accepted"))
+      .mockResolvedValue(undefined);
+    reporter = new PageContentCompatibilityReporter({
+      document,
+      roomId,
+      readPageUrl: () => pageUrl,
+      readViewport: () => viewport,
+      emit,
+    });
+    const context = { logicalTabId, documentRevision: revision };
+    await reporter.setContext(context);
+    await expect(reporter.setContext(context, true)).rejects.toThrow("report not accepted");
+    await reporter.setContext(context);
+    await reporter.setContext(context);
+    expect(emit).toHaveBeenCalledTimes(3);
+  });
+  it("replays identical evidence only for explicit revalidation", async () => {
+    const context = { logicalTabId, documentRevision: revision };
+    await reporter.setContext(context);
+    await reporter.setContext(context);
+    expect(reports).toHaveLength(1);
+    await reporter.setContext(context, true);
+    expect(reports).toHaveLength(2);
+    expect(reports[1]).toEqual(reports[0]);
+    await reporter.setContext(context);
+    expect(reports).toHaveLength(2);
+  });
+
+  it("does not deduplicate a report that failed to reach the background", async () => {
+    reporter.dispose();
+    const emit = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("background unavailable"))
+      .mockResolvedValue(undefined);
+    reporter = new PageContentCompatibilityReporter({
+      document,
+      roomId,
+      readPageUrl: () => pageUrl,
+      readViewport: () => viewport,
+      emit,
+    });
+    const context = { logicalTabId, documentRevision: revision };
+    await expect(reporter.setContext(context)).rejects.toThrow("background unavailable");
+    await reporter.setContext(context);
+    await reporter.setContext(context);
+    expect(emit).toHaveBeenCalledTimes(2);
+  });
   it("refreshes at the first deadline while a page keeps mutating every half second", async () => {
     await reporter.setContext({ logicalTabId, documentRevision: revision });
     viewport = { widthCssPx: 900, heightCssPx: 720 };

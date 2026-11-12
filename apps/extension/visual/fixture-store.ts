@@ -17,7 +17,9 @@ export type VisualFixture =
   | "room-leader-unshared"
   | "journey"
   | "room-journey"
-  | "room-continuity";
+  | "room-continuity"
+  | "room-watch-recovery"
+  | "room-watch-once";
 
 export const FIXTURE_NOW_MS = Date.parse("2026-08-24T08:00:00.000Z");
 
@@ -363,10 +365,60 @@ export function createVisualStore(fixture: VisualFixture): UiStore {
     slices.shell = { ...slices.shell, phase: "SIGNED_OUT", account: null };
     slices.discovery = { ...slices.discovery, rooms: [], invitations: [] };
   }
+  if (fixture === "room-watch-recovery" || fixture === "room-watch-once") {
+    const recovering = fixture === "room-watch-recovery";
+    const runtime = slices.room.runtime!;
+    const media = runtime.media!;
+    slices.collaboration.pages = slices.collaboration.pages
+      .slice(0, 3)
+      .map((page, index) =>
+        index === 0 ? { ...page, title: "周末一起看 · 山间日落", domain: "video.example" } : page,
+      );
+    slices.collaboration.capacity.openTabCount = 3;
+    slices.collaboration.presenceKnown = !recovering;
+    if (recovering)
+      slices.collaboration.members = slices.collaboration.members.map((member) => ({
+        ...member,
+        online: false,
+        activePageIds: [],
+      }));
+    slices.shell.account = { ...slices.shell.account!, id: userIds[1]!, displayName: "林岚" };
+    slices.pageAccess = {
+      ...slices.pageAccess,
+      url: "https://video.example/watch/shared",
+      origin: "https://video.example",
+      termsAccepted: true,
+      browserPermissionGranted: true,
+    };
+    slices.room = {
+      ...slices.room,
+      runtime: {
+        ...runtime,
+        sharedTabCount: 3,
+        media: {
+          ...media,
+          controlReady: false,
+          localObservation: null,
+          navigation: media.navigation.map((item) => ({ ...item, canJump: false })),
+          localMembership: recovering
+            ? {
+                playbackGroupId: media.playbackGroups[0]!.playbackGroupId,
+                role: "FOLLOWER",
+                activeDevice: true,
+              }
+            : null,
+        },
+      },
+    };
+  }
   return new VisualUiStore(
     slices,
     fixture === "room-unshared",
-    fixture === "journey" || fixture === "room-journey" || fixture === "room-continuity",
+    fixture === "journey" ||
+      fixture === "room-journey" ||
+      fixture === "room-continuity" ||
+      fixture === "room-watch-recovery" ||
+      fixture === "room-watch-once",
   );
 }
 

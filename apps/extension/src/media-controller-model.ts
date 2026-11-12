@@ -193,6 +193,10 @@ export function projectMediaControllerStatus(input: {
   // Membership is a server fact. A local target/permission failure stops control,
   // not participation, and must not invite the same person to join a second time.
   const membership = deriveMediaMembership(input.groups, input.userId, input.deviceId);
+  const membershipTarget =
+    membership === null
+      ? null
+      : input.groups.find((group) => group.playbackGroupId === membership.playbackGroupId)?.target;
   const recommendation =
     input.controlStateValid && membership === null && input.localObservation !== null
       ? recommendGroup(input.groups, input.localObservation.target, input.nowMs)
@@ -203,7 +207,11 @@ export function projectMediaControllerStatus(input: {
       input.synchronized &&
       input.controlStateValid &&
       input.errorCode === null &&
-      input.localObservation !== null,
+      input.localObservation !== null &&
+      (membership === null ||
+        (membership.activeDevice &&
+          membershipTarget != null &&
+          sameMediaTarget(input.localObservation.target, membershipTarget))),
     roomMediaRevision: input.roomMediaRevision,
     playbackGroups: structuredClone(input.groups),
     localObservation:

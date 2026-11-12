@@ -12,6 +12,8 @@ export interface PlaybackGroupCardProps {
   readonly currentUserId: string | null;
   readonly mediaState: MediaControllerStatus["state"];
   readonly localMembership: MediaControllerStatus["localMembership"];
+  readonly controlReady?: boolean | undefined;
+  readonly presenceKnown?: boolean | undefined;
   readonly onIntent: (intent: MediaViewIntent) => void;
   readonly busy?: boolean;
 }
@@ -21,6 +23,8 @@ export function PlaybackGroupCard({
   currentUserId,
   mediaState,
   localMembership,
+  controlReady,
+  presenceKnown,
   onIntent,
   busy = false,
 }: PlaybackGroupCardProps): JSX.Element {
@@ -49,9 +53,11 @@ export function PlaybackGroupCard({
           ? "媒体连接已断开，当前无法持续同步。"
           : mediaState === "DEGRADED"
             ? "媒体同步需要处理，请查看当前提示；加入状态仍然保留。"
-            : membership.role === "LEADER"
-              ? "此设备负责领播，朋友可加入并跟随播放。"
-              : "此设备已参与跟随，视频是否播放仍以播放器状态为准。";
+            : controlReady === false
+              ? "仍在播放组中，本设备尚未就绪。可打开当前视频后继续。"
+              : membership.role === "LEADER"
+                ? "此设备负责领播，朋友可加入并跟随播放。"
+                : "此设备已参与跟随，视频是否播放仍以播放器状态为准。";
   const closeActions = group.trailingActions.filter(({ intent }) => intent.type === "CLOSE_GROUP");
   const primaryActions = group.trailingActions
     .filter(({ intent }) => intent.type !== "CLOSE_GROUP")
@@ -79,15 +85,15 @@ export function PlaybackGroupCard({
       <div class="playback-card__summary">
         <span>领播 {leader?.displayName ?? "等待领播者"}</span>
         <strong class="watch-progress">{group.target?.progressText ?? "等待媒体"}</strong>
-        {leader !== null ? (
+        {group.target !== null ? (
           <button
             class="compact-button"
             type="button"
-            title={leader.primaryAction.disabledReason ?? leader.primaryAction.accessibleText}
-            disabled={busy || leader.primaryAction.disabled}
-            onClick={() => onIntent(leader.primaryAction.intent)}
+            title="打开本播放组当前的视频，不改变参与关系"
+            disabled={busy || mediaState === "OFFLINE"}
+            onClick={() => onIntent({ type: "OPEN_PAGE", pageId: group.target!.pageId })}
           >
-            打开领播页面
+            打开视频页面
           </button>
         ) : null}
       </div>
@@ -108,8 +114,12 @@ export function PlaybackGroupCard({
             disabled: busy || member.primaryAction.disabled,
           }))}
           currentUserId={currentUserId}
+          presenceKnown={presenceKnown}
           playbackGroupId={group.groupId}
-          onMemberClick={(member) => onIntent({ type: "JUMP_TO_MEMBER", userId: member.userId })}
+          onMemberClick={(member) => {
+            const selected = group.members.find(({ userId }) => userId === member.userId);
+            if (selected !== undefined) onIntent(selected.primaryAction.intent);
+          }}
         />
         <div class="playback-card__actions">
           {primaryActions.map((action) => (

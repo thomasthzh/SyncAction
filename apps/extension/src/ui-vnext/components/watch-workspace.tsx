@@ -1,12 +1,15 @@
-import { useLayoutEffect, useRef, useState } from "preact/hooks";
+import { useLayoutEffect, useRef } from "preact/hooks";
 import type { JSX } from "preact";
 import type { MediaControllerStatus } from "../../media-controller.js";
-import type { MediaViewIntent, MediaViewModel } from "../../ui/media-view-model.js";
+import type { MediaGroupView, MediaViewIntent, MediaViewModel } from "../../ui/media-view-model.js";
 import { PlaybackGroupCard, PlaybackGroupProposals } from "./playback-group-card.js";
 
 interface WatchWorkspaceProps {
   readonly view: MediaViewModel;
+  readonly selectedGroup: MediaGroupView;
+  readonly onViewGroup: (groupId: string) => void;
   readonly media: MediaControllerStatus;
+  readonly presenceKnown: boolean;
   readonly currentUserId: string | null;
   readonly busy: boolean;
   readonly onIntent: (intent: MediaViewIntent) => void;
@@ -15,36 +18,22 @@ interface WatchWorkspaceProps {
 /** Viewing another group is local navigation, separate from joining or aligning. */
 export function WatchWorkspace({
   view,
+  selectedGroup,
+  onViewGroup,
   media,
+  presenceKnown,
   currentUserId,
   busy,
   onIntent,
 }: WatchWorkspaceProps): JSX.Element | null {
   const membershipId = media.localMembership?.playbackGroupId ?? null;
   const ownGroup = view.groups.find((group) => group.groupId === membershipId);
-  const defaultGroup =
-    ownGroup ??
-    view.groups.find((group) => group.groupId === view.recommendedPlaybackGroupId) ??
-    view.groups[0];
-  const [viewed, setViewed] = useState(() => ({
-    groupId: defaultGroup?.groupId ?? null,
-    membershipId,
-  }));
   const section = useRef<HTMLElement>(null);
   const chooser = useRef<HTMLSelectElement>(null);
   const focusedBeforeUpdate = section.current?.contains(document.activeElement)
     ? document.activeElement
     : null;
-  const selectedGroup =
-    (viewed.membershipId === membershipId
-      ? view.groups.find((group) => group.groupId === viewed.groupId)
-      : undefined) ?? defaultGroup;
-  const selectedGroupId = selectedGroup?.groupId ?? null;
-  useLayoutEffect(() => {
-    if (viewed.membershipId !== membershipId || viewed.groupId !== selectedGroupId) {
-      setViewed({ groupId: selectedGroupId, membershipId });
-    }
-  }, [membershipId, selectedGroupId, viewed.membershipId, viewed.groupId]);
+  const selectedGroupId = selectedGroup.groupId;
   useLayoutEffect(() => {
     if (
       focusedBeforeUpdate !== null &&
@@ -85,7 +74,7 @@ export function WatchWorkspace({
               aria-label="查看播放组"
               aria-describedby="watch-view-help"
               value={selectedGroup.groupId}
-              onChange={(event) => setViewed({ groupId: event.currentTarget.value, membershipId })}
+              onChange={(event) => onViewGroup(event.currentTarget.value)}
             >
               {view.groups.map((group) => (
                 <option value={group.groupId} key={group.groupId}>
@@ -105,21 +94,13 @@ export function WatchWorkspace({
         </div>
       ) : null}
 
-      {viewingOther ? (
-        <button
-          class="text-button watch-workspace__return"
-          type="button"
-          onClick={() => setViewed({ groupId: ownGroup.groupId, membershipId })}
-        >
-          返回我的播放组
-        </button>
-      ) : null}
-
       <PlaybackGroupCard
         key={selectedGroup.groupId}
         group={selectedGroup}
         mediaState={media.state}
         localMembership={media.localMembership}
+        controlReady={media.controlReady}
+        presenceKnown={presenceKnown}
         currentUserId={currentUserId}
         onIntent={onIntent}
         busy={busy}

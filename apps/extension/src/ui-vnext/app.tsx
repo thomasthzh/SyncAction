@@ -348,7 +348,9 @@ export function App({
       : undefined;
     const mediaJoinGroupId = intentKey.startsWith("media-join:")
       ? CanonicalUuidSchema.parse(intentKey.slice("media-join:".length))
-      : undefined;
+      : intentKey.startsWith("media-align:")
+        ? CanonicalUuidSchema.parse(intentKey.slice("media-align:".length))
+        : undefined;
     const mediaJoinTarget =
       mediaJoinGroupId === undefined
         ? null
@@ -654,9 +656,11 @@ export function App({
             ? {
                 continuation: overlay.intentKey.startsWith("media-switch:")
                   ? ("SWITCH_MEDIA_GROUP" as const)
-                  : overlay.intentKey.startsWith("media-join:")
-                    ? ("JOIN_MEDIA_GROUP" as const)
-                    : ("CREATE_MEDIA_GROUP" as const),
+                  : overlay.intentKey.startsWith("media-align:")
+                    ? ("ALIGN_MEDIA_ONCE" as const)
+                    : overlay.intentKey.startsWith("media-join:")
+                      ? ("JOIN_MEDIA_GROUP" as const)
+                      : ("CREATE_MEDIA_GROUP" as const),
               }
             : {})}
           origin={overlay.intent?.origin ?? store.pageAccess.value.origin ?? "当前页面不可授权"}

@@ -8,6 +8,7 @@ export interface SharedTabRowProps {
   readonly row: SharedTabRowModel;
   readonly memberById: ReadonlyMap<string, ExtensionCollaborationMemberSummary>;
   readonly currentUserId: string | null;
+  readonly presenceKnown?: boolean;
   readonly isCurrentPage?: boolean;
   readonly pendingCount?: number;
   readonly onActivate: (pageId: string) => void;
@@ -18,6 +19,7 @@ export function SharedTabRow({
   row,
   memberById,
   currentUserId,
+  presenceKnown = true,
   isCurrentPage = false,
   pendingCount = 0,
   onActivate,
@@ -81,9 +83,10 @@ export function SharedTabRow({
           <MemberCluster
             members={viewers}
             currentUserId={currentUserId}
+            presenceKnown={presenceKnown}
             onMemberClick={() => onActivate(row.pageKey)}
           />
-          <span>{viewers.length} 人正在查看</span>
+          <span>{presenceKnown ? `${viewers.length} 人正在查看` : "查看状态待同步"}</span>
         </div>
       </div>
       <div class="shared-tab-row__actions">

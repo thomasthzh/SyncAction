@@ -126,6 +126,7 @@ const RoomBrowserStatusSchema = z
 const PresenceStatusSchema = z
   .object({
     state: z.enum(["OFFLINE", "ONLINE", "DEGRADED"]),
+    snapshotKnown: z.boolean().optional(),
     presences: z.array(PresenceRecordSchema).max(256),
     compatibilities: z
       .array(
@@ -287,6 +288,7 @@ export const ExtensionStatusUiSchema = z
 
 export const ExtensionCollaborationSummarySchema = z
   .object({
+    presenceKnown: z.boolean().optional(),
     capacity: z
       .object({
         openTabCount: NonNegativeIntegerSchema,
@@ -1034,7 +1036,13 @@ export const UiCommandSchema = z.discriminatedUnion("name", [
   commandWithPayload("MEDIA_MEMBER_JUMP", z.object({ userId: CanonicalUuidSchema }).strict()),
   commandWithPayload(
     "MEDIA_GROUP_ALIGN_ONCE",
-    z.object({ playbackGroupId: CanonicalUuidSchema }).strict(),
+    z
+      .object({
+        playbackGroupId: CanonicalUuidSchema,
+        expectedContext: MediaGroupCreateExpectedContextSchema.optional(),
+        expectedTarget: MediaTargetSchema.optional(),
+      })
+      .strict(),
   ),
   commandWithPayload(
     "MEDIA_GROUP_JOIN",

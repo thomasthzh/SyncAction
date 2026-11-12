@@ -763,7 +763,7 @@ export class BackgroundController {
   public async handlePageCompatibilityReport(
     tabIdInput: unknown,
     reportInput: PageCompatibilityReport,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const accepted = await this.#presenceController?.handlePageCompatibilityReport(
       tabIdInput,
       reportInput,
@@ -778,6 +778,7 @@ export class BackgroundController {
       ]);
       this.#notifyStatusChanged();
     }
+    return accepted === true;
   }
 
   public async handleMediaPageReady(
@@ -957,8 +958,11 @@ export class BackgroundController {
     return acknowledgement;
   }
 
-  public async alignMediaGroupOnce(playbackGroupId: string): Promise<void> {
-    await this.#requireMediaController().alignOnce(playbackGroupId);
+  public async alignMediaGroupOnce(
+    playbackGroupId: string,
+    expectedTarget?: MediaTarget,
+  ): Promise<void> {
+    await this.#requireMediaController().alignOnce(playbackGroupId, expectedTarget);
     this.#notifyStatusChanged();
   }
 

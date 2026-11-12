@@ -2077,6 +2077,24 @@ describe("MediaController", () => {
     }
   });
 
+  it("prepares and aligns a frozen target once without joining, playback changes or target substitution", async () => {
+    const value = harness();
+    await connect(value, snapshot([group({ members: [member(leaderUserId, leaderDeviceId)] })]));
+    await value.controller.prepareGroup(playbackGroupId, target);
+    await observe(value, { ...playing, paused: true, positionMs: 10_000 });
+    value.page.applies.length = 0;
+    await expect(
+      value.controller.alignOnce(playbackGroupId, sameDocumentSecondTarget),
+    ).rejects.toThrow("MEDIA_TARGET_CHANGED");
+    expect(value.page.applies).toEqual([]);
+    await value.controller.alignOnce(playbackGroupId, target);
+    expect(value.page.applies.map(({ action }) => action)).toEqual([
+      { type: "SEEK", positionMs: 42_000 },
+    ]);
+    expect(value.transport.commands).toEqual([]);
+    expect(value.controller.getStatus().localMembership).toBeNull();
+  });
+
   it("aligns once without joining or changing the local paused state", async () => {
     const ungrouped = group({
       members: [member(leaderUserId, leaderDeviceId)],

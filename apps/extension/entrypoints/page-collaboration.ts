@@ -96,12 +96,15 @@ class PageCollaborationRuntime {
           break;
         case "syncaction.pointer.context": {
           if (
-            !this.#updatePageContext({
-              roomId: message.context.roomId,
-              logicalTabId: message.context.logicalTabId,
-              documentRevision: message.context.documentRevision,
-              frameKey: "top",
-            })
+            !this.#updatePageContext(
+              {
+                roomId: message.context.roomId,
+                logicalTabId: message.context.logicalTabId,
+                documentRevision: message.context.documentRevision,
+                frameKey: "top",
+              },
+              message.revalidateContent === true,
+            )
           ) {
             break;
           }
@@ -351,7 +354,7 @@ class PageCollaborationRuntime {
     this.#drawing?.clear();
   }
 
-  #updatePageContext(context: PageOverlayContext): boolean {
+  #updatePageContext(context: PageOverlayContext, revalidate = false): boolean {
     if (
       this.#hostContext !== undefined &&
       sameLogicalDocument(this.#hostContext, context) &&
@@ -374,10 +377,13 @@ class PageCollaborationRuntime {
     if ((context.frameKey ?? "top") === "top" && isTopLevelWindow(window)) {
       const reporter = this.#compatibilityReporterFor(context.roomId);
       void reporter
-        .setContext({
-          logicalTabId: context.logicalTabId,
-          documentRevision: context.documentRevision,
-        })
+        .setContext(
+          {
+            logicalTabId: context.logicalTabId,
+            documentRevision: context.documentRevision,
+          },
+          revalidate,
+        )
         .catch(() => undefined);
     }
     return true;
@@ -793,7 +799,10 @@ class PageCollaborationRuntime {
         heightCssPx: window.innerHeight,
       }),
       emit: async (report) => {
-        await browser.runtime.sendMessage(PageCompatibilityReportSchema.parse(report));
+        const accepted = await browser.runtime.sendMessage(
+          PageCompatibilityReportSchema.parse(report),
+        );
+        if (accepted !== true) throw new Error("COMPATIBILITY_REPORT_NOT_ACCEPTED");
       },
     });
     this.#compatibilityReporter = reporter;

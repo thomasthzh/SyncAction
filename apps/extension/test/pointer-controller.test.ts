@@ -18,7 +18,7 @@ import {
   type MediaIdentity,
 } from "@syncaction/protocol";
 import { ReplicaRecordSchema, type ReplicaRecord } from "@syncaction/replica";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildMediaPointerAnchor } from "../src/media-pointer-anchor.js";
 import {
   PointerController,
@@ -180,6 +180,7 @@ class FakePointerPagePort implements PointerPagePort {
   public failure: Error | undefined;
   public readonly injected: number[] = [];
   public readonly verified: number[] = [];
+  public readonly revalidated: number[] = [];
   public readonly contexts: Array<{ tabId: number; context: PointerPageContext }> = [];
   public readonly rendered: Array<{ tabId: number; pointer: PointerRecord }> = [];
   public readonly renderedLeases: Array<{
@@ -210,8 +211,15 @@ class FakePointerPagePort implements PointerPagePort {
     return this.allowInjection;
   }
 
-  public async setContext(tabId: number, context: PointerPageContext): Promise<void> {
+  public async setContext(
+    tabId: number,
+    context: PointerPageContext,
+    _frameId = 0,
+    revalidateContent = false,
+  ): Promise<void> {
+    void _frameId;
     this.contexts.push({ tabId, context: structuredClone(context) });
+    if (revalidateContent) this.revalidated.push(tabId);
   }
 
   public async render(tabId: number, pointer: PointerRecord): Promise<void> {
@@ -1346,11 +1354,29 @@ describe("PointerController remote routing and isolation", () => {
     await pointers.handleActiveTabChanged(7);
     await pointers.setSynchronized(true);
     page.injected.length = 0;
+    page.revalidated.length = 0;
 
     await pointers.handlePermissionBoundaryChanged();
 
     expect(page.injected).toEqual([7]);
+    expect(page.revalidated).toEqual([7]);
     expect(pointers.getStatus()).toMatchObject({ state: "ONLINE", errorCode: null });
+  });
+
+  it("does not let a late previous context suppress the next permission-boundary handshake", async () => {
+    await pointers.handleActiveTabChanged(7);
+    let release!: () => void;
+    const barrier = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const setContext = vi.spyOn(page, "setContext").mockImplementationOnce(async () => barrier);
+    const starting = pointers.setSynchronized(true);
+    await vi.waitFor(() => expect(setContext).toHaveBeenCalledTimes(1));
+    const changing = pointers.handlePermissionBoundaryChanged();
+    release();
+    await Promise.all([starting, changing]);
+    expect(setContext).toHaveBeenCalledTimes(2);
+    expect(setContext.mock.calls[1]).toEqual([7, setContext.mock.calls[0]![1], 0, true]);
   });
 });
 

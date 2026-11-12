@@ -1090,26 +1090,65 @@ export class MediaController {
     });
   }
 
-  public async alignOnce(playbackGroupId: string): Promise<void> {
-    this.#requireOnline();
-    const group = this.#requireGroup(playbackGroupId);
+  public async alignOnce(playbackGroupId: string, expectedTarget?: MediaTarget): Promise<void> {
+    if (expectedTarget === undefined) this.#requireOnline();
+    else this.#requireSynchronizedSnapshot();
+    const group = this.#groupById(CanonicalUuidSchema.parse(playbackGroupId));
+    if (group === undefined) throw new MediaControllerError("GROUP_NOT_FOUND");
     if (group.target === null || group.observed === null) {
       throw new MediaControllerError("MEDIA_TARGET_UNAVAILABLE");
     }
-    const route = await this.#routeForTarget(group.target);
+    const target = group.target;
+    if (
+      expectedTarget !== undefined &&
+      !sameMediaTarget(target, MediaTargetSchema.parse(expectedTarget))
+    )
+      throw new MediaControllerError("MEDIA_TARGET_CHANGED");
+    if (expectedTarget !== undefined && this.#currentMembership() !== null)
+      throw new MediaControllerError("MEDIA_ALREADY_IN_GROUP");
+    const generation = this.#generation;
+    const route = await this.#routeForTarget(target);
     if (route === null) {
       throw new MediaControllerError("MEDIA_TARGET_UNBOUND");
     }
-    const generation = this.#generation;
-    await this.#follower.apply(
+    const current = () => {
+      if (!this.#generationGuard(generation)()) return false;
+      if (expectedTarget === undefined) return true;
+      const latest = this.#groupById(playbackGroupId)?.target;
+      return (
+        this.#currentMembership() === null &&
+        route.tabId === this.#activeTabId &&
+        latest != null &&
+        sameMediaTarget(latest, target) &&
+        this.#localObservation?.tabId === route.tabId &&
+        sameMediaTarget(this.#localObservation.target, target) &&
+        this.#currentPageCapabilityError() === null
+      );
+    };
+    if (expectedTarget !== undefined) {
+      const local = this.#localObservation;
+      if (local === null || !current() || !(await this.#isRouteCurrent(local)) || !current())
+        throw new MediaControllerError("MEDIA_CONTEXT_CHANGED");
+      if (
+        this.#compatibility !== undefined &&
+        !this.#compatibility.canSynchronizeKnownMedia({
+          target,
+          remoteUserId: group.leaderUserId,
+          remoteDeviceId: group.leaderDeviceId,
+        })
+      )
+        throw new MediaControllerError("MEDIA_MISMATCH");
+    }
+    const applied = await this.#follower.apply(
       route,
-      group.target,
+      target,
       {
         type: "SEEK",
         positionMs: predictGroupPosition(group, this.#now()),
       },
-      this.#generationGuard(generation),
+      current,
     );
+    if (!applied || !current()) throw new MediaControllerError("MEDIA_CONTEXT_CHANGED");
   }
 
   public async jumpToMember(userIdInput: string): Promise<void> {
