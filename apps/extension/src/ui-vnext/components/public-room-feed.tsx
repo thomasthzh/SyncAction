@@ -10,6 +10,8 @@ export interface PublicRoomFeedProps {
   readonly rooms: readonly PublicRoomSummary[];
   readonly onJoin: (room: PublicRoomSummary) => Promise<UiCommandResult>;
   readonly onRefresh: () => Promise<UiCommandResult>;
+  readonly requestedRoomId?: string | null;
+  readonly joinedRoomIds?: readonly string[];
 }
 
 function roomActionLabel(room: PublicRoomSummary): string | null {
@@ -22,7 +24,13 @@ function roomActionLabel(room: PublicRoomSummary): string | null {
   return null;
 }
 
-export function PublicRoomFeed({ rooms, onJoin, onRefresh }: PublicRoomFeedProps): JSX.Element {
+export function PublicRoomFeed({
+  rooms,
+  onJoin,
+  onRefresh,
+  requestedRoomId = null,
+  joinedRoomIds = [],
+}: PublicRoomFeedProps): JSX.Element {
   const [query, setQuery] = useState("");
   const feedback = useCommandFeedback();
   const normalizedQuery = query.trim().toLocaleLowerCase();
@@ -110,7 +118,9 @@ export function PublicRoomFeed({ rooms, onJoin, onRefresh }: PublicRoomFeedProps
       ) : (
         <div class="room-feed__list divided-list">
           {filteredRooms.map((room) => {
-            const actionLabel = roomActionLabel(room);
+            const joined = joinedRoomIds.includes(room.roomId);
+            const waiting = requestedRoomId === room.roomId;
+            const actionLabel = joined ? "进入房间" : waiting ? "等待批准" : roomActionLabel(room);
             return (
               <article class="public-room-row" data-room-id={room.roomId} key={room.roomId}>
                 <div class="public-room-row__body">
@@ -129,13 +139,15 @@ export function PublicRoomFeed({ rooms, onJoin, onRefresh }: PublicRoomFeedProps
                   <button
                     class="compact-button room-join-button"
                     type="button"
-                    disabled={feedback.pending !== null}
+                    disabled={feedback.pending !== null || waiting}
                     aria-busy={feedback.pending === room.roomId}
                     onClick={() =>
                       void feedback.run(
                         room.roomId,
                         () => onJoin(room),
-                        room.joinPolicy === "APPROVAL" ? "加入申请已发送，等待房主同意" : undefined,
+                        !joined && room.joinPolicy === "APPROVAL"
+                          ? "加入申请已发送，等待房主同意"
+                          : undefined,
                       )
                     }
                   >

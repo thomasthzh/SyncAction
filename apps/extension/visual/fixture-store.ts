@@ -9,7 +9,14 @@ import type {
 import type { UiCommandResult, UiStateSlices } from "../src/ui/ui-protocol.js";
 
 export type VisualFixture =
-  "lobby" | "room" | "guest" | "room-unshared" | "room-leader" | "room-leader-unshared";
+  | "lobby"
+  | "room"
+  | "guest"
+  | "room-unshared"
+  | "room-leader"
+  | "room-leader-unshared"
+  | "journey"
+  | "room-journey";
 
 export const FIXTURE_NOW_MS = Date.parse("2026-08-24T08:00:00.000Z");
 
@@ -270,6 +277,7 @@ function roomSlices(): UiStateSlices {
     pageAccess: {
       bindings: null,
       tabId: 42,
+      logicalTabId: pageIds[0]!,
       documentRevision: { roomEpoch: 0, tabUpdatedAtSeq: 12 },
       contentCompatibility: "EXACT",
       origin: "https://docs.example",
@@ -322,7 +330,11 @@ export function createVisualStore(fixture: VisualFixture): UiStore {
     slices.shell = { ...slices.shell, phase: "SIGNED_OUT", account: null };
     slices.discovery = { ...slices.discovery, rooms: [], invitations: [] };
   }
-  return new VisualUiStore(slices, fixture === "room-unshared");
+  return new VisualUiStore(
+    slices,
+    fixture === "room-unshared",
+    fixture === "journey" || fixture === "room-journey",
+  );
 }
 
 class VisualUiStore implements UiStore {
@@ -343,10 +355,12 @@ class VisualUiStore implements UiStore {
   public readonly pageAccess;
   public readonly pendingCommands = signal<ReadonlySet<string>>(new Set());
   public readonly commandError = signal<UiCommandError | null>(null);
+  private requestedRoom: UiStateSlices["discovery"]["publicRooms"][number] | undefined;
 
   public constructor(
     state: UiStateSlices,
     private readonly pageToolFixture = false,
+    private readonly journeyFixture = false,
   ) {
     this.shell = signal(state.shell);
     this.discovery = signal(state.discovery);
@@ -357,6 +371,141 @@ class VisualUiStore implements UiStore {
   }
 
   public command(_command: UiCommandInput): Promise<UiCommandResult> {
+    const done = (value?: unknown): Promise<UiCommandResult> =>
+      Promise.resolve({
+        type: "ui.command.result",
+        commandId: uuid(900),
+        ok: true,
+        ...(value === undefined ? {} : { value }),
+      });
+    if (this.journeyFixture) {
+      if (_command.name === "ROOM_JOIN_REQUEST") {
+        this.requestedRoom = this.discovery.value.publicRooms.find(
+          (room) => room.roomId === _command.payload.roomId,
+        );
+        return done({
+          requestId: uuid(901),
+          roomId: _command.payload.roomId,
+          applicant: {
+            userId: account.id,
+            username: account.username,
+            displayName: account.displayName,
+          },
+          status: "PENDING",
+          createdAt: "2026-11-13T00:00:00.000Z",
+          decidedAt: null,
+        });
+      }
+      if (
+        _command.name === "PRODUCT_REFRESH" &&
+        this.requestedRoom !== undefined &&
+        !this.discovery.value.rooms.some((room) => room.id === this.requestedRoom!.roomId)
+      )
+        this.discovery.value = {
+          ...this.discovery.value,
+          rooms: [
+            ...this.discovery.value.rooms,
+            roomSummary(this.requestedRoom.roomId, this.requestedRoom.name, "MEMBER"),
+          ],
+        };
+      if (_command.name === "ROOM_JOIN_CANCEL") this.requestedRoom = undefined;
+      if (_command.name === "ROOM_SELECT") {
+        const next = roomSlices();
+        const selected = this.discovery.value.rooms.find(
+          (room) => room.id === _command.payload.roomId,
+        );
+        this.shell.value = { ...this.shell.value, phase: "ROOM_ACTIVE" };
+        this.room.value = {
+          ...next.room,
+          selectedRoomId: _command.payload.roomId,
+          detail: {
+            ...next.room.detail!,
+            id: _command.payload.roomId,
+            name: selected?.name ?? next.room.detail!.name,
+            role: selected?.role ?? "MEMBER",
+          },
+          runtime: {
+            ...next.room.runtime!,
+            roomName: selected?.name ?? next.room.runtime!.roomName,
+            media: {
+              ...next.room.runtime!.media!,
+              playbackGroups: next.room.runtime!.media!.playbackGroups.map((group) => ({
+                ...group,
+                roomId: _command.payload.roomId,
+              })),
+            },
+          },
+        };
+        this.collaboration.value = next.collaboration;
+        this.pageAccess.value = next.pageAccess;
+      }
+      if (_command.name === "ROOM_TAB_ACTIVATE") {
+        const group = this.room.value.runtime?.media?.playbackGroups.find(
+          (group) => group.target?.logicalTabId === _command.payload.logicalTabId,
+        );
+        if (group?.target != null)
+          this.pageAccess.value = {
+            ...this.pageAccess.value,
+            tabId: 42,
+            logicalTabId: group.target.logicalTabId,
+            documentRevision: group.target.documentRevision,
+          };
+      }
+      if (_command.name === "MEDIA_GROUP_PREPARE") {
+        const runtime = this.room.value.runtime!;
+        const group = runtime.media!.playbackGroups.find(
+          (group) => group.playbackGroupId === _command.payload.playbackGroupId,
+        )!;
+        this.room.value = {
+          ...this.room.value,
+          runtime: {
+            ...runtime,
+            media: {
+              ...runtime.media!,
+              localObservation: { target: group.target!, observed: group.observed! },
+            },
+          },
+        };
+      }
+      if (_command.name === "MEDIA_GROUP_JOIN") {
+        const runtime = this.room.value.runtime!;
+        this.room.value = {
+          ...this.room.value,
+          runtime: {
+            ...runtime,
+            media: {
+              ...runtime.media!,
+              controlReady: true,
+              localMembership: {
+                playbackGroupId: _command.payload.playbackGroupId,
+                role: "FOLLOWER",
+                activeDevice: true,
+              },
+            },
+          },
+        };
+      }
+      if (_command.name === "DIRECTORY_SEARCH")
+        return done({
+          items: [1, 2].map((index) => ({
+            userId: uuid(910 + index),
+            username: `friend${index}`,
+            displayName: index === 1 ? "小林" : "小周",
+            online: true,
+          })),
+          nextCursor: null,
+        });
+      if (_command.name === "INVITE_BATCH")
+        return done(
+          _command.payload.userIds.map((userId, index) => ({
+            userId,
+            status: index === 0 ? "CREATED" : "FORBIDDEN",
+            invitationId: index === 0 ? uuid(930) : null,
+          })),
+        );
+      if (_command.name === "BROWSER_RECOVERY_CONFIRM")
+        return done({ kind: "BLOCKED", reason: "STALE_BINDINGS", effectsApplied: 0 });
+    }
     if (this.pageToolFixture && _command.name === "CURRENT_TAB_SHARE") {
       return Promise.resolve({
         type: "ui.command.result",

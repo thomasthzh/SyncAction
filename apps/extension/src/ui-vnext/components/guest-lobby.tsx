@@ -15,6 +15,7 @@ export interface GuestLobbyProps {
   readonly store: UiStore;
   readonly actionError: string | null;
   readonly onJoinPublicRoom: (room: PublicRoomSummary) => Promise<UiCommandResult>;
+  readonly requestedRoomId?: string | null;
   readonly onOpenCreateRoom: () => void;
   readonly onOpenAuth: () => void;
   readonly onOpenServerProfiles?: () => void;
@@ -25,6 +26,7 @@ export function GuestLobby({
   store,
   actionError,
   onJoinPublicRoom,
+  requestedRoomId = null,
   onOpenCreateRoom,
   onOpenAuth,
   onOpenServerProfiles = onOpenAuth,
@@ -131,7 +133,25 @@ export function GuestLobby({
               {returning ? null : <p class="eyebrow">继续协作</p>}
               <h2 id="my-room-heading">我的房间</h2>
             </div>
-            <span>{discovery.rooms.length} 个房间</span>
+            <button
+              class="text-button"
+              type="button"
+              disabled={feedback.pending !== null}
+              onClick={() =>
+                void feedback.run(
+                  "refresh-mine",
+                  () => store.command({ name: "PRODUCT_REFRESH" }),
+                  "我的房间和消息已更新",
+                )
+              }
+            >
+              <Icon
+                name="sync"
+                size={16}
+                className={feedback.pending === "refresh-mine" ? "is-spinning" : ""}
+              />
+              {feedback.pending === "refresh-mine" ? "刷新中…" : "刷新我的房间"}
+            </button>
           </header>
           {discovery.rooms.length === 0 ? (
             <p class="subtle-copy">还没有房间，创建一个或从公开房间开始。</p>
@@ -237,6 +257,8 @@ export function GuestLobby({
       >
         <PublicRoomFeed
           rooms={discovery.publicRooms}
+          requestedRoomId={requestedRoomId}
+          joinedRoomIds={discovery.rooms.map((room) => room.id)}
           onJoin={onJoinPublicRoom}
           onRefresh={() => store.command({ name: "PUBLIC_ROOMS_REFRESH" })}
         />

@@ -237,7 +237,9 @@ export default defineBackground(() => {
           ...(onStatusChanged === undefined ? {} : { onStatusChanged }),
           mediaNavigationPort: {
             activateTab: async (tabId) => {
-              await browser.tabs.update(tabId, { active: true });
+              const tab = await browser.tabs.update(tabId, { active: true });
+              if (tab?.windowId !== undefined)
+                await browser.windows.update(tab.windowId, { focused: true });
             },
           },
         });
@@ -339,6 +341,7 @@ export default defineBackground(() => {
       const access = UiPageAccessSliceSchema.parse({
         bindings,
         tabId,
+        logicalTabId: pageContext.logicalTabId ?? null,
         url: supported ? (tab?.pendingUrl ?? tab?.url ?? null) : null,
         documentRevision: pageContext.documentRevision,
         contentCompatibility: pageContext.contentCompatibility,

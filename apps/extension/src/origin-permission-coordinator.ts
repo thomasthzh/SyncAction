@@ -1,4 +1,9 @@
-import { RoomIdSchema, type DocumentRevision, type RoomId } from "@syncaction/protocol";
+import {
+  RoomIdSchema,
+  type DocumentRevision,
+  type RoomId,
+  type MediaTarget,
+} from "@syncaction/protocol";
 import type { OriginConsentRecord, OriginConsentIdentity } from "./origin-consent.js";
 import { normalizePageOrigin, pageOriginPattern } from "./origin-consent.js";
 import { ServerProfileIdSchema } from "./server-profile.js";
@@ -32,6 +37,7 @@ export interface PermissionIntent {
   roomId?: RoomId;
   url?: string;
   mediaJoinGroupId?: string;
+  mediaJoinTarget?: MediaTarget;
   mediaSwitchGroupId?: string;
   profileId: string;
   tabId: number;
@@ -48,6 +54,11 @@ export interface PermissionConfirmation {
   errorCode: string | null;
   policySyncPending: boolean;
 }
+export type PagePermissionRequester = (
+  intentKey: string,
+  expectedUrl?: string,
+  onComplete?: (granted: boolean) => void,
+) => void;
 
 export interface OriginPermissionCoordinatorOptions {
   browser: OriginPermissionBrowserPort;

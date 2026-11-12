@@ -294,7 +294,7 @@ describe("vNext guest lobby", () => {
       "AUTH_LOGIN",
       "ROOM_JOIN_OPEN",
     ]);
-    expect(root.querySelector('[role="dialog"]')).toBeNull();
+    await vi.waitFor(() => expect(root.querySelector('[role="dialog"]')).toBeNull());
   });
 
   it("does not replay a deferred join after the public room disappears", async () => {

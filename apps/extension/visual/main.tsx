@@ -12,15 +12,17 @@ if (root === null) {
 
 const requestedFixture = new URLSearchParams(globalThis.location.search).get("fixture");
 const fixture: VisualFixture =
-  requestedFixture === "room-unshared"
-    ? "room-unshared"
-    : requestedFixture === "room-leader" || requestedFixture === "room-leader-unshared"
-      ? requestedFixture
-      : requestedFixture === "room"
-        ? "room"
-        : requestedFixture === "guest"
-          ? "guest"
-          : "lobby";
+  requestedFixture === "journey" || requestedFixture === "room-journey"
+    ? requestedFixture
+    : requestedFixture === "room-unshared"
+      ? "room-unshared"
+      : requestedFixture === "room-leader" || requestedFixture === "room-leader-unshared"
+        ? requestedFixture
+        : requestedFixture === "room"
+          ? "room"
+          : requestedFixture === "guest"
+            ? "guest"
+            : "lobby";
 document.documentElement.dataset.fixture = fixture;
 document.documentElement.dataset.visualStage = "true";
 const store = createVisualStore(fixture);

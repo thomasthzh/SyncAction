@@ -99,17 +99,25 @@ describe("task-scoped permission and connection UI", () => {
         />,
       );
       const groupId = root.querySelector<HTMLElement>("[data-group-id]")?.dataset.groupId;
-      await click(byRole(root, "button", action === "create" ? "开始一起看" : "加入播放组"));
+      await click(byRole(root, "button", action === "create" ? "开始一起看" : "打开并一起看"));
       expect(root.querySelector(".permission-task")?.textContent).toContain(
         action === "create" ? "从当前视频创建播放组" : "加入原播放组",
       );
       agree(root);
       await click(byRole(root, "button", "允许当前站点"));
       expect(confirm).toHaveBeenCalledWith(
-        action === "create" ? captured : { ...captured, mediaJoinGroupId: groupId },
+        action === "create"
+          ? captured
+          : {
+              ...captured,
+              mediaJoinGroupId: groupId,
+              mediaJoinTarget: store.room.value.runtime!.media!.playbackGroups[0]!.target,
+            },
         true,
       );
-      expect(store.commandCalls).toEqual([]);
+      expect(store.commandCalls.map((command) => command.name)).toEqual(
+        action === "create" ? [] : ["ROOM_TAB_ACTIVATE", "PAGE_PERMISSION_REFRESH"],
+      );
     },
   );
 

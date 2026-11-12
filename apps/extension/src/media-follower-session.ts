@@ -85,6 +85,7 @@ export class MediaFollowerSession {
   readonly #applyTokens = new Map<string, ApplyTokenState>();
   readonly #inFlightGestureProposals = new Set<string>();
   #lockedRoute: LockedFollowerBinding | null = null;
+  #lockOperation = 0;
   #activeRateCorrection: ActiveRateCorrection | null = null;
   #pendingForcedAlignment: string | null = null;
   #tail: Promise<void> = Promise.resolve();
@@ -176,6 +177,7 @@ export class MediaFollowerSession {
     target: MediaTarget | null,
     guard: () => boolean = () => true,
   ): Promise<void> {
+    const operation = ++this.#lockOperation;
     const previous = this.#lockedRoute;
     if (
       previous !== null &&
@@ -186,6 +188,7 @@ export class MediaFollowerSession {
         target === null ||
         !sameMediaTarget(previous.target, target))
     ) {
+      this.#lockedRoute = null;
       try {
         await this.#page.setFollowerLock(
           previous.tabId,
@@ -197,7 +200,7 @@ export class MediaFollowerSession {
       } catch {
         // A stale or revoked document may already be unreachable.
       }
-      this.#lockedRoute = null;
+      if (operation !== this.#lockOperation) return;
     }
     if (
       !this.#disposed &&
@@ -211,6 +214,7 @@ export class MediaFollowerSession {
         !sameMediaTarget(this.#lockedRoute.target, target))
     ) {
       await this.#page.setFollowerLock(route.tabId, route.frameId, route.context, target, true);
+      if (operation !== this.#lockOperation) return;
       if (guard()) {
         this.#lockedRoute = {
           ...route,
@@ -270,6 +274,46 @@ export class MediaFollowerSession {
     forceSeek: boolean,
     guard: () => boolean,
   ): Promise<void> {
+    let cancelled = false;
+    const tokens: string[] = [];
+    let deadlineHandle: unknown;
+    const deadline = new Promise<never>((_resolve, reject) => {
+      deadlineHandle = this.#scheduler.setTimeout(() => {
+        cancelled = true;
+        reject(new Error("MEDIA_FOLLOW_TIMEOUT"));
+      }, 5_000);
+    });
+    try {
+      await Promise.race([
+        this.#reconcile(
+          group,
+          route,
+          localTarget,
+          localObserved,
+          forceSeek,
+          () => !cancelled && guard(),
+          tokens,
+        ),
+        deadline,
+      ]);
+    } catch (cause) {
+      cancelled = true;
+      for (const token of tokens) this.releaseApplyToken(token);
+      throw cause;
+    } finally {
+      this.#scheduler.clearTimeout(deadlineHandle);
+    }
+  }
+
+  async #reconcile(
+    group: PlaybackGroupSnapshot,
+    route: MediaRoute,
+    localTarget: MediaTarget,
+    localObserved: MediaObservedState,
+    forceSeek: boolean,
+    guard: () => boolean,
+    tokens: string[],
+  ): Promise<void> {
     if (
       this.#disposed ||
       group.target === null ||
@@ -313,7 +357,7 @@ export class MediaFollowerSession {
         (plannedCorrectionRate !== null &&
           plannedCorrectionRate !== this.#activeRateCorrection.temporaryRate))
     ) {
-      await this.cancelRateCorrection(true);
+      await this.cancelRateCorrection(true, guard, tokens);
       continuesRateCorrection = false;
     }
     for (const action of plan.actions) {
@@ -323,7 +367,10 @@ export class MediaFollowerSession {
       ) {
         continue;
       }
-      await this.apply(route, group.target, action, guard);
+      if (!guard()) return;
+      const token = this.reserveApplyToken();
+      tokens.push(token);
+      await this.apply(route, group.target, action, guard, token);
     }
     if (
       plan.rateRestore !== null &&
@@ -342,23 +389,35 @@ export class MediaFollowerSession {
     }
   }
 
-  public async cancelRateCorrection(restore: boolean): Promise<void> {
+  public async cancelRateCorrection(
+    restore: boolean,
+    guard: () => boolean = () => true,
+    tokens?: string[],
+  ): Promise<void> {
     const correction = this.#activeRateCorrection;
     if (correction === null) {
       return;
     }
     this.#activeRateCorrection = null;
     this.#scheduler.clearTimeout(correction.handle);
-    if (restore) {
+    if (restore && guard()) {
       try {
-        if (await this.#isRouteCurrent(correction.route)) {
-          await this.#sendPageApply(correction.route, correction.target, {
-            type: "SET_RATE",
-            playbackRate: correction.restoreRate,
-          });
+        if ((await this.#isRouteCurrent(correction.route)) && guard()) {
+          const token = this.reserveApplyToken();
+          tokens?.push(token);
+          await this.apply(
+            correction.route,
+            correction.target,
+            {
+              type: "SET_RATE",
+              playbackRate: correction.restoreRate,
+            },
+            guard,
+            token,
+          );
         }
       } catch (cause) {
-        this.#onError(mediaFollowerErrorCode(cause, "MEDIA_RATE_RESTORE_FAILED"));
+        if (guard()) this.#onError(mediaFollowerErrorCode(cause, "MEDIA_RATE_RESTORE_FAILED"));
       }
     }
   }

@@ -152,7 +152,7 @@ const BatchInvitationResultSchema = z
       });
     }
   });
-const BatchInvitationResponseSchema = z.array(BatchInvitationResultSchema).min(1).max(20);
+export const BatchInvitationResponseSchema = z.array(BatchInvitationResultSchema).min(1).max(20);
 const NotificationListSchema = z
   .object({
     items: z.array(NotificationSchema),

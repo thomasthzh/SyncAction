@@ -85,6 +85,7 @@ export function baseSlices(): UiStateSlices {
     pageAccess: {
       bindings: null,
       tabId: null,
+      logicalTabId: null,
       documentRevision: null,
       contentCompatibility: null,
       origin: null,

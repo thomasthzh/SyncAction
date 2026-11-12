@@ -383,7 +383,7 @@ describe("first collaboration recovery and truthful results", () => {
       <App store={store} pagePermissionCoordinator={{ capture, confirm }} />,
     );
     const group = root.querySelector<HTMLElement>("[data-group-id]")!;
-    await click(byRole(group, "button", "加入播放组"));
+    await click(byRole(group, "button", "打开并一起看"));
     await vi.waitFor(() => expect(root.textContent).toContain("媒体同步控制"));
     act(() => root.querySelector<HTMLInputElement>('input[name="agreement"]')!.click());
     await click(byRole(root, "button", "允许当前站点"));

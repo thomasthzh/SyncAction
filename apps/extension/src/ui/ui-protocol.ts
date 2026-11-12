@@ -167,6 +167,7 @@ const MediaLocalObservationSchema = z
 const MediaStatusSchema = z
   .object({
     state: z.enum(["OFFLINE", "ONLINE", "DEGRADED"]),
+    controlReady: z.boolean().optional(),
     roomMediaRevision: NonNegativeIntegerSchema.nullable(),
     playbackGroups: z.array(PlaybackGroupSnapshotSchema).max(256),
     localObservation: MediaLocalObservationSchema.nullable(),
@@ -501,6 +502,7 @@ export const UiPageAccessSliceSchema = z
   .object({
     bindings: PageToolCommandBindingsSchema.nullable(),
     tabId: NonNegativeIntegerSchema.nullable(),
+    logicalTabId: LogicalTabIdSchema.nullable().optional(),
     documentRevision: DocumentRevisionSchema.nullable(),
     contentCompatibility: ContentCompatibilitySchema.nullable(),
     pendingPublication: z
@@ -687,6 +689,7 @@ export const UiCommandNameSchema = z.enum([
   "SERVER_SELECT",
   "ONBOARDING_DISMISS",
   "PUBLIC_ROOMS_REFRESH",
+  "PRODUCT_REFRESH",
   "ROOM_CREATE",
   "ROOM_UPDATE",
   "ROOM_SELECT",
@@ -694,6 +697,7 @@ export const UiCommandNameSchema = z.enum([
   "ROOM_TAB_REMOVE",
   "ROOM_JOIN_OPEN",
   "ROOM_JOIN_REQUEST",
+  "ROOM_JOIN_CANCEL",
   "JOIN_REQUEST_DECIDE",
   "INVITATION_ACCEPT",
   "DIRECTORY_SEARCH",
@@ -714,6 +718,7 @@ export const UiCommandNameSchema = z.enum([
   "DANMAKU_VISIBILITY",
   "PEN_TOGGLE",
   "MEDIA_GROUP_CREATE",
+  "MEDIA_GROUP_PREPARE",
   "MEDIA_GROUP_SWITCH_CURRENT",
   "MEDIA_MEMBER_JUMP",
   "MEDIA_GROUP_ALIGN_ONCE",
@@ -880,10 +885,22 @@ export const UiCommandSchema = z.discriminatedUnion("name", [
   commandWithPayload("SERVER_SELECT", z.object({ profileId: ServerProfileIdSchema }).strict()),
   commandWithoutPayload("ONBOARDING_DISMISS"),
   commandWithoutPayload("PUBLIC_ROOMS_REFRESH"),
+  commandWithoutPayload("PRODUCT_REFRESH"),
   commandWithPayload("ROOM_CREATE", RoomMutationPayloadSchema),
   commandWithPayload("ROOM_UPDATE", RoomMutationPayloadSchema),
   commandWithPayload("ROOM_SELECT", z.object({ roomId: RoomIdSchema }).strict()),
-  commandWithPayload("ROOM_TAB_ACTIVATE", z.object({ logicalTabId: LogicalTabIdSchema }).strict()),
+  commandWithPayload(
+    "ROOM_TAB_ACTIVATE",
+    z
+      .object({
+        logicalTabId: LogicalTabIdSchema,
+        expectedContext: z
+          .object({ profileId: ServerProfileIdSchema, roomId: RoomIdSchema })
+          .strict()
+          .optional(),
+      })
+      .strict(),
+  ),
   commandWithPayload(
     "ROOM_TAB_REMOVE",
     z
@@ -896,6 +913,7 @@ export const UiCommandSchema = z.discriminatedUnion("name", [
   ),
   commandWithPayload("ROOM_JOIN_OPEN", z.object({ roomId: RoomIdSchema }).strict()),
   commandWithPayload("ROOM_JOIN_REQUEST", z.object({ roomId: RoomIdSchema }).strict()),
+  commandWithPayload("ROOM_JOIN_CANCEL", z.object({ requestId: CanonicalUuidSchema }).strict()),
   commandWithPayload(
     "JOIN_REQUEST_DECIDE",
     z
@@ -917,7 +935,18 @@ export const UiCommandSchema = z.discriminatedUnion("name", [
       })
       .strict(),
   ),
-  commandWithPayload("INVITE_BATCH", z.object({ userIds: UniqueUserIdsSchema }).strict()),
+  commandWithPayload(
+    "INVITE_BATCH",
+    z
+      .object({
+        userIds: UniqueUserIdsSchema,
+        expectedContext: z
+          .object({ profileId: ServerProfileIdSchema, roomId: RoomIdSchema })
+          .strict()
+          .optional(),
+      })
+      .strict(),
+  ),
   commandWithPayload(
     "NOTIFICATION_READ",
     z.object({ notificationId: CanonicalUuidSchema }).strict(),
@@ -935,7 +964,17 @@ export const UiCommandSchema = z.discriminatedUnion("name", [
     "CURRENT_TAB_SHARE_AS_NEW",
     z.object({ expectedContext: PageShareExpectedContextSchema }).strict(),
   ),
-  commandWithoutPayload("BROWSER_RECOVERY_CONFIRM"),
+  commandWithPayload(
+    "BROWSER_RECOVERY_CONFIRM",
+    z
+      .object({
+        expectedContext: z
+          .object({ profileId: ServerProfileIdSchema, roomId: RoomIdSchema })
+          .strict(),
+      })
+      .strict()
+      .optional(),
+  ),
   commandWithoutPayload("PAGE_PERMISSION_REFRESH"),
   commandWithPayload(
     "PAGE_PERMISSION_REMOVE",
@@ -954,6 +993,16 @@ export const UiCommandSchema = z.discriminatedUnion("name", [
   commandWithPayload(
     "MEDIA_GROUP_CREATE",
     z.object({ expectedContext: MediaGroupCreateExpectedContextSchema }).strict().optional(),
+  ),
+  commandWithPayload(
+    "MEDIA_GROUP_PREPARE",
+    z
+      .object({
+        playbackGroupId: CanonicalUuidSchema,
+        expectedContext: MediaGroupCreateExpectedContextSchema,
+        expectedTarget: MediaTargetSchema,
+      })
+      .strict(),
   ),
   commandWithPayload(
     "MEDIA_GROUP_SWITCH_CURRENT",
@@ -975,6 +1024,7 @@ export const UiCommandSchema = z.discriminatedUnion("name", [
       .object({
         playbackGroupId: CanonicalUuidSchema,
         expectedContext: MediaGroupCreateExpectedContextSchema.optional(),
+        expectedTarget: MediaTargetSchema.optional(),
       })
       .strict(),
   ),

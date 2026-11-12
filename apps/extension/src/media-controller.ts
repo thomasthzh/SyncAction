@@ -489,10 +489,6 @@ export class MediaController {
       ) {
         return;
       }
-      if (!this.#controlStateValid && this.#errorCode === "MEDIA_MISMATCH") {
-        // Only fresh peer evidence may reopen control after compatibility loss.
-        return;
-      }
       const leaderAuthorityToken =
         message.applyToken === null
           ? undefined
@@ -557,6 +553,9 @@ export class MediaController {
         target: structuredClone(message.target),
         observed: structuredClone(message.observed),
       };
+      // Keep verified local observations for preparation, without reopening
+      // heartbeat, gestures or playback control while their prerequisites fail.
+      if (!this.#controlStateValid && message.applyToken === null) return;
       if (message.event === "APPLY_RESULT") {
         if (taggedControllerApply) {
           this.#recordPageApplyResult(route, message.target, message.resultCode);
@@ -852,11 +851,172 @@ export class MediaController {
     );
   }
 
-  public async joinGroup(playbackGroupId: string): Promise<MediaCommandAck> {
+  public async prepareGroup(playbackGroupId: string, expectedTarget: MediaTarget): Promise<void> {
+    const target = MediaTargetSchema.parse(expectedTarget);
+    this.#requireSynchronizedSnapshot();
+    const group = this.#groupById(CanonicalUuidSchema.parse(playbackGroupId));
+    if (group?.target == null || !sameMediaTarget(group.target, target))
+      throw new MediaControllerError("MEDIA_TARGET_CHANGED");
+    this.#requireMatchingMembership(playbackGroupId);
+    const generation = this.#generation;
+    const route = await this.#routeForTarget(target);
+    if (route === null || route.tabId !== this.#activeTabId || !this.#generationGuard(generation)())
+      throw new MediaControllerError("MEDIA_TARGET_UNBOUND");
+    if (
+      this.#groupById(playbackGroupId)?.target == null ||
+      !sameMediaTarget(this.#groupById(playbackGroupId)!.target!, target)
+    )
+      throw new MediaControllerError("MEDIA_TARGET_CHANGED");
+    this.#requireMatchingMembership(playbackGroupId);
+    this.#localObservation = null;
+    this.#controlStateValid = false;
+    this.#heartbeat.clearSample();
+    try {
+      this.#onStatusChanged?.();
+    } catch {
+      /* Observation does not interrupt preparation. */
+    }
+    // Return after dispatch. Its genuine observation enters through the App
+    // queue after this command; waiting here would wait on our own caller.
+    await this.#page.observe(route.tabId, route.frameId, route.context, target);
+  }
+
+  public async joinGroup(
+    playbackGroupId: string,
+    expectedTarget?: MediaTarget,
+  ): Promise<MediaCommandAck | void> {
+    if (expectedTarget !== undefined) {
+      const target = MediaTargetSchema.parse(expectedTarget);
+      const generation = this.#generation;
+      this.#requireSynchronizedSnapshot();
+      const original = this.#groupById(CanonicalUuidSchema.parse(playbackGroupId));
+      if (
+        original?.target === null ||
+        original === undefined ||
+        !sameMediaTarget(original.target, target)
+      )
+        throw new MediaControllerError("MEDIA_TARGET_CHANGED");
+      const membership = this.#requireMatchingMembership(playbackGroupId);
+      const route = await this.#routeForTarget(target);
+      if (
+        !this.#generationGuard(generation)() ||
+        route === null ||
+        route.tabId !== this.#activeTabId
+      )
+        throw new MediaControllerError("MEDIA_TARGET_UNBOUND");
+      // Recheck permission/document access, but do not wait on the observation
+      // queued behind this App command; preparation already supplied that sample.
+      await this.#page.observe(route.tabId, route.frameId, route.context, target);
+      const current = this.#groupById(playbackGroupId);
+      if (
+        !this.#generationGuard(generation)() ||
+        current?.target == null ||
+        !sameMediaTarget(current.target, target)
+      )
+        throw new MediaControllerError("MEDIA_TARGET_CHANGED");
+      const local = this.#localObservation;
+      const capabilityError = this.#currentPageCapabilityError();
+      if (capabilityError !== null) throw new MediaControllerError(capabilityError);
+      if (
+        local === null ||
+        local.tabId !== this.#activeTabId ||
+        !sameMediaTarget(local.target, target) ||
+        !(await this.#isRouteCurrent(local))
+      )
+        throw new MediaControllerError(
+          this.#currentPageCapabilityError() ?? this.#errorCode ?? "MEDIA_NOT_READY",
+        );
+      if (
+        !this.#generationGuard(generation)() ||
+        this.#activeTabId !== route.tabId ||
+        this.#groupById(playbackGroupId)?.target == null ||
+        !sameMediaTarget(this.#groupById(playbackGroupId)!.target!, target)
+      )
+        throw new MediaControllerError("MEDIA_CONTEXT_CHANGED");
+      const currentMembership = this.#requireMatchingMembership(playbackGroupId);
+      if (currentMembership !== null) {
+        if (membership?.role !== "FOLLOWER" || currentMembership.role !== "FOLLOWER")
+          throw new MediaControllerError("MEDIA_ALREADY_IN_GROUP");
+        await this.#resumeFollowing(current, route, local, generation);
+        return;
+      }
+      return this.#sendCommand(
+        buildExistingMediaCommand({
+          commandId: this.#newUuid(),
+          roomId: this.#roomId,
+          group: current,
+          payload: { type: "group.join" },
+        }),
+        "JOIN_TARGET",
+      );
+    }
     const group = this.#requireGroup(playbackGroupId);
     return this.#sendExistingGroupCommand(group, {
       type: "group.join",
     });
+  }
+
+  #requireMatchingMembership(playbackGroupId: string): MediaLocalMembershipStatus | null {
+    const membership = this.#currentMembership();
+    if (membership !== null && membership.playbackGroupId !== playbackGroupId)
+      throw new MediaControllerError("MEDIA_ALREADY_IN_GROUP");
+    if (membership !== null && !membership.activeDevice)
+      throw new MediaControllerError("MEDIA_DEVICE_READ_ONLY");
+    return membership;
+  }
+
+  async #resumeFollowing(
+    group: PlaybackGroupSnapshot,
+    route: MediaRoute,
+    local: LocalObservation,
+    generation: number,
+  ): Promise<void> {
+    const target = group.target!;
+    const contextCurrent = () => {
+      const current = this.#groupById(group.playbackGroupId);
+      const member = this.#currentMembership();
+      return (
+        this.#generationGuard(generation)() &&
+        this.#activeTabId === route.tabId &&
+        current?.groupRevision === group.groupRevision &&
+        current.target !== null &&
+        sameMediaTarget(current.target, target) &&
+        member?.playbackGroupId === group.playbackGroupId &&
+        member.activeDevice &&
+        member.role === "FOLLOWER" &&
+        (this.#compatibility === undefined ||
+          this.#compatibility.canSynchronizeKnownMedia({
+            target,
+            remoteUserId: group.leaderUserId,
+            remoteDeviceId: group.leaderDeviceId,
+          }))
+      );
+    };
+    const guard = contextCurrent;
+    if (
+      this.#compatibility !== undefined &&
+      !this.#compatibility.canSynchronizeKnownMedia({
+        target,
+        remoteUserId: group.leaderUserId,
+        remoteDeviceId: group.leaderDeviceId,
+      })
+    )
+      throw new MediaControllerError("MEDIA_MISMATCH");
+    try {
+      await this.#follower.reconcile(group, route, local.target, local.observed, true, guard);
+      if (!guard() || !(await this.#isRouteCurrent(route)) || !guard())
+        throw new MediaControllerError("MEDIA_CONTEXT_CHANGED");
+      const capabilityError = this.#currentPageCapabilityError();
+      if (capabilityError !== null) throw new MediaControllerError(capabilityError);
+      this.#controlStateValid = true;
+      this.#errorCode = null;
+    } catch (cause) {
+      if (contextCurrent()) {
+        this.#controlStateValid = false;
+        this.#errorCode = errorCode(cause, "MEDIA_FOLLOWER_FAILURE");
+      }
+      throw cause;
+    }
   }
 
   public async leaveGroup(playbackGroupId?: string): Promise<MediaCommandAck> {
@@ -1993,9 +2153,14 @@ export class MediaController {
     return this.#sendCommand(command);
   }
 
-  #sendCommand(commandInput: MediaCommand, targetRecovery = false): Promise<MediaCommandAck> {
+  #sendCommand(
+    commandInput: MediaCommand,
+    targetRecovery: boolean | "JOIN_TARGET" = false,
+  ): Promise<MediaCommandAck> {
     if (targetRecovery && commandInput.type === "group.switch-target")
       this.#requireSwitchLeader(commandInput.playbackGroupId);
+    else if (targetRecovery === "JOIN_TARGET" && commandInput.type === "group.join")
+      this.#requireSynchronizedSnapshot();
     else this.#requireOnline();
     const command = commandInput;
     const generation = this.#generation;

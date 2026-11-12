@@ -19,7 +19,10 @@ import {
 import { UiPortClient, type UiPortClientPort } from "../../src/ui/ui-port-client.js";
 import { App } from "../../src/ui-vnext/app.js";
 import { createUiStore } from "../../src/ui-vnext/store.js";
-import { createPendingRoomJoinStorage } from "../../src/pending-room-join.js";
+import {
+  createPendingRoomJoinStorage,
+  PENDING_ROOM_JOIN_KEY,
+} from "../../src/pending-room-join.js";
 
 const root = document.getElementById("sidepanel-app");
 if (root === null) {
@@ -76,10 +79,19 @@ const pagePermissionCoordinator = new OriginPermissionCoordinator({
             }
           : intent.mediaJoinGroupId === undefined
             ? { name: "MEDIA_GROUP_CREATE", payload: { expectedContext } }
-            : {
-                name: "MEDIA_GROUP_JOIN",
-                payload: { playbackGroupId: intent.mediaJoinGroupId, expectedContext },
-              },
+            : intent.mediaJoinTarget === undefined
+              ? {
+                  name: "MEDIA_GROUP_JOIN",
+                  payload: { playbackGroupId: intent.mediaJoinGroupId, expectedContext },
+                }
+              : {
+                  name: "MEDIA_GROUP_PREPARE",
+                  payload: {
+                    playbackGroupId: intent.mediaJoinGroupId,
+                    expectedContext,
+                    expectedTarget: intent.mediaJoinTarget,
+                  },
+                },
       );
     } else {
       return;
@@ -131,7 +143,17 @@ const pagePermissionIntentSource = {
 render(
   h(App, {
     store,
-    pendingRoomJoinStorage: createPendingRoomJoinStorage(browser.storage.local),
+    pendingRoomJoinStorage: createPendingRoomJoinStorage(browser.storage.local, (listener) => {
+      const changed: Parameters<typeof browser.storage.onChanged.addListener>[0] = (
+        changes,
+        area,
+      ) => {
+        if (area === "local" && Object.hasOwn(changes, PENDING_ROOM_JOIN_KEY))
+          listener(changes[PENDING_ROOM_JOIN_KEY]?.newValue);
+      };
+      browser.storage.onChanged.addListener(changed);
+      return () => browser.storage.onChanged.removeListener(changed);
+    }),
     serverVerifier,
     serviceStatusProbe: serverVerifier,
     pagePermissionCoordinator,

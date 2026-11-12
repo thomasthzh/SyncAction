@@ -278,11 +278,15 @@ describe("vNext active room", () => {
       name: "MEDIA_GROUP_ALIGN_ONCE",
       payload: { playbackGroupId: groupId },
     });
-    await click(byRole(groupCard, "button", "加入播放组"));
-    expect(store.commandCalls.at(-1)).toEqual({
-      name: "MEDIA_GROUP_JOIN",
-      payload: { playbackGroupId: groupId },
+    await click(byRole(groupCard, "button", "打开并一起看"));
+    expect(store.commandCalls).toContainEqual({
+      name: "ROOM_TAB_ACTIVATE",
+      payload: {
+        logicalTabId: videoPageId,
+        expectedContext: { profileId: store.shell.value.selectedProfileId, roomId },
+      },
     });
+    expect(store.commandCalls.some((command) => command.name === "MEDIA_GROUP_JOIN")).toBe(false);
   });
 
   it("sorts default groups by size then progress and keeps avatar identity stable", () => {

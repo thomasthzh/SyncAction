@@ -4,6 +4,7 @@ import {
   DeviceIdSchema,
   LogicalTabIdSchema,
   MediaCommandAckSchema,
+  MediaTargetSchema,
   RoomIdSchema,
   ServerCapabilitySchema,
   type Notification,
@@ -11,10 +12,12 @@ import {
   type ContentCompatibility,
   type DocumentRevision,
   type MediaCommandAck,
+  type MediaTarget,
   type PageCompatibilityReport,
   type PublicRoomSummary,
   type RoomEventMessage,
   type RoomJoinPolicy,
+  type RoomJoinRequest,
   type RoomVisibility,
   type ServerCapability,
 } from "@syncaction/protocol";
@@ -52,6 +55,7 @@ import type {
 import type { PublicCatalogTransport } from "./public-catalog-transport.js";
 import { PRODUCTION_PUBLIC_SERVER_ORIGIN, parsePublicServerOrigin } from "./server-origin.js";
 import { isPlaceholderServerOrigin } from "./server-configuration.js";
+import { createPendingRoomJoinStorage } from "./pending-room-join.js";
 import {
   DEFAULT_SERVER_PROFILE_ID,
   ServerProfileIdSchema,
@@ -198,6 +202,9 @@ export interface RoomRuntime {
   stop(): Promise<void>;
   getStatus(): Promise<ExtensionStatus>;
   getPageDocumentRevision?(tabIdInput: unknown): Promise<DocumentRevision | null>;
+  getPageDocumentContext?(
+    tabIdInput: unknown,
+  ): Promise<{ logicalTabId: string; documentRevision: DocumentRevision } | null>;
   getPageContentCompatibility?(tabIdInput: unknown): Promise<ContentCompatibility | null>;
   getPageMediaCollaboration?(
     tabIdInput: unknown,
@@ -277,13 +284,17 @@ export interface RoomRuntime {
   togglePagePen(expected?: { tabId: number; documentRevision: DocumentRevision }): Promise<void>;
   jumpToMediaMember(userId: string): Promise<void>;
   createMediaGroup?(tabId: number, expectedRevision?: DocumentRevision): Promise<MediaCommandAck>;
+  prepareMediaGroup?(playbackGroupId: string, expectedTarget: MediaTarget): Promise<void>;
   switchMediaGroupCurrent?(
     playbackGroupId: string,
     tabId: number,
     expectedRevision: DocumentRevision,
   ): Promise<MediaCommandAck>;
   alignMediaGroupOnce(playbackGroupId: string): Promise<void>;
-  joinMediaGroup(playbackGroupId: string): Promise<MediaCommandAck | void>;
+  joinMediaGroup(
+    playbackGroupId: string,
+    expectedTarget?: MediaTarget,
+  ): Promise<MediaCommandAck | void>;
   leaveMediaGroup?(playbackGroupId?: string): Promise<void>;
   closeMediaGroup?(playbackGroupId?: string): Promise<void>;
   takeOverMediaDevice?(playbackGroupId: string): Promise<void>;
@@ -468,6 +479,7 @@ export interface ExtensionPageAccessContext {
   serverOrigin: string;
   serverTermsVersion: string | null;
   documentRevision: DocumentRevision | null;
+  logicalTabId?: string | null;
   contentCompatibility: ContentCompatibility | null;
   mediaCollaborationAvailable?: boolean;
   pendingPublication?: { logicalTabId: string } | null;
@@ -592,19 +604,34 @@ export class ExtensionAppController {
   public async getPageAccessContext(tabIdInput: unknown): Promise<ExtensionPageAccessContext> {
     const tabId = z.number().int().nonnegative().safe().parse(tabIdInput);
     const runtime = this.#runtime;
-    const [documentRevision, contentCompatibility] = await Promise.all([
-      runtime?.getPageDocumentRevision === undefined
-        ? null
-        : runtime.getPageDocumentRevision(tabId),
+    const runtimeGeneration = this.#runtimeGeneration;
+    const profileId = this.#profileId;
+    const [documentContext, contentCompatibility] = await Promise.all([
+      runtime?.getPageDocumentContext !== undefined
+        ? runtime.getPageDocumentContext(tabId)
+        : runtime?.getPageDocumentRevision === undefined
+          ? null
+          : runtime
+              .getPageDocumentRevision(tabId)
+              .then((documentRevision) =>
+                documentRevision === null ? null : { logicalTabId: null, documentRevision },
+              ),
       runtime?.getPageContentCompatibility === undefined
         ? null
         : runtime.getPageContentCompatibility(tabId),
     ]);
+    let documentRevision =
+      runtime === this.#runtime ? (documentContext?.documentRevision ?? null) : null;
     const mediaCollaborationAvailable =
       documentRevision !== null &&
       runtime === this.#runtime &&
       (await runtime?.getPageMediaCollaboration?.(tabId, documentRevision)) === true &&
       runtime === this.#runtime;
+    const current =
+      runtime === this.#runtime &&
+      runtimeGeneration === this.#runtimeGeneration &&
+      profileId === this.#profileId;
+    if (!current) documentRevision = null;
     return {
       profileId: this.#profileId,
       serverOrigin: this.#serverUrl,
@@ -616,13 +643,16 @@ export class ExtensionAppController {
               roomEpoch: documentRevision.roomEpoch,
               tabUpdatedAtSeq: documentRevision.tabUpdatedAtSeq,
             },
+      logicalTabId: documentRevision === null ? null : (documentContext?.logicalTabId ?? null),
       contentCompatibility:
         documentRevision === null || contentCompatibility === null ? null : contentCompatibility,
-      ...(runtime?.getPageMediaCollaboration === undefined ? {} : { mediaCollaborationAvailable }),
+      ...(runtime?.getPageMediaCollaboration === undefined
+        ? {}
+        : { mediaCollaborationAvailable: current && mediaCollaborationAvailable }),
       ...(runtime?.getPendingPagePublication === undefined
         ? {}
         : {
-            pendingPublication: runtime.getPendingPagePublication(tabId),
+            pendingPublication: current ? runtime.getPendingPagePublication(tabId) : null,
           }),
     };
   }
@@ -876,8 +906,12 @@ export class ExtensionAppController {
   }
 
   public selectRoom(roomIdInput: unknown): Promise<void> {
+    const profileId = this.#profileId;
+    const accountId = this.#account?.id;
     return this.#enqueue(async () => {
       this.#requireAuthenticated();
+      if (profileId !== this.#profileId || accountId !== this.#account?.id)
+        throw new Error("ROOM_CONTEXT_CHANGED");
       await this.#selectRoom(RoomIdSchema.parse(roomIdInput));
       this.#emitChanged();
     });
@@ -984,10 +1018,22 @@ export class ExtensionAppController {
     });
   }
 
-  public activateLogicalTab(logicalTabIdInput: unknown): Promise<void> {
+  public activateLogicalTab(
+    logicalTabIdInput: unknown,
+    expected?: { profileId: string; roomId: string },
+  ): Promise<void> {
+    const captured = this.#captureMediaCommandContext();
     return this.#enqueue(async () => {
       const logicalTabId = LogicalTabIdSchema.parse(logicalTabIdInput);
       const runtime = this.#requireRuntime();
+      if (
+        expected !== undefined &&
+        (captured.runtime !== runtime ||
+          captured.generation !== this.#runtimeGeneration ||
+          expected.profileId !== this.#profileId ||
+          expected.roomId !== this.#selection?.roomId)
+      )
+        throw new Error("MEDIA_CONTEXT_CHANGED");
       if (runtime.activateLogicalTab === undefined) {
         throw new Error("ROOM_TAB_NOT_AVAILABLE");
       }
@@ -996,8 +1042,12 @@ export class ExtensionAppController {
   }
 
   public joinOpenRoom(roomIdInput: unknown): Promise<void> {
+    const profileId = this.#profileId;
+    const accountId = this.#account?.id;
     return this.#enqueue(async () => {
       this.#requireAuthenticated();
+      if (profileId !== this.#profileId || accountId !== this.#account?.id)
+        throw new Error("ROOM_CONTEXT_CHANGED");
       const roomId = RoomIdSchema.parse(roomIdInput);
       const joined = await this.#sessions.runAuthenticated(this.#profileId, (accessToken) =>
         this.#requireApi().joinOpenRoom(accessToken, roomId),
@@ -1008,13 +1058,53 @@ export class ExtensionAppController {
     });
   }
 
-  public requestRoomJoin(roomIdInput: unknown): Promise<void> {
+  public requestRoomJoin(roomIdInput: unknown): Promise<RoomJoinRequest> {
+    const profileId = this.#profileId;
+    const accountId = this.#account?.id;
     return this.#enqueue(async () => {
       this.#requireAuthenticated();
+      if (profileId !== this.#profileId || accountId !== this.#account?.id)
+        throw new Error("ROOM_CONTEXT_CHANGED");
       const roomId = RoomIdSchema.parse(roomIdInput);
-      await this.#sessions.runAuthenticated(this.#profileId, (accessToken) =>
+      const request = await this.#sessions.runAuthenticated(this.#profileId, (accessToken) =>
         this.#requireApi().requestRoomJoin(accessToken, roomId),
       );
+      // The background owns the confirmed result even if the sidebar closes mid-request.
+      const destinations = createPendingRoomJoinStorage(this.#area);
+      const destination = await destinations.read();
+      const profile = this.#profilesList.find((profile) => profile.profileId === this.#profileId);
+      if (
+        destination !== null &&
+        destination.roomId === roomId &&
+        destination.profileId === this.#profileId &&
+        destination.serverOrigin === this.#serverUrl &&
+        destination.serverId === (profile?.metadata?.serverId ?? null) &&
+        destination.accountId === this.#account?.id &&
+        request.applicant.userId === this.#account?.id
+      )
+        await destinations.write({
+          ...destination,
+          stage: "REQUESTED",
+          requestId: request.requestId,
+          accountId: request.applicant.userId,
+        });
+      this.#emitChanged();
+      return request;
+    });
+  }
+
+  public cancelRoomJoin(requestIdInput: unknown): Promise<void> {
+    const profileId = this.#profileId;
+    const accountId = this.#account?.id;
+    const requestId = CanonicalUuidSchema.parse(requestIdInput);
+    return this.#enqueue(async () => {
+      this.#requireAuthenticated();
+      if (profileId !== this.#profileId || accountId !== this.#account?.id)
+        throw new Error("ROOM_CONTEXT_CHANGED");
+      await this.#sessions.runAuthenticated(this.#profileId, (token) =>
+        this.#requireApi().cancelJoinRequest(token, requestId),
+      );
+      await this.#loadProductData();
       this.#emitChanged();
     });
   }
@@ -1051,10 +1141,26 @@ export class ExtensionAppController {
     });
   }
 
-  public batchInvite(userIds: string[]): Promise<BatchInvitationResult[]> {
+  public batchInvite(
+    userIds: string[],
+    expected?: { profileId: string; roomId: string },
+  ): Promise<BatchInvitationResult[]> {
+    const captured = {
+      profileId: this.#profileId,
+      roomId: this.#selection?.roomId,
+      accountId: this.#account?.id,
+    };
     return this.#enqueue(async () => {
       this.#requireAuthenticated();
       const detail = this.#requireRoomDetail();
+      if (
+        captured.profileId !== this.#profileId ||
+        captured.roomId !== detail.id ||
+        captured.accountId !== this.#account?.id ||
+        (expected !== undefined &&
+          (expected.profileId !== this.#profileId || expected.roomId !== detail.id))
+      )
+        throw new Error("ROOM_CONTEXT_CHANGED");
       if (detail.role !== "OWNER") {
         throw new Error("ROOM_OWNER_REQUIRED");
       }
@@ -1601,11 +1707,31 @@ export class ExtensionAppController {
     });
   }
 
+  public prepareMediaGroup(
+    playbackGroupIdInput: unknown,
+    expectedContextInput: MediaGroupCreateExpectedContext,
+    expectedTargetInput: MediaTarget,
+  ): Promise<void> {
+    const groupId = CanonicalUuidSchema.parse(playbackGroupIdInput);
+    const expected = MediaGroupCreateExpectedContextSchema.parse(expectedContextInput);
+    const target = MediaTargetSchema.parse(expectedTargetInput);
+    const captured = this.#captureMediaCommandContext();
+    return this.#enqueue(async () => {
+      const runtime = await this.#requireMediaCommandContext(captured, expected);
+      if (runtime.prepareMediaGroup === undefined) throw new Error("MEDIA_UNAVAILABLE");
+      await runtime.prepareMediaGroup(groupId, target);
+      this.#emitChanged(["room", "collaboration"]);
+    });
+  }
+
   public joinMediaGroup(
     playbackGroupIdInput: unknown,
     expectedContextInput?: MediaGroupCreateExpectedContext,
+    expectedTarget?: MediaTarget,
   ): Promise<void> {
     const playbackGroupId = CanonicalUuidSchema.parse(playbackGroupIdInput);
+    const target =
+      expectedTarget === undefined ? undefined : MediaTargetSchema.parse(expectedTarget);
     const expected =
       expectedContextInput === undefined
         ? undefined
@@ -1613,7 +1739,10 @@ export class ExtensionAppController {
     const captured = this.#captureMediaCommandContext();
     return this.#enqueue(async () => {
       const runtime = await this.#requireMediaCommandContext(captured, expected);
-      const result = await runtime.joinMediaGroup(playbackGroupId);
+      const result =
+        target === undefined
+          ? await runtime.joinMediaGroup(playbackGroupId)
+          : await runtime.joinMediaGroup(playbackGroupId, target);
       if (result !== undefined) {
         const acknowledgement = MediaCommandAckSchema.parse(result);
         if (!acknowledgement.accepted) throw new Error(acknowledgement.code);
@@ -1636,8 +1765,24 @@ export class ExtensionAppController {
     );
   }
 
-  public confirmBrowserRecovery(): Promise<BrowserActuatorResult | undefined> {
-    return this.#enqueue(async () => this.#runtime?.confirmBrowserRecovery());
+  public confirmBrowserRecovery(expected?: {
+    profileId: string;
+    roomId: string;
+  }): Promise<BrowserActuatorResult | undefined> {
+    const captured = this.#captureMediaCommandContext();
+    return this.#enqueue(async () => {
+      const runtime = this.#requireRuntime();
+      if (
+        captured.runtime !== runtime ||
+        captured.generation !== this.#runtimeGeneration ||
+        (expected !== undefined &&
+          (expected.profileId !== this.#profileId || expected.roomId !== this.#selection?.roomId))
+      )
+        throw new Error("ROOM_CONTEXT_CHANGED");
+      const result = await runtime.confirmBrowserRecovery();
+      if (result === undefined) throw new Error("BROWSER_RECOVERY_RESULT_UNKNOWN");
+      return result;
+    });
   }
 
   public getStatus(): Promise<ExtensionAppStatus> {
@@ -2456,13 +2601,13 @@ export class ExtensionAppController {
     expected?: MediaGroupCreateExpectedContext,
     tabId = expected?.tabId,
   ): Promise<RoomRuntime> {
-    const runtime = this.#requireRuntime();
     if (
       captured.profileId !== this.#profileId ||
-      captured.runtime !== runtime ||
+      captured.runtime !== this.#runtime ||
       captured.generation !== this.#runtimeGeneration
     )
       throw new Error("MEDIA_CONTEXT_CHANGED");
+    const runtime = this.#requireRuntime();
     if (expected !== undefined) {
       if (
         expected.profileId !== this.#profileId ||
