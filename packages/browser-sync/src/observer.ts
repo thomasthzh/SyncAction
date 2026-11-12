@@ -357,6 +357,9 @@ export class BrowserObserver {
       if (isRoomTabCapacityRejection(cause)) {
         return this.#cleanUpRejectedCreate(logicalTabId, browserTab.tabId);
       }
+      // An uncertain submitted create is recovered by the existing outbox. Do
+      // not keep an old-page association that could offer a second publication.
+      if (options.asNew === true) this.#pendingPublications.delete(tabId);
       throw cause;
     }
     if (options.asNew === true) this.#pendingPublications.delete(tabId);

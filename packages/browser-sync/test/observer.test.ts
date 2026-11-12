@@ -293,6 +293,17 @@ describe("browser observer", () => {
       expect(browser.state.tabs.some((tab) => tab.tabId === 10)).toBe(true);
     });
 
+    it("leaves an uncertain new-page submission to outbox recovery without offering the old association again", async () => {
+      const failure = new Error("connection lost after persistence");
+      observer = createObserver(() => true, new FailingWriter(replica, failure), "MANUAL");
+      browser.state.tabs.find((tab) => tab.tabId === 10)!.url = "https://example.com/private-draft";
+      await observer.observe({ type: "TAB_UPDATED", tabId: 10 });
+      await expect(observer.shareTab(10, { asNew: true })).rejects.toBe(failure);
+      expect(observer.readPendingPublication(10)).toBeNull();
+      expect((await replica.getRecord()).outbox).toHaveLength(1);
+      expect(browser.state.tabs.some((tab) => tab.tabId === 10)).toBe(true);
+    });
+
     it.each([false, true])(
       "checks the fresh URL before publication or discarding a draft (asNew=%s)",
       async (asNew) => {
