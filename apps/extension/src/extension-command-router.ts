@@ -337,9 +337,15 @@ export class ExtensionCommandRouter {
             : await this.#app.createMediaGroup(tab.id, expected);
         break;
       }
-      case "MEDIA_GROUP_ALIGN_ONCE":
-        result = await this.#app.alignMediaGroupOnce(command.payload.playbackGroupId);
+      case "MEDIA_GROUP_ALIGN_ONCE": {
+        const { playbackGroupId, expectedContext, expectedTarget } = command.payload;
+        if (expectedContext !== undefined) await this.#activeMediaTab(expectedContext);
+        result =
+          expectedContext === undefined && expectedTarget === undefined
+            ? await this.#app.alignMediaGroupOnce(playbackGroupId)
+            : await this.#app.alignMediaGroupOnce(playbackGroupId, expectedContext, expectedTarget);
         break;
+      }
       case "MEDIA_GROUP_SWITCH_CURRENT": {
         const expected = command.payload.expectedContext;
         const tab = await this.#activeMediaTab(expected);

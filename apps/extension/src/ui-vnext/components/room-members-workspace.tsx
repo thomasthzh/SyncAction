@@ -96,13 +96,17 @@ export function RoomMembersWorkspace({
                 <span>
                   {member.username === "" ? "" : `@${member.username} · `}
                   {member.role === "OWNER" ? "房主" : "成员"} ·{" "}
-                  {live === undefined ? "状态待同步" : live.online ? "在线" : "离线"}
+                  {store.collaboration.value.presenceKnown === false || live === undefined
+                    ? "状态待同步"
+                    : live.online
+                      ? "在线"
+                      : "离线"}
                 </span>
                 <small>
                   {(pages.length > 1
                     ? `${pages.length} 个共享页面${live?.deviceCount ? ` · ${live.deviceCount} 台设备` : ""}`
                     : pages[0]?.title) ??
-                    (live === undefined
+                    (store.collaboration.value.presenceKnown === false || live === undefined
                       ? "正在读取页面状态"
                       : live.online
                         ? "尚未查看共享页面"

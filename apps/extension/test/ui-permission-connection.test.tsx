@@ -43,7 +43,7 @@ function agree(root: HTMLElement): void {
 }
 
 describe("task-scoped permission and connection UI", () => {
-  it.each(["create", "join"] as const)(
+  it.each(["create", "join", "align"] as const)(
     "carries the original %s intent into its permission explanation and confirmation",
     async (action) => {
       const fixture = createVisualStore("room");
@@ -99,9 +99,19 @@ describe("task-scoped permission and connection UI", () => {
         />,
       );
       const groupId = root.querySelector<HTMLElement>("[data-group-id]")?.dataset.groupId;
-      await click(byRole(root, "button", action === "create" ? "开始一起看" : "打开并一起看"));
+      await click(
+        byRole(
+          root,
+          "button",
+          action === "create" ? "开始一起看" : action === "align" ? "对齐一次" : "打开并一起看",
+        ),
+      );
       expect(root.querySelector(".permission-task")?.textContent).toContain(
-        action === "create" ? "从当前视频创建播放组" : "加入原播放组",
+        action === "create"
+          ? "从当前视频创建播放组"
+          : action === "align"
+            ? "只对齐当前进度，不加入或持续跟随"
+            : "加入原播放组",
       );
       agree(root);
       await click(byRole(root, "button", "允许当前站点"));

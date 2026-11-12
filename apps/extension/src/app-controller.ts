@@ -216,7 +216,7 @@ export interface RoomRuntime {
   handlePageCompatibilityReport?(
     tabIdInput: unknown,
     reportInput: PageCompatibilityReport,
-  ): Promise<void>;
+  ): Promise<boolean>;
   handleMediaPageReady(
     tabIdInput: unknown,
     frameIdInput?: unknown,
@@ -290,7 +290,7 @@ export interface RoomRuntime {
     tabId: number,
     expectedRevision: DocumentRevision,
   ): Promise<MediaCommandAck>;
-  alignMediaGroupOnce(playbackGroupId: string): Promise<void>;
+  alignMediaGroupOnce(playbackGroupId: string, expectedTarget?: MediaTarget): Promise<void>;
   joinMediaGroup(
     playbackGroupId: string,
     expectedTarget?: MediaTarget,
@@ -440,6 +440,7 @@ export interface ExtensionCollaborationActivitySummary {
 }
 
 export interface ExtensionCollaborationSummary {
+  presenceKnown?: boolean | undefined;
   capacity: ExtensionCollaborationCapacitySummary;
   navigation: ExtensionCollaborationNavigationSummary;
   pages: ExtensionCollaborationPageSummary[];
@@ -1479,9 +1480,10 @@ export class ExtensionAppController {
   public handlePageCompatibilityReport(
     tabIdInput: unknown,
     reportInput: PageCompatibilityReport,
-  ): Promise<void> {
-    return this.#enqueue(async () =>
-      this.#runtime?.handlePageCompatibilityReport?.(tabIdInput, reportInput),
+  ): Promise<boolean> {
+    return this.#enqueue(
+      async () =>
+        (await this.#runtime?.handlePageCompatibilityReport?.(tabIdInput, reportInput)) === true,
     );
   }
 
@@ -1703,10 +1705,24 @@ export class ExtensionAppController {
     });
   }
 
-  public alignMediaGroupOnce(playbackGroupIdInput: unknown): Promise<void> {
-    return this.#enqueue(async () =>
-      this.#requireRuntime().alignMediaGroupOnce(CanonicalUuidSchema.parse(playbackGroupIdInput)),
-    );
+  public alignMediaGroupOnce(
+    playbackGroupIdInput: unknown,
+    expectedContextInput?: MediaGroupCreateExpectedContext,
+    expectedTargetInput?: MediaTarget,
+  ): Promise<void> {
+    const groupId = CanonicalUuidSchema.parse(playbackGroupIdInput);
+    const expected =
+      expectedContextInput === undefined
+        ? undefined
+        : MediaGroupCreateExpectedContextSchema.parse(expectedContextInput);
+    const target =
+      expectedTargetInput === undefined ? undefined : MediaTargetSchema.parse(expectedTargetInput);
+    const captured = this.#captureMediaCommandContext();
+    return this.#enqueue(async () => {
+      const runtime = await this.#requireMediaCommandContext(captured, expected);
+      await runtime.alignMediaGroupOnce(groupId, target);
+      this.#emitChanged(["room", "collaboration"]);
+    });
   }
 
   public switchMediaGroupCurrent(
@@ -3016,6 +3032,7 @@ function projectCollaborationSummary(
       limit: 20,
       exemption: "UNKNOWN",
     },
+    presenceKnown: room.presence?.snapshotKnown === true,
     navigation: {
       canJump,
       disabledReason: canJump

@@ -82,7 +82,12 @@ export interface PointerIdentity {
 export interface PointerPagePort {
   ensureInjected(tabId: number): Promise<boolean>;
   verifyInjected(tabId: number): Promise<boolean>;
-  setContext(tabId: number, context: PointerPageContext): Promise<void>;
+  setContext(
+    tabId: number,
+    context: PointerPageContext,
+    frameId?: number,
+    revalidateContent?: boolean,
+  ): Promise<void>;
   render(
     tabId: number,
     pointer: PointerRecord,
@@ -548,7 +553,9 @@ export class PointerController {
         }
         throw new Error("POINTER_PERMISSION_REQUIRED");
       }
-      await this.#page.setContext(tabId, context);
+      if (!this.#managedTabs.has(tabId)) await this.#page.setContext(tabId, context, 0, true);
+      else await this.#page.setContext(tabId, context);
+      if (!this.#synchronized || generation !== this.#generation) return;
       this.#managedTabs.add(tabId);
       this.#contexts.set(tabId, context);
       this.#errorCode = null;

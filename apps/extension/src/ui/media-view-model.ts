@@ -14,7 +14,7 @@ export type MediaViewTone = "neutral" | "info" | "success" | "warning" | "danger
 export type MediaGroupTheme = "blue" | "indigo" | "cyan" | "teal";
 
 export type MediaViewIntent =
-  | { readonly type: "JUMP_TO_MEMBER"; readonly userId: string }
+  | { readonly type: "OPEN_PAGE"; readonly pageId: string | null }
   | { readonly type: "ALIGN_ONCE"; readonly playbackGroupId: string }
   | { readonly type: "JOIN_GROUP"; readonly playbackGroupId: string }
   | { readonly type: "LEAVE_GROUP"; readonly playbackGroupId: string }
@@ -124,7 +124,7 @@ export function createMediaViewModel(input: MediaViewModelInput): MediaViewModel
       state: "UNAVAILABLE",
       recommendedPlaybackGroupId: null,
       groups: [],
-      outsideMembers: outsideMembers(members, new Set(), pageById, null),
+      outsideMembers: outsideMembers(members, new Set(), pageById),
       notice: null,
     };
   }
@@ -148,7 +148,7 @@ export function createMediaViewModel(input: MediaViewModelInput): MediaViewModel
     groups: groups.map((group) =>
       groupView(group, media, pageById, memberById, input.nowMs, defaultGroupId),
     ),
-    outsideMembers: outsideMembers(members, groupedUserIds, pageById, media),
+    outsideMembers: outsideMembers(members, groupedUserIds, pageById),
     notice: mediaNotice(media),
   };
 }
@@ -167,13 +167,11 @@ function groupView(
   const alignDisabledReason =
     media.state === "OFFLINE"
       ? "媒体同步当前离线"
-      : media.state === "DEGRADED"
-        ? "当前媒体控制已降级"
-        : membership !== null
-          ? "已加入播放组"
-          : group.target === null || group.observed === null
-            ? "播放组暂无可对齐媒体"
-            : null;
+      : membership !== null
+        ? "已加入播放组"
+        : group.target === null || group.observed === null
+          ? "播放组暂无可对齐媒体"
+          : null;
   const joinDisabledReason =
     media.state === "OFFLINE" ? "媒体同步当前离线" : membership !== null ? "已加入播放组" : null;
   const members = orderedMembers(group).map((member) => {
@@ -195,8 +193,8 @@ function groupView(
       ? "成员离线"
       : navigation?.logicalTabId === null || navigation === undefined
         ? "成员未在共享页面"
-        : !navigation.canJump
-          ? "当前客户端未绑定该共享页面"
+        : page === undefined
+          ? "共享页面已移除"
           : null;
     const detail = memberDetail(page, navigation?.logicalTabId ?? null, group, target, online);
     return {
@@ -219,7 +217,7 @@ function groupView(
         key: `media-group:${group.playbackGroupId}:member:${member.userId}:jump`,
         label: "跳转",
         accessibleText: `跳转到 ${member.displayName} 当前页面`,
-        intent: { type: "JUMP_TO_MEMBER", userId: member.userId },
+        intent: { type: "OPEN_PAGE", pageId: page?.pageId ?? null },
         disabledReason: jumpDisabledReason,
       }),
       trailingActions: [],
@@ -366,7 +364,7 @@ function groupActions(
     viewAction({
       key: `media-group:${group.playbackGroupId}:align-once`,
       label: "对齐一次",
-      accessibleText: `与播放组 ${group.playbackGroupId.slice(0, 8)} 对齐一次`,
+      accessibleText: "打开这段视频，只对齐当前进度，不加入或持续跟随",
       intent: { type: "ALIGN_ONCE", playbackGroupId: group.playbackGroupId },
       disabledReason: alignDisabledReason,
     }),
@@ -384,7 +382,6 @@ function outsideMembers(
   members: readonly ExtensionCollaborationMemberSummary[],
   groupedUserIds: ReadonlySet<string>,
   pageById: ReadonlyMap<string, ExtensionCollaborationPageSummary>,
-  media: MediaControllerStatus | null,
 ): MediaMemberView[] {
   return members.flatMap((member) => {
     if (groupedUserIds.has(member.userId)) {
@@ -393,19 +390,11 @@ function outsideMembers(
     const page = member.activePageIds
       .map((pageId) => pageById.get(pageId))
       .find((candidate) => candidate !== undefined);
-    const navigation = media?.navigation.find(
-      (candidate) =>
-        candidate.userId === member.userId &&
-        candidate.logicalTabId !== null &&
-        candidate.logicalTabId === page?.pageId,
-    );
     const jumpDisabledReason = !member.online
       ? "成员离线"
       : page === undefined
         ? "成员未在共享页面"
-        : navigation?.canJump !== true
-          ? "当前客户端未绑定该共享页面"
-          : null;
+        : null;
     const detail = !member.online
       ? "离线"
       : page === undefined
@@ -427,7 +416,7 @@ function outsideMembers(
           key: `media-outside-member:${member.userId}:jump`,
           label: "跳转",
           accessibleText: `跳转到 ${member.displayName} 当前页面`,
-          intent: { type: "JUMP_TO_MEMBER", userId: member.userId },
+          intent: { type: "OPEN_PAGE", pageId: page?.pageId ?? null },
           disabledReason: jumpDisabledReason,
         }),
         trailingActions: [],

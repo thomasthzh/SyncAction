@@ -35,6 +35,7 @@ export interface PresenceScheduler {
 
 export interface ActiveTabPresenceStatus {
   state: "OFFLINE" | "ONLINE" | "DEGRADED";
+  snapshotKnown?: boolean | undefined;
   presences: PresenceRecord[];
   compatibilities?: ActiveTabPresenceCompatibility[] | undefined;
   lastAckExpiresAt: number | null;
@@ -414,6 +415,7 @@ export class ActiveTabPresenceController {
     this.#pruneExpired(now);
     return structuredClone({
       state: !this.#synchronized ? "OFFLINE" : this.#errorCode === null ? "ONLINE" : "DEGRADED",
+      snapshotKnown: this.#synchronized && !this.#awaitingV2Snapshot,
       presences: [...this.#presences.values()].sort(comparePresence).map(toLegacyPresence),
       compatibilities: [...this.#presences.values()]
         .sort(comparePresence)
@@ -517,6 +519,7 @@ export class ActiveTabPresenceController {
     return JSON.stringify([
       status.state,
       status.errorCode,
+      status.snapshotKnown,
       status.presences.map((member) => [
         member.userId,
         member.deviceId,

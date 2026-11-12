@@ -13,24 +13,24 @@ SyncAction 是面向 Chrome 与 Edge 的多人共享浏览器工作区。成员�
 `https://syncaction.example.com`
 是占位地址，安装后请在扩展顶栏配置实际服务器；服务端必须自行初始化管理员，不含默认账号密码。
 
-## v0.9.20 下载
+## v0.9.21 下载
 
-从 [v0.9.20 Release](https://github.com/thomasthzh/SyncAction/releases/tag/v0.9.20) 下载：
+从 [v0.9.21 Release](https://github.com/thomasthzh/SyncAction/releases/tag/v0.9.21) 下载：
 
 | 资产                                                                                                                     | 用途                                           |
 | ------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------- |
-| [Chrome 客户端](https://github.com/thomasthzh/SyncAction/releases/download/v0.9.20/SyncAction-client-chrome-v0.9.20.zip) | 解压后在 Chrome 加载扩展                       |
-| [Edge 客户端](https://github.com/thomasthzh/SyncAction/releases/download/v0.9.20/SyncAction-client-edge-v0.9.20.zip)     | 解压后在 Edge 加载扩展                         |
-| [服务端](https://github.com/thomasthzh/SyncAction/releases/download/v0.9.20/SyncAction-server-v0.9.20.tar.gz)            | 公共服务、管理员服务、数据库模块和通用部署源码 |
-| [SHA256SUMS.txt](https://github.com/thomasthzh/SyncAction/releases/download/v0.9.20/SHA256SUMS.txt)                      | 三个安装资产的 SHA-256 校验值                  |
+| [Chrome 客户端](https://github.com/thomasthzh/SyncAction/releases/download/v0.9.21/SyncAction-client-chrome-v0.9.21.zip) | 解压后在 Chrome 加载扩展                       |
+| [Edge 客户端](https://github.com/thomasthzh/SyncAction/releases/download/v0.9.21/SyncAction-client-edge-v0.9.21.zip)     | 解压后在 Edge 加载扩展                         |
+| [服务端](https://github.com/thomasthzh/SyncAction/releases/download/v0.9.21/SyncAction-server-v0.9.21.tar.gz)            | 公共服务、管理员服务、数据库模块和通用部署源码 |
+| [SHA256SUMS.txt](https://github.com/thomasthzh/SyncAction/releases/download/v0.9.21/SHA256SUMS.txt)                      | 三个安装资产的 SHA-256 校验值                  |
 
-安装与升级分别见[客户端指南](docs/client.md)、[服务端指南](docs/server.md)，变更见[发布说明](docs/releases/v0.9.20.md)。客户端 ZIP 不是浏览器商店安装包；服务端 tarball 不含客户端。
+安装与升级分别见[客户端指南](docs/client.md)、[服务端指南](docs/server.md)，变更见[发布说明](docs/releases/v0.9.21.md)。客户端 ZIP 不是浏览器商店安装包；服务端 tarball 不含客户端。
 
 ### 本版变化
 
-- 入房先找到已分享的共同内容；成员的多设备页面可明确选择，本机未打开过也能直达。
-- 本机待提交页面集中找回，可明确更新原页或另存分享；容量不足时保留候选。
-- 领播者一次操作提交并继续原组；动态页面兼容性更新有等待上限，首次观看任务持续接续。
+- 观看卡按选定视频和成员的参与设备打开页面；“对齐一次”自动完成打开与准备，不加入或持续跟随。
+- 跨工作区保留“我的一起看”，可以返回本组或明确跟上当前视频；准备阶段可停止，页面保留。
+- 在线状态未知时不再显示全部离线；重新授权会补报兼容信息，失败报告可重试，普通光标重绘保持去重。
 
 - 320–480px 紧凑侧栏采用真实边缘折射、局部高光和轻量流线背景；玻璃层不扭曲文字与按钮。
 - 观看工作面集中显示当前视频、领播者、进度与本人设备参与状态；多个播放组可切换查看，查看不会改变跟随关系。

@@ -12,8 +12,9 @@ const browserHarness = vi.hoisted(() => {
   const listeners = new Set<Listener>();
   return {
     listeners,
-    sendMessage: vi.fn(async (message: unknown) => {
+    sendMessage: vi.fn(async (message: unknown): Promise<unknown> => {
       void message;
+      return undefined;
     }),
     addListener: vi.fn((listener: Listener) => {
       listeners.add(listener);
@@ -200,12 +201,16 @@ describe("page collaboration media bridge", () => {
     const reporter = compatibilityReporterHarness.instances[0];
     expect(reporter).toBeDefined();
     await vi.waitFor(() =>
-      expect(reporter?.setContext).toHaveBeenCalledWith({
-        logicalTabId: context.logicalTabId,
-        documentRevision: context.documentRevision,
-      }),
+      expect(reporter?.setContext).toHaveBeenCalledWith(
+        {
+          logicalTabId: context.logicalTabId,
+          documentRevision: context.documentRevision,
+        },
+        false,
+      ),
     );
 
+    browserHarness.sendMessage.mockResolvedValueOnce(true);
     await reporter?.emit({
       type: "page.compatibility.report",
       protocolVersion: 1,
@@ -223,6 +228,21 @@ describe("page collaboration media bridge", () => {
     expect(browserHarness.sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({ type: "page.compatibility.report" }),
     );
+    const report = browserHarness.sendMessage.mock.calls.find(
+      ([message]) => (message as { type: string }).type === "page.compatibility.report",
+    )![0];
+    browserHarness.sendMessage.mockResolvedValueOnce(false);
+    await expect(reporter!.emit(report)).rejects.toThrow("COMPATIBILITY_REPORT_NOT_ACCEPTED");
+    dispatch({
+      type: "syncaction.pointer.context",
+      context: {
+        roomId: context.roomId,
+        logicalTabId: context.logicalTabId,
+        documentRevision: context.documentRevision,
+      },
+      revalidateContent: true,
+    });
+    expect(reporter!.setContext.mock.calls.at(-1)?.[1]).toBe(true);
 
     dispatch({
       type: "syncaction.media.command",

@@ -14,7 +14,9 @@ const requestedFixture = new URLSearchParams(globalThis.location.search).get("fi
 const fixture: VisualFixture =
   requestedFixture === "journey" ||
   requestedFixture === "room-journey" ||
-  requestedFixture === "room-continuity"
+  requestedFixture === "room-continuity" ||
+  requestedFixture === "room-watch-recovery" ||
+  requestedFixture === "room-watch-once"
     ? requestedFixture
     : requestedFixture === "room-unshared"
       ? "room-unshared"

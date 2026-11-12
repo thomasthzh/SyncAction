@@ -14,6 +14,7 @@ export interface MemberClusterProps {
   readonly members: readonly MemberClusterEntry[];
   readonly currentUserId: string | null;
   readonly playbackGroupId?: string;
+  readonly presenceKnown?: boolean | undefined;
   readonly onMemberClick: (member: MemberClusterEntry) => void;
 }
 
@@ -21,6 +22,7 @@ export function MemberCluster({
   members,
   currentUserId,
   playbackGroupId,
+  presenceKnown = true,
   onMemberClick,
 }: MemberClusterProps): JSX.Element {
   return (
@@ -40,7 +42,7 @@ export function MemberCluster({
             title={`${member.displayName}${member.role === "LEADER" ? " · 领播者" : ""}`}
             data-user-id={member.userId}
             data-current-user={member.userId === currentUserId ? "true" : "false"}
-            data-online={member.online ? "true" : "false"}
+            data-online={!presenceKnown ? "unknown" : member.online ? "true" : "false"}
             disabled={member.disabled === true}
             onClick={() => onMemberClick(member)}
           >

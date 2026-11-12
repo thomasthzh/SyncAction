@@ -298,14 +298,24 @@ export class PageContentCompatibilityReporter {
     addResizeListener(this.#resizeListener);
   }
 
-  public setContext(contextInput: PageCompatibilityReporterContext): Promise<void> {
+  public setContext(
+    contextInput: PageCompatibilityReporterContext,
+    revalidate = false,
+  ): Promise<void> {
     if (this.#disposed) {
       return this.whenIdle();
     }
-    this.#context = {
+    const next = {
       logicalTabId: LogicalTabIdSchema.parse(contextInput.logicalTabId),
       documentRevision: DocumentRevisionSchema.parse(contextInput.documentRevision),
     };
+    if (
+      this.#context === undefined ||
+      this.#context.logicalTabId !== next.logicalTabId ||
+      this.#context.documentRevision.roomEpoch !== next.documentRevision.roomEpoch ||
+      this.#context.documentRevision.tabUpdatedAtSeq !== next.documentRevision.tabUpdatedAtSeq
+    )
+      this.#context = next;
     if (!this.#observing && this.#document.documentElement !== null) {
       this.#observer.observe(this.#document.documentElement, {
         subtree: true,
@@ -315,7 +325,7 @@ export class PageContentCompatibilityReporter {
       });
       this.#observing = true;
     }
-    return this.#enqueueCompute();
+    return this.#enqueueCompute(false, revalidate);
   }
 
   public setMedia(mediaInput: MediaIdentity | null): Promise<void> {
@@ -380,7 +390,7 @@ export class PageContentCompatibilityReporter {
     }, delayMs);
   }
 
-  #enqueueCompute(throttled = false): Promise<void> {
+  #enqueueCompute(throttled = false, revalidate = false): Promise<void> {
     const result = this.#tail.then(async () => {
       if (
         throttled &&
@@ -390,13 +400,14 @@ export class PageContentCompatibilityReporter {
         this.#scheduleMutationReport();
         return;
       }
-      await this.#computeAndEmit();
+      await this.#computeAndEmit(revalidate);
     });
     this.#tail = result.catch(() => undefined);
     return result;
   }
 
-  async #computeAndEmit(): Promise<void> {
+  async #computeAndEmit(revalidate: boolean): Promise<void> {
+    if (revalidate) this.#lastReportJson = null;
     const context = this.#context;
     if (this.#disposed || context === undefined) {
       return;
@@ -428,11 +439,11 @@ export class PageContentCompatibilityReporter {
       media: this.#media,
     });
     const reportJson = JSON.stringify(report);
-    if (reportJson === this.#lastReportJson) {
+    if (!revalidate && reportJson === this.#lastReportJson) {
       return;
     }
-    this.#lastReportJson = reportJson;
     await this.#emit(report);
+    if (!this.#disposed && this.#context === context) this.#lastReportJson = reportJson;
   }
 }
 

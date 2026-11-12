@@ -74,7 +74,7 @@ describe("media view model", () => {
       detail: "发布会回放 · YouTube · 02:04 / 10:00",
       primaryAction: {
         label: "跳转",
-        intent: { type: "JUMP_TO_MEMBER", userId: leaderA },
+        intent: { type: "OPEN_PAGE", pageId: pageA },
         disabled: false,
       },
       trailingActions: [],
@@ -108,7 +108,7 @@ describe("media view model", () => {
         displayName: "组外成员",
         detail: "正在查看 教学视频 · learn.example",
         primaryAction: expect.objectContaining({
-          intent: { type: "JUMP_TO_MEMBER", userId: outsideUser },
+          intent: { type: "OPEN_PAGE", pageId: pageB },
           disabled: false,
         }),
       }),
