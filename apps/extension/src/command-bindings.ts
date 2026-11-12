@@ -4,13 +4,19 @@ export const PAGE_TOOL_COMMANDS = {
 } as const;
 
 export type PageToolCommand = (typeof PAGE_TOOL_COMMANDS)[keyof typeof PAGE_TOOL_COMMANDS];
+export interface PageToolCommandTab {
+  id?: number;
+  windowId?: number;
+  url?: string;
+  pendingUrl?: string;
+}
 
 export interface ChromiumCommandBindingsApi {
   commands: {
     getAll(): Promise<Array<{ name: string; shortcut?: string | undefined }>>;
     onCommand: {
-      addListener(listener: (command: string) => void): void;
-      removeListener(listener: (command: string) => void): void;
+      addListener(listener: (command: string, tab?: PageToolCommandTab) => void): void;
+      removeListener(listener: (command: string, tab?: PageToolCommandTab) => void): void;
     };
   };
   tabs: {
@@ -70,13 +76,15 @@ export async function openChromiumExtensionShortcuts(
 
 export function subscribePageToolCommands(
   api: Pick<ChromiumCommandBindingsApi, "commands">,
-  onCommand: (command: PageToolCommand) => void | Promise<void>,
+  onCommand: (command: PageToolCommand, tab?: PageToolCommandTab) => void | Promise<void>,
 ): () => void {
-  const listener = (command: string): void => {
+  const listener = (command: string, tab?: PageToolCommandTab): void => {
     if (command !== PAGE_TOOL_COMMANDS.danmaku && command !== PAGE_TOOL_COMMANDS.pen) {
       return;
     }
-    void Promise.resolve(onCommand(command)).catch(() => undefined);
+    void Promise.resolve(tab === undefined ? onCommand(command) : onCommand(command, tab)).catch(
+      () => undefined,
+    );
   };
   api.commands.onCommand.addListener(listener);
   return () => api.commands.onCommand.removeListener(listener);

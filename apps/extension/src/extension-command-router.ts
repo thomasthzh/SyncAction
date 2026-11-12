@@ -48,6 +48,9 @@ export type ExtensionCommandAppPort = Pick<
   | "togglePagePen"
   | "createMediaGroup"
   | "prepareMediaGroup"
+  | "saveWatchPreparation"
+  | "dismissWatchPreparation"
+  | "consumePageToolShortcut"
   | "switchMediaGroupCurrent"
   | "jumpToMediaMember"
   | "alignMediaGroupOnce"
@@ -338,12 +341,25 @@ export class ExtensionCommandRouter {
         break;
       }
       case "MEDIA_GROUP_ALIGN_ONCE": {
-        const { playbackGroupId, expectedContext, expectedTarget } = command.payload;
+        const { playbackGroupId, expectedContext, expectedTarget, preparationId } = command.payload;
         if (expectedContext !== undefined) await this.#activeMediaTab(expectedContext);
         result =
-          expectedContext === undefined && expectedTarget === undefined
+          expectedContext === undefined &&
+          expectedTarget === undefined &&
+          preparationId === undefined
             ? await this.#app.alignMediaGroupOnce(playbackGroupId)
-            : await this.#app.alignMediaGroupOnce(playbackGroupId, expectedContext, expectedTarget);
+            : preparationId === undefined
+              ? await this.#app.alignMediaGroupOnce(
+                  playbackGroupId,
+                  expectedContext,
+                  expectedTarget,
+                )
+              : await this.#app.alignMediaGroupOnce(
+                  playbackGroupId,
+                  expectedContext,
+                  expectedTarget,
+                  preparationId,
+                );
         break;
       }
       case "MEDIA_GROUP_SWITCH_CURRENT": {
@@ -371,16 +387,32 @@ export class ExtensionCommandRouter {
         if (expected !== undefined) await this.#activeMediaTab(expected);
         result =
           command.payload.expectedTarget !== undefined
-            ? await this.#app.joinMediaGroup(
-                command.payload.playbackGroupId,
-                expected,
-                command.payload.expectedTarget,
-              )
+            ? command.payload.preparationId === undefined
+              ? await this.#app.joinMediaGroup(
+                  command.payload.playbackGroupId,
+                  expected,
+                  command.payload.expectedTarget,
+                )
+              : await this.#app.joinMediaGroup(
+                  command.payload.playbackGroupId,
+                  expected,
+                  command.payload.expectedTarget,
+                  command.payload.preparationId,
+                )
             : expected === undefined
               ? await this.#app.joinMediaGroup(command.payload.playbackGroupId)
               : await this.#app.joinMediaGroup(command.payload.playbackGroupId, expected);
         break;
       }
+      case "WATCH_PREPARATION_SAVE":
+        result = await this.#app.saveWatchPreparation(command.payload);
+        break;
+      case "WATCH_PREPARATION_DISMISS":
+        result = await this.#app.dismissWatchPreparation(command.payload.id);
+        break;
+      case "PAGE_TOOL_SHORTCUT_CONSUME":
+        result = await this.#app.consumePageToolShortcut(command.payload.windowId);
+        break;
       case "MEDIA_GROUP_LEAVE":
         result = await this.#app.leaveMediaGroup(command.payload.playbackGroupId);
         break;

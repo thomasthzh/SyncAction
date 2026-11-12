@@ -1,5 +1,15 @@
 import type { BrowserActuatorResult, BrowserObserverResult } from "@syncaction/browser-sync";
 import {
+  WatchPreparationSchema,
+  type WatchPreparation,
+  type WatchPreparationStorage,
+} from "./watch-preparation.js";
+import { sameMediaTarget } from "./media-controller-model.js";
+import type {
+  PageToolShortcutIntentStore,
+  PageToolShortcutRequest,
+} from "./page-tool-shortcut-intent.js";
+import {
   CanonicalUuidSchema,
   DeviceIdSchema,
   LogicalTabIdSchema,
@@ -453,6 +463,8 @@ export interface ExtensionCollaborationSummary {
 }
 
 export interface ExtensionAppStatus {
+  watchPreparationAvailable?: boolean | undefined;
+  watchPreparation?: WatchPreparation | null | undefined;
   phase: ExtensionAppPhase;
   account: PublicAccount | null;
   profiles: ServerProfile[];
@@ -490,6 +502,8 @@ export interface ExtensionPageAccessContext {
 type ExtensionAppStatusBase = Omit<ExtensionAppStatus, "room" | "collaboration">;
 
 export interface LegacyExtensionAppControllerOptions {
+  pageToolShortcuts?: Pick<PageToolShortcutIntentStore, "consume">;
+  watchPreparations?: WatchPreparationStorage;
   profileId?: unknown;
   serverUrl: unknown;
   serverId?: unknown;
@@ -501,6 +515,8 @@ export interface LegacyExtensionAppControllerOptions {
 }
 
 export interface VnextExtensionAppControllerOptions {
+  pageToolShortcuts?: Pick<PageToolShortcutIntentStore, "consume">;
+  watchPreparations?: WatchPreparationStorage;
   deviceId: unknown;
   area: ExtensionAppStorageArea;
   profiles: ExtensionServerProfilePort;
@@ -516,6 +532,10 @@ export type ExtensionAppControllerOptions =
   LegacyExtensionAppControllerOptions | VnextExtensionAppControllerOptions;
 
 export class ExtensionAppController {
+  readonly #pageToolShortcuts: Pick<PageToolShortcutIntentStore, "consume"> | undefined;
+  readonly #watchPreparations: WatchPreparationStorage | undefined;
+  #watchPreparation: WatchPreparation | null = null;
+  #watchPreparationReady = false;
   #profileId: string;
   #serverUrl: string;
   #serverId: string | null;
@@ -565,6 +585,8 @@ export class ExtensionAppController {
   #sessionExpiryTimer: ReturnType<typeof setTimeout> | undefined;
 
   public constructor(options: ExtensionAppControllerOptions) {
+    this.#watchPreparations = options.watchPreparations;
+    this.#pageToolShortcuts = options.pageToolShortcuts;
     this.#deviceId = DeviceIdSchema.parse(options.deviceId);
     this.#area = options.area;
     this.#sessions = options.sessions;
@@ -665,6 +687,15 @@ export class ExtensionAppController {
         throw new Error("APP_CONTROLLER_ALREADY_STARTED");
       }
       this.#started = true;
+      if (this.#watchPreparations !== undefined) {
+        try {
+          this.#watchPreparation = await this.#watchPreparations.read();
+          this.#watchPreparationReady = true;
+        } catch {
+          this.#watchPreparation = null;
+          this.#watchPreparationReady = false;
+        }
+      }
       if (this.#profiles !== undefined) {
         await this.#profiles.initialize();
         this.#onboardingRequired = (await this.#onboarding?.isRequired()) ?? false;
@@ -1652,6 +1683,10 @@ export class ExtensionAppController {
     });
   }
 
+  public consumePageToolShortcut(windowId: number): Promise<PageToolShortcutRequest | null> {
+    return this.#enqueue(async () => (await this.#pageToolShortcuts?.consume(windowId)) ?? null);
+  }
+
   public toggleDanmakuInput(expected?: PageToolExpectedContext): Promise<void> {
     return this.#togglePageTool("DANMAKU", expected);
   }
@@ -1709,6 +1744,7 @@ export class ExtensionAppController {
     playbackGroupIdInput: unknown,
     expectedContextInput?: MediaGroupCreateExpectedContext,
     expectedTargetInput?: MediaTarget,
+    preparationId?: string,
   ): Promise<void> {
     const groupId = CanonicalUuidSchema.parse(playbackGroupIdInput);
     const expected =
@@ -1720,7 +1756,9 @@ export class ExtensionAppController {
     const captured = this.#captureMediaCommandContext();
     return this.#enqueue(async () => {
       const runtime = await this.#requireMediaCommandContext(captured, expected);
+      await this.#submitWatchPreparation(preparationId, groupId, target, "ALIGN");
       await runtime.alignMediaGroupOnce(groupId, target);
+      await this.#completeWatchPreparation(preparationId, true);
       this.#emitChanged(["room", "collaboration"]);
     });
   }
@@ -1746,6 +1784,115 @@ export class ExtensionAppController {
     });
   }
 
+  public saveWatchPreparation(input: {
+    id: string;
+    groupId: string;
+    target: MediaTarget;
+    action: "JOIN" | "ALIGN";
+    profileId: string;
+    roomId: string;
+  }): Promise<WatchPreparation> {
+    const captured = this.#captureMediaCommandContext();
+    return this.#enqueue(async () => {
+      const runtime = await this.#requireMediaCommandContext(captured);
+      if (this.#watchPreparations === undefined) throw new Error("WATCH_PREPARATION_UNAVAILABLE");
+      if (!this.#watchPreparationReady) {
+        try {
+          this.#watchPreparation = await this.#watchPreparations.read();
+          this.#watchPreparationReady = true;
+        } catch {
+          throw new Error("WATCH_PREPARATION_UNAVAILABLE");
+        }
+      }
+      if (input.profileId !== this.#profileId || input.roomId !== this.#selection?.roomId)
+        throw new Error("MEDIA_CONTEXT_CHANGED");
+      const target = MediaTargetSchema.parse(input.target);
+      const state = await runtime.getStatus();
+      const groupId = CanonicalUuidSchema.parse(input.groupId);
+      const group = state.media?.playbackGroups.find((group) => group.playbackGroupId === groupId);
+      if (group?.target == null || !sameMediaTarget(group.target, target))
+        throw new Error("MEDIA_TARGET_CHANGED");
+      const preparation = WatchPreparationSchema.parse({
+        id: input.id,
+        profileId: this.#profileId,
+        serverOrigin: this.#serverUrl,
+        serverId: this.#serverId,
+        accountId: this.#account!.id,
+        roomId: input.roomId,
+        groupId,
+        target,
+        action: input.action,
+        stage: "PREPARING",
+        title: (
+          state.tabs.find((tab) => tab.logicalTabId === target.logicalTabId)?.title ||
+          "上次选择的视频"
+        ).slice(0, 512),
+      });
+      await this.#watchPreparations.write(preparation);
+      this.#watchPreparation = preparation;
+      this.#emitChanged(["room"]);
+      return preparation;
+    });
+  }
+
+  public dismissWatchPreparation(id: string): Promise<void> {
+    const captured = this.#captureMediaCommandContext();
+    return this.#enqueue(async () => {
+      await this.#requireMediaCommandContext(captured);
+      if (this.#currentWatchPreparation()?.id !== id) throw new Error("WATCH_PREPARATION_CHANGED");
+      await this.#completeWatchPreparation(CanonicalUuidSchema.parse(id));
+      this.#emitChanged(["room"]);
+    });
+  }
+
+  #currentWatchPreparation(): WatchPreparation | null {
+    const task = this.#watchPreparation;
+    return task !== null &&
+      task.profileId === this.#profileId &&
+      task.serverOrigin === this.#serverUrl &&
+      task.serverId === this.#serverId &&
+      task.accountId === this.#account?.id &&
+      task.roomId === this.#selection?.roomId
+      ? task
+      : null;
+  }
+
+  async #submitWatchPreparation(
+    id: string | undefined,
+    groupId: string,
+    target: MediaTarget | undefined,
+    action: "JOIN" | "ALIGN",
+  ): Promise<void> {
+    if (id === undefined) return;
+    const task = this.#currentWatchPreparation();
+    if (
+      task === null ||
+      task.id !== id ||
+      task.groupId !== groupId ||
+      task.action !== action ||
+      task.stage !== "PREPARING" ||
+      target === undefined ||
+      !sameMediaTarget(task.target, target)
+    )
+      throw new Error("WATCH_PREPARATION_CHANGED");
+    const submitted: WatchPreparation = { ...task, stage: "SUBMITTED" };
+    await this.#watchPreparations!.write(submitted);
+    this.#watchPreparation = submitted;
+    this.#emitChanged(["room"]);
+  }
+
+  async #completeWatchPreparation(id: string | undefined, preserveResult = false): Promise<void> {
+    if (id === undefined || this.#watchPreparation?.id !== id) return;
+    try {
+      await this.#watchPreparations!.write(null);
+    } catch (error) {
+      if (!preserveResult) throw error;
+      // Keep SUBMITTED visible; failure to clean up must not turn a completed action into failure.
+      return;
+    }
+    if (this.#watchPreparation?.id === id) this.#watchPreparation = null;
+  }
+
   public prepareMediaGroup(
     playbackGroupIdInput: unknown,
     expectedContextInput: MediaGroupCreateExpectedContext,
@@ -1767,6 +1914,7 @@ export class ExtensionAppController {
     playbackGroupIdInput: unknown,
     expectedContextInput?: MediaGroupCreateExpectedContext,
     expectedTarget?: MediaTarget,
+    preparationId?: string,
   ): Promise<void> {
     const playbackGroupId = CanonicalUuidSchema.parse(playbackGroupIdInput);
     const target =
@@ -1778,6 +1926,7 @@ export class ExtensionAppController {
     const captured = this.#captureMediaCommandContext();
     return this.#enqueue(async () => {
       const runtime = await this.#requireMediaCommandContext(captured, expected);
+      await this.#submitWatchPreparation(preparationId, playbackGroupId, target, "JOIN");
       const result =
         target === undefined
           ? await runtime.joinMediaGroup(playbackGroupId)
@@ -1786,6 +1935,7 @@ export class ExtensionAppController {
         const acknowledgement = MediaCommandAckSchema.parse(result);
         if (!acknowledgement.accepted) throw new Error(acknowledgement.code);
       }
+      await this.#completeWatchPreparation(preparationId, true);
       this.#emitChanged(["room", "collaboration"]);
     });
   }
@@ -1835,6 +1985,9 @@ export class ExtensionAppController {
 
   #captureStatusBase(): ExtensionAppStatusBase {
     return structuredClone({
+      ...(this.#watchPreparations === undefined
+        ? {}
+        : { watchPreparationAvailable: true, watchPreparation: this.#currentWatchPreparation() }),
       phase: this.#phase,
       account: this.#account,
       profiles: this.#profilesList,

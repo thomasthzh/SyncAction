@@ -857,7 +857,8 @@ export class MediaController {
     const group = this.#groupById(CanonicalUuidSchema.parse(playbackGroupId));
     if (group?.target == null || !sameMediaTarget(group.target, target))
       throw new MediaControllerError("MEDIA_TARGET_CHANGED");
-    this.#requireMatchingMembership(playbackGroupId);
+    if (this.#requireMatchingMembership(playbackGroupId)?.role === "LEADER")
+      throw new MediaControllerError("MEDIA_ALREADY_IN_GROUP");
     const generation = this.#generation;
     const route = await this.#routeForTarget(target);
     if (route === null || route.tabId !== this.#activeTabId || !this.#generationGuard(generation)())
@@ -867,7 +868,8 @@ export class MediaController {
       !sameMediaTarget(this.#groupById(playbackGroupId)!.target!, target)
     )
       throw new MediaControllerError("MEDIA_TARGET_CHANGED");
-    this.#requireMatchingMembership(playbackGroupId);
+    if (this.#requireMatchingMembership(playbackGroupId)?.role === "LEADER")
+      throw new MediaControllerError("MEDIA_ALREADY_IN_GROUP");
     this.#localObservation = null;
     this.#controlStateValid = false;
     this.#heartbeat.clearSample();

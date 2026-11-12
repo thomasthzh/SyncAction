@@ -9,7 +9,10 @@ import type {
 import type { UiStore } from "./store.js";
 import type { UiCommandResult } from "../ui/ui-protocol.js";
 import type { PageFeature } from "../ui/ui-protocol.js";
-import type { PageToolShortcutIntent } from "../page-tool-shortcut-intent.js";
+import {
+  matchesPageToolShortcut,
+  type PageToolShortcutRequest,
+} from "../page-tool-shortcut-intent.js";
 import { isPlaceholderServerOrigin } from "../server-configuration.js";
 import { sameMediaTarget } from "../media-controller-model.js";
 import type { PendingRoomJoinStorage } from "../pending-room-join.js";
@@ -63,9 +66,9 @@ export interface AppProps {
   readonly pagePermissionCoordinator?: Pick<OriginPermissionCoordinator, "capture" | "confirm">;
   readonly privacyPageUrl?: string;
   readonly loadAuthorizedSites?: (profileId: string) => Promise<readonly AuthorizedSiteView[]>;
-  readonly initialPagePermissionIntent?: PageToolShortcutIntent | null;
+  readonly initialPagePermissionIntent?: PageToolShortcutRequest | null;
   readonly pagePermissionIntentSource?: {
-    subscribe(listener: (intent: PageToolShortcutIntent) => void): () => void;
+    subscribe(listener: (intent: PageToolShortcutRequest) => void): () => void;
   };
 }
 
@@ -145,7 +148,23 @@ export function App({
   const openerRef = useRef<HTMLElement | null>(null);
   const serverReturnAuthMode = useRef<AuthMode | null>(null);
   const settingsChild = useRef(false);
-  const initialPermissionIntentOpened = useRef(false);
+  const [shortcut, setShortcut] = useState<PageToolShortcutRequest | null>(
+    initialPagePermissionIntent,
+  );
+  const [shortcutExpired, setShortcutExpired] = useState(false);
+  useEffect(() => {
+    if (shortcut === null || store.transport.value !== "CONNECTED") return;
+    if (!matchesPageToolShortcut(shortcut, store)) {
+      setShortcut(null);
+      setShortcutExpired(true);
+    }
+  }, [
+    shortcut,
+    store.transport.value,
+    store.shell.value,
+    store.room.value,
+    store.pageAccess.value,
+  ]);
   const permissionCaptureGeneration = useRef(0);
   const permissionCompletion = useRef<((granted: boolean) => void) | null>(null);
   const server = selectedServerContext(store);
@@ -456,16 +475,12 @@ export function App({
     });
   }
 
-  useEffect(() => {
-    if (initialPagePermissionIntent === null || initialPermissionIntentOpened.current) {
-      return;
-    }
-    initialPermissionIntentOpened.current = true;
-    openPagePermission(initialPagePermissionIntent);
-  }, [initialPagePermissionIntent]);
-
   useEffect(
-    () => pagePermissionIntentSource?.subscribe((intent) => openPagePermission(intent)),
+    () =>
+      pagePermissionIntentSource?.subscribe((intent) => {
+        setShortcutExpired(false);
+        setShortcut(intent);
+      }),
     [pagePermissionIntentSource],
   );
 
@@ -484,6 +499,9 @@ export function App({
           : null
       }
     >
+      {shortcutExpired ? (
+        <p role="status">页面、房间或账号已变化，请从当前页面重新使用快捷键。</p>
+      ) : null}
       {destinationStorageError ? (
         <p role="alert">无法保存加入进度，请保持此侧栏打开后重试。</p>
       ) : null}
@@ -551,6 +569,10 @@ export function App({
           onOpenInvite={() => openOverlay({ kind: "INVITE_PICKER" })}
           onOpenRoomLifecycle={() => openOverlay({ kind: "ROOM_LIFECYCLE" })}
           onRequestPagePermission={openPagePermission}
+          shortcut={shortcut}
+          onShortcutHandled={(id) =>
+            setShortcut((current) => (current?.id === id ? null : current))
+          }
         />
       ) : (
         <GuestLobby

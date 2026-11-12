@@ -119,6 +119,9 @@ export function projectUiState(
       invitations: status.invitations,
     },
     room: {
+      ...(status.watchPreparationAvailable === true
+        ? { watchPreparationAvailable: true, watchPreparation: status.watchPreparation ?? null }
+        : {}),
       selectedRoomId: status.selectedRoomId,
       detail: status.roomDetail,
       runtime: status.room,
@@ -162,6 +165,9 @@ export function projectUiSlice(
       });
     case "room":
       return UiRoomSliceSchema.parse({
+        ...(status.watchPreparationAvailable === true
+          ? { watchPreparationAvailable: true, watchPreparation: status.watchPreparation ?? null }
+          : {}),
         selectedRoomId: status.selectedRoomId,
         detail: status.roomDetail,
         runtime: status.room,

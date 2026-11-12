@@ -10,6 +10,7 @@ type Participation = {
   groupId: string;
   target: MediaTarget;
   action: "JOIN" | "ALIGN";
+  preparationId: string | null;
   tabId: number | null;
   url: string | null;
   started: boolean;
@@ -90,6 +91,11 @@ export function useWatchParticipation(store: UiStore, requestPermission: PagePer
           }
           if (!granted) {
             finish(task);
+            if (task.preparationId !== null)
+              void store.command({
+                name: "WATCH_PREPARATION_DISMISS",
+                payload: { id: task.preparationId },
+              });
             return;
           }
           task.preparation = "READY";
@@ -158,6 +164,7 @@ export function useWatchParticipation(store: UiStore, requestPermission: PagePer
           playbackGroupId: task.groupId,
           expectedTarget: task.target,
           expectedContext,
+          ...(task.preparationId === null ? {} : { preparationId: task.preparationId }),
         },
       });
       if (!isCurrent(task)) {
@@ -180,7 +187,11 @@ export function useWatchParticipation(store: UiStore, requestPermission: PagePer
       if (isCurrent(task)) finish(task, "NETWORK_ERROR");
     }
   }
-  async function follow(groupId: string, action: "JOIN" | "ALIGN" = "JOIN"): Promise<void> {
+  async function follow(
+    groupId: string,
+    action: "JOIN" | "ALIGN" = "JOIN",
+    expectedTarget?: MediaTarget,
+  ): Promise<void> {
     if (current.current !== null) return;
     const group = store.room.value.runtime?.media?.playbackGroups.find(
       (group) => group.playbackGroupId === groupId,
@@ -190,12 +201,18 @@ export function useWatchParticipation(store: UiStore, requestPermission: PagePer
       setErrorCode("MEDIA_TARGET_UNAVAILABLE");
       return;
     }
+    if (expectedTarget !== undefined && !sameMediaTarget(group.target, expectedTarget)) {
+      setErrorCode("MEDIA_TARGET_CHANGED");
+      return;
+    }
     const task: Participation = {
       profileId: store.shell.value.selectedProfileId,
       roomId: selectedRoomId,
       groupId,
       target: structuredClone(group.target),
       action,
+      preparationId:
+        store.room.value.watchPreparationAvailable === true ? crypto.randomUUID() : null,
       tabId: null,
       url: null,
       started: false,
@@ -206,6 +223,24 @@ export function useWatchParticipation(store: UiStore, requestPermission: PagePer
     setMessage(null);
     setPending({ task, phase: "OPENING" });
     try {
+      if (task.preparationId !== null) {
+        const saved = await store.command({
+          name: "WATCH_PREPARATION_SAVE",
+          payload: {
+            id: task.preparationId,
+            groupId,
+            target: task.target,
+            action,
+            profileId: task.profileId,
+            roomId: task.roomId,
+          },
+        });
+        if (!isCurrent(task)) return;
+        if (!saved.ok) {
+          finish(task, saved.errorCode);
+          return;
+        }
+      }
       const result = await store.command({
         name: "ROOM_TAB_ACTIVATE",
         payload: {
@@ -276,7 +311,15 @@ export function useWatchParticipation(store: UiStore, requestPermission: PagePer
   }, [pending]);
   function cancel(): void {
     if (current.current?.started === true) return;
-    if (current.current !== null) finish(current.current, null, "已停止准备，打开的页面仍保留");
+    if (current.current !== null) {
+      const task = current.current;
+      finish(task, null, "已停止准备，打开的页面仍保留");
+      if (task.preparationId !== null)
+        void store.command({
+          name: "WATCH_PREPARATION_DISMISS",
+          payload: { id: task.preparationId },
+        });
+    }
   }
   return {
     follow,

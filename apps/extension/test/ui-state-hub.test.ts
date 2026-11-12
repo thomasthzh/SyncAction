@@ -727,3 +727,21 @@ describe("UiStateHub", () => {
     },
   );
 });
+
+describe("watch preparation first snapshot", () => {
+  it("carries configured recovery state on first attach without needing a later room event", async () => {
+    const { source, scheduler, hub } = createHub();
+    source.status.watchPreparationAvailable = true;
+    source.status.watchPreparation = null;
+    const port = new FakePort();
+    await hub.attach(port);
+    await scheduler.flush();
+    expect(port.messages[0]).toMatchObject({
+      type: "ui.state.snapshot",
+      slices: { room: { watchPreparationAvailable: true, watchPreparation: null } },
+    });
+    expect(projectUiSlice("room", source.status, [profile()], pageAccess)).toEqual(
+      projectUiState(source.status, [profile()], pageAccess).room,
+    );
+  });
+});

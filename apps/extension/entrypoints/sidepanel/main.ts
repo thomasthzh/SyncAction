@@ -12,9 +12,8 @@ import {
 import { CustomServerVerifier } from "../../src/server-host-permission.js";
 import {
   PageToolShortcutIntentMessageSchema,
-  PageToolShortcutIntentStore,
-  type PageToolShortcutIntent,
-  type PageToolShortcutIntentStorageArea,
+  PageToolShortcutRequestSchema,
+  type PageToolShortcutRequest,
 } from "../../src/page-tool-shortcut-intent.js";
 import { UiPortClient, type UiPortClientPort } from "../../src/ui/ui-port-client.js";
 import { App } from "../../src/ui-vnext/app.js";
@@ -58,10 +57,23 @@ const pagePermissionCoordinator = new OriginPermissionCoordinator({
   },
   resumeFeature: async (feature, intent) => {
     let result;
+    const toolContext = {
+      profileId: intent.profileId,
+      roomId: intent.roomId,
+      tabId: intent.tabId,
+      ...(intent.url === undefined ? {} : { url: intent.url }),
+      documentRevision: intent.documentRevision,
+    };
     if (feature === "DANMAKU") {
-      result = await store.command({ name: "DANMAKU_TOGGLE" });
+      result = await store.command({
+        name: "DANMAKU_TOGGLE",
+        payload: { expectedContext: toolContext },
+      });
     } else if (feature === "DRAWING") {
-      result = await store.command({ name: "PEN_TOGGLE" });
+      result = await store.command({
+        name: "PEN_TOGGLE",
+        payload: { expectedContext: toolContext },
+      });
     } else if (feature === "MEDIA_CONTROL") {
       if (intent.roomId === undefined) throw new Error("PAGE_PERMISSION_INTENT_STALE");
       const expectedContext = {
@@ -101,36 +113,36 @@ const pagePermissionCoordinator = new OriginPermissionCoordinator({
     }
   },
 });
-const shortcutIntents = new PageToolShortcutIntentStore({
-  area: browser.storage.session as unknown as PageToolShortcutIntentStorageArea,
-});
-const bufferedPagePermissionIntents: PageToolShortcutIntent[] = [];
-const pagePermissionIntentListeners = new Set<(intent: PageToolShortcutIntent) => void>();
+const bufferedPagePermissionIntents: PageToolShortcutRequest[] = [];
+const pagePermissionIntentListeners = new Set<(intent: PageToolShortcutRequest) => void>();
+const panelWindow = browser.windows.getCurrent();
+const consumeShortcut = async (): Promise<void> => {
+  const windowId = (await panelWindow).id;
+  if (windowId === undefined) return;
+  const result = await store.command({ name: "PAGE_TOOL_SHORTCUT_CONSUME", payload: { windowId } });
+  if (!result.ok) return;
+  const parsed = PageToolShortcutRequestSchema.safeParse(result.value);
+  if (!parsed.success) return;
+  const intent = parsed.data;
+  if (pagePermissionIntentListeners.size === 0) {
+    bufferedPagePermissionIntents.splice(0, bufferedPagePermissionIntents.length, intent);
+    return;
+  }
+  for (const listener of pagePermissionIntentListeners) listener(intent);
+};
 const handlePagePermissionIntentMessage = (message: unknown): void => {
   const parsed = PageToolShortcutIntentMessageSchema.safeParse(message);
   if (!parsed.success) {
     return;
   }
-  void shortcutIntents
-    .consume()
-    .then((intent) => {
-      if (intent === null) {
-        return;
-      }
-      if (pagePermissionIntentListeners.size === 0) {
-        bufferedPagePermissionIntents.splice(0, bufferedPagePermissionIntents.length, intent);
-        return;
-      }
-      for (const listener of pagePermissionIntentListeners) {
-        listener(intent);
-      }
-    })
-    .catch(() => undefined);
+  void consumeShortcut().catch(() => undefined);
 };
 browser.runtime.onMessage.addListener(handlePagePermissionIntentMessage);
-const initialPagePermissionIntent = await shortcutIntents.consume().catch(() => null);
+const unsubscribeShortcutTransport = portClient.subscribeTransport((state) => {
+  if (state === "CONNECTED") void consumeShortcut().catch(() => undefined);
+});
 const pagePermissionIntentSource = {
-  subscribe(listener: (intent: PageToolShortcutIntent) => void): () => void {
+  subscribe(listener: (intent: PageToolShortcutRequest) => void): () => void {
     pagePermissionIntentListeners.add(listener);
     const buffered = bufferedPagePermissionIntents.shift();
     if (buffered !== undefined) {
@@ -157,7 +169,6 @@ render(
     serverVerifier,
     serviceStatusProbe: serverVerifier,
     pagePermissionCoordinator,
-    initialPagePermissionIntent,
     pagePermissionIntentSource,
     privacyPageUrl: browser.runtime.getURL("/privacy.html"),
     loadAuthorizedSites: async (profileId: string) => {
@@ -178,6 +189,8 @@ render(
 window.addEventListener(
   "unload",
   () => {
+    unsubscribeShortcutTransport();
+    browser.runtime.onMessage.removeListener(handlePagePermissionIntentMessage);
     render(null, root);
     store.dispose();
     portClient.dispose();

@@ -43,6 +43,7 @@ const compatibilityReporterHarness = vi.hoisted(() => ({
 vi.mock("wxt/browser", () => ({
   browser: {
     runtime: {
+      id: "test-extension",
       sendMessage: browserHarness.sendMessage,
       onMessage: {
         addListener: browserHarness.addListener,

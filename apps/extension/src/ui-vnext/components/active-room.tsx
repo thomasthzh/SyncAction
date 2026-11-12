@@ -19,8 +19,10 @@ import { RoomMembersWorkspace } from "./room-members-workspace.js";
 import { RoomPageUpdates } from "./room-page-updates.js";
 import { RoomMeetingPlace } from "./room-meeting-place.js";
 import { useWatchParticipation } from "../use-watch-participation.js";
+import { WatchPreparationRecovery } from "./watch-preparation-recovery.js";
 import { sameMediaTarget } from "../../media-controller-model.js";
 import type { PagePermissionRequester } from "../../origin-permission-coordinator.js";
+import type { PageToolShortcutRequest } from "../../page-tool-shortcut-intent.js";
 
 export interface ActiveRoomProps {
   readonly store: UiStore;
@@ -30,6 +32,8 @@ export interface ActiveRoomProps {
   readonly onOpenInvite: () => void;
   readonly onOpenRoomLifecycle: () => void;
   readonly onRequestPagePermission: PagePermissionRequester;
+  readonly shortcut?: PageToolShortcutRequest | null | undefined;
+  readonly onShortcutHandled?: ((id: string) => void) | undefined;
 }
 
 export function ActiveRoom({
@@ -40,6 +44,8 @@ export function ActiveRoom({
   onOpenInvite,
   onOpenRoomLifecycle,
   onRequestPagePermission,
+  shortcut,
+  onShortcutHandled,
 }: ActiveRoomProps): JSX.Element {
   const [pageQuery, setPageQuery] = useState("");
   const [workspace, setWorkspace] = useState("watch");
@@ -52,7 +58,7 @@ export function ActiveRoom({
   const focusedWatchControl =
     activeElement instanceof HTMLElement &&
     surface.current?.contains(activeElement) &&
-    activeElement.closest(".watch-workspace, .watch-preparation") !== null
+    activeElement.closest(".watch-workspace, .watch-preparation, .watch-recovery") !== null
       ? activeElement
       : null;
   const feedback = useCommandFeedback();
@@ -163,6 +169,7 @@ export function ActiveRoom({
     media?.localMembership?.playbackGroupId,
     watchAwaiting,
     participation.phase,
+    room.watchPreparation?.id,
   ]);
   const compatibilityByPage = useMemo(
     () =>
@@ -477,6 +484,21 @@ export function ActiveRoom({
         aria-labelledby="room-workspace-tab-watch"
         hidden={workspace !== "watch"}
       >
+        {!participation.busy ? (
+          <WatchPreparationRecovery
+            store={store}
+            busy={feedback.pending !== null}
+            onResume={(task) => {
+              void participation.follow(task.groupId, task.action, task.target);
+            }}
+            onOpen={openSharedPage}
+            onDismiss={(id) => {
+              void feedback.run("watch-preparation", () =>
+                store.command({ name: "WATCH_PREPARATION_DISMISS", payload: { id } }),
+              );
+            }}
+          />
+        ) : null}
         {participation.phase === null ? null : (
           <p class="watch-preparation" role="status" data-watch-preparation={participation.phase}>
             <span class="watch-preparation__spinner" aria-hidden="true" />
@@ -692,6 +714,8 @@ export function ActiveRoom({
         onOpenInvite={onOpenInvite}
         onOpenRoomLifecycle={onOpenRoomLifecycle}
         onRequestPagePermission={onRequestPagePermission}
+        shortcut={shortcut}
+        onShortcutHandled={onShortcutHandled}
       />
     </div>
   );

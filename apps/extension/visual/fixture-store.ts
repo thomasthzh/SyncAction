@@ -19,7 +19,9 @@ export type VisualFixture =
   | "room-journey"
   | "room-continuity"
   | "room-watch-recovery"
-  | "room-watch-once";
+  | "room-watch-once"
+  | "room-watch-prepare"
+  | "room-watch-submitted";
 
 export const FIXTURE_NOW_MS = Date.parse("2026-08-24T08:00:00.000Z");
 
@@ -365,7 +367,12 @@ export function createVisualStore(fixture: VisualFixture): UiStore {
     slices.shell = { ...slices.shell, phase: "SIGNED_OUT", account: null };
     slices.discovery = { ...slices.discovery, rooms: [], invitations: [] };
   }
-  if (fixture === "room-watch-recovery" || fixture === "room-watch-once") {
+  if (
+    fixture === "room-watch-recovery" ||
+    fixture === "room-watch-once" ||
+    fixture === "room-watch-prepare" ||
+    fixture === "room-watch-submitted"
+  ) {
     const recovering = fixture === "room-watch-recovery";
     const runtime = slices.room.runtime!;
     const media = runtime.media!;
@@ -411,6 +418,26 @@ export function createVisualStore(fixture: VisualFixture): UiStore {
       },
     };
   }
+  if (fixture === "room-watch-prepare" || fixture === "room-watch-submitted") {
+    const profile = slices.shell.profiles.find(
+      (p) => p.profileId === slices.shell.selectedProfileId,
+    )!;
+    const group = slices.room.runtime!.media!.playbackGroups[0]!;
+    slices.room.watchPreparationAvailable = true;
+    slices.room.watchPreparation = {
+      id: uuid(950),
+      profileId: profile.profileId,
+      serverOrigin: profile.baseUrl,
+      serverId: profile.metadata?.serverId ?? null,
+      accountId: slices.shell.account!.id,
+      roomId,
+      groupId: group.playbackGroupId,
+      target: group.target!,
+      title: "周末一起看 · 山间日落",
+      action: "ALIGN",
+      stage: fixture === "room-watch-prepare" ? "PREPARING" : "SUBMITTED",
+    };
+  }
   return new VisualUiStore(
     slices,
     fixture === "room-unshared",
@@ -418,7 +445,9 @@ export function createVisualStore(fixture: VisualFixture): UiStore {
       fixture === "room-journey" ||
       fixture === "room-continuity" ||
       fixture === "room-watch-recovery" ||
-      fixture === "room-watch-once",
+      fixture === "room-watch-once" ||
+      fixture === "room-watch-prepare" ||
+      fixture === "room-watch-submitted",
   );
 }
 
@@ -465,6 +494,35 @@ class VisualUiStore implements UiStore {
         ...(value === undefined ? {} : { value }),
       });
     if (this.journeyFixture) {
+      if (_command.name === "WATCH_PREPARATION_DISMISS") {
+        if (this.room.value.watchPreparation?.id === _command.payload.id)
+          this.room.value = { ...this.room.value, watchPreparation: null };
+        return done();
+      }
+      if (_command.name === "WATCH_PREPARATION_SAVE") {
+        const profile = this.shell.value.profiles.find(
+          (p) => p.profileId === this.shell.value.selectedProfileId,
+        )!;
+        this.room.value = {
+          ...this.room.value,
+          watchPreparation: {
+            ..._command.payload,
+            profileId: profile.profileId,
+            serverOrigin: profile.baseUrl,
+            serverId: profile.metadata?.serverId ?? null,
+            accountId: this.shell.value.account!.id,
+            title: "周末一起看 · 山间日落",
+            stage: "PREPARING",
+          },
+        };
+        return done();
+      }
+      if (
+        (_command.name === "MEDIA_GROUP_JOIN" || _command.name === "MEDIA_GROUP_ALIGN_ONCE") &&
+        _command.payload.preparationId !== undefined
+      )
+        this.room.value = { ...this.room.value, watchPreparation: null };
+
       if (_command.name === "LOCAL_PAGE_ACTIVATE") {
         this.pageAccess.value = {
           ...this.pageAccess.value,

@@ -204,6 +204,8 @@ export class PageOverlayHost {
 }
 
 const PAGE_RUNTIME_KEY = "__syncactionPageCollaborationRuntimeV1__";
+const PAGE_RUNTIME_REVISION_KEY = "__syncactionPageCollaborationRuntimeRevisionV1__";
+const PAGE_RUNTIME_RESTART_KEY = "__syncactionPageCollaborationRestartRequiredV1__";
 
 export interface InstalledPageRuntime<Runtime> {
   runtime: Runtime;
@@ -214,28 +216,54 @@ export interface InstalledPageRuntime<Runtime> {
 export function installPageCollaborationRuntime<Runtime>(
   scope: Record<string, unknown>,
   create: () => Runtime,
+  revision?: string,
 ): InstalledPageRuntime<Runtime> {
+  if (scope[PAGE_RUNTIME_RESTART_KEY] === true) throw new Error("PAGE_RUNTIME_RESTART_REQUIRED");
   if (PAGE_RUNTIME_KEY in scope) {
     const runtime = scope[PAGE_RUNTIME_KEY] as Runtime;
-    return {
-      runtime,
-      created: false,
-      uninstall: () => {
-        if (scope[PAGE_RUNTIME_KEY] === runtime) {
-          delete scope[PAGE_RUNTIME_KEY];
-        }
-      },
+    const lifecycle = runtime as {
+      isAlive?: () => boolean;
+      dispose?: (reason: PageDisposeReason) => void;
     };
+    let alive: boolean;
+    try {
+      alive = lifecycle.isAlive?.() ?? true;
+    } catch {
+      alive = false;
+    }
+    if ((revision === undefined || scope[PAGE_RUNTIME_REVISION_KEY] === revision) && alive) {
+      return {
+        runtime,
+        created: false,
+        uninstall: () => {
+          if (scope[PAGE_RUNTIME_KEY] === runtime) {
+            delete scope[PAGE_RUNTIME_KEY];
+            delete scope[PAGE_RUNTIME_REVISION_KEY];
+          }
+        },
+      };
+    }
+    try {
+      if (lifecycle.dispose === undefined) throw new Error("Missing runtime cleanup");
+      lifecycle.dispose("BACKGROUND_STOPPED");
+    } catch (cause) {
+      scope[PAGE_RUNTIME_RESTART_KEY] = true;
+      throw new Error("PAGE_RUNTIME_RESTART_REQUIRED", { cause });
+    }
+    if (scope[PAGE_RUNTIME_KEY] === runtime) delete scope[PAGE_RUNTIME_KEY];
+    delete scope[PAGE_RUNTIME_REVISION_KEY];
   }
 
   const runtime = create();
   scope[PAGE_RUNTIME_KEY] = runtime;
+  scope[PAGE_RUNTIME_REVISION_KEY] = revision;
   return {
     runtime,
     created: true,
     uninstall: () => {
       if (scope[PAGE_RUNTIME_KEY] === runtime) {
         delete scope[PAGE_RUNTIME_KEY];
+        delete scope[PAGE_RUNTIME_REVISION_KEY];
       }
     },
   };
