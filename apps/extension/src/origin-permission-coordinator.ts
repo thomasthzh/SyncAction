@@ -7,6 +7,7 @@ import {
 import type { OriginConsentRecord, OriginConsentIdentity } from "./origin-consent.js";
 import { normalizePageOrigin, pageOriginPattern } from "./origin-consent.js";
 import { ServerProfileIdSchema } from "./server-profile.js";
+import type { MediaDeviceTakeoverSource } from "./media-controller-model.js";
 import { PageFeatureSchema, type PageFeature, type UiPageAccessSlice } from "./ui/ui-protocol.js";
 
 export interface OriginPermissionBrowserTab {
@@ -38,6 +39,7 @@ export interface PermissionIntent {
   url?: string;
   mediaJoinGroupId?: string;
   mediaJoinTarget?: MediaTarget;
+  mediaTakeoverFrom?: MediaDeviceTakeoverSource;
   mediaSwitchGroupId?: string;
   profileId: string;
   tabId: number;

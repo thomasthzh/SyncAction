@@ -373,13 +373,17 @@ export class ExtensionCommandRouter {
         break;
       }
       case "MEDIA_GROUP_PREPARE": {
-        const { playbackGroupId, expectedContext, expectedTarget } = command.payload;
+        const { playbackGroupId, expectedContext, expectedTarget, takeoverFrom } = command.payload;
         await this.#activeMediaTab(expectedContext);
-        result = await this.#app.prepareMediaGroup(
-          playbackGroupId,
-          expectedContext,
-          expectedTarget,
-        );
+        result =
+          takeoverFrom === undefined
+            ? await this.#app.prepareMediaGroup(playbackGroupId, expectedContext, expectedTarget)
+            : await this.#app.prepareMediaGroup(
+                playbackGroupId,
+                expectedContext,
+                expectedTarget,
+                takeoverFrom,
+              );
         break;
       }
       case "MEDIA_GROUP_JOIN": {
@@ -419,9 +423,24 @@ export class ExtensionCommandRouter {
       case "MEDIA_GROUP_CLOSE":
         result = await this.#app.closeMediaGroup(command.payload.playbackGroupId);
         break;
-      case "MEDIA_DEVICE_TAKEOVER":
-        result = await this.#app.takeOverMediaDevice(command.payload.playbackGroupId);
+      case "MEDIA_DEVICE_TAKEOVER": {
+        const { playbackGroupId, expectedContext, expectedTarget, takeoverFrom, preparationId } =
+          command.payload;
+        if (expectedContext === undefined)
+          result = await this.#app.takeOverMediaDevice(playbackGroupId);
+        else {
+          await this.#activeMediaTab(expectedContext);
+          if (expectedTarget === undefined || takeoverFrom === undefined)
+            throw new Error("MEDIA_CONTEXT_CHANGED");
+          result = await this.#app.takeOverMediaDevice(playbackGroupId, {
+            expectedContext,
+            expectedTarget,
+            takeoverFrom,
+            preparationId,
+          });
+        }
         break;
+      }
       case "MEDIA_PROPOSAL_DECIDE":
         result = await this.#app.decideMediaProposal(
           command.payload.playbackGroupId,

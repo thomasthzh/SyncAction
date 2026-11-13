@@ -18,7 +18,10 @@ const fixture: VisualFixture =
   requestedFixture === "room-watch-recovery" ||
   requestedFixture === "room-watch-once" ||
   requestedFixture === "room-watch-prepare" ||
-  requestedFixture === "room-watch-submitted"
+  requestedFixture === "room-watch-submitted" ||
+  requestedFixture === "room-device-follower" ||
+  requestedFixture === "room-device-leader" ||
+  requestedFixture === "room-device-unknown"
     ? requestedFixture
     : requestedFixture === "room-unshared"
       ? "room-unshared"

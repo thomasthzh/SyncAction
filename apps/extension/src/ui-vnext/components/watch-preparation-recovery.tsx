@@ -1,5 +1,9 @@
 import type { JSX } from "preact";
-import { sameMediaTarget } from "../../media-controller-model.js";
+import {
+  sameMediaTarget,
+  mediaDeviceTakeoverSource,
+  sameMediaTakeoverSource,
+} from "../../media-controller-model.js";
 import type { WatchPreparation } from "../../watch-preparation.js";
 import type { UiStore } from "../store.js";
 
@@ -36,27 +40,40 @@ export function WatchPreparationRecovery({
     media?.localMembership?.playbackGroupId === task.groupId && media.localMembership.activeDevice;
   const leading = ownGroup && media!.localMembership!.role === "LEADER";
   const alreadyJoined =
-    task.action === "JOIN" && ownGroup && media!.localMembership!.role === "FOLLOWER";
+    (task.action === "JOIN" || task.action === "TAKEOVER") &&
+    ownGroup &&
+    media!.localMembership!.role === "FOLLOWER";
   const connected =
     room.runtime?.state === "SYNCED" &&
     media?.roomMediaRevision != null &&
     media.state !== "OFFLINE" &&
     store.transport.value !== "RECONNECTING";
+  const sourceMatches =
+    task.action !== "TAKEOVER" ||
+    (task.takeoverFrom !== undefined &&
+      sameMediaTakeoverSource(mediaDeviceTakeoverSource(group, task.accountId), task.takeoverFrom));
   const canResume =
-    !leading && connected && matches && (task.stage === "PREPARING" || alreadyJoined);
+    !leading &&
+    connected &&
+    matches &&
+    ((task.stage === "PREPARING" && sourceMatches) || alreadyJoined);
   const detail = !connected
     ? "连接恢复后可查看上次准备的结果。"
     : !matches
       ? "原视频已变化或播放组已关闭，请从当前视频重新选择。"
       : leading
         ? "你正在负责这段视频的领播，可直接查看当前播放器。"
-        : task.stage === "PREPARING"
-          ? `你上次还在准备${task.action === "ALIGN" ? "一次进度对齐" : "一起看"}，可以接着完成。`
-          : alreadyJoined
-            ? "你已加入原播放组，可在本设备继续跟随。"
-            : task.action === "ALIGN"
-              ? "上次对齐结果待确认。请先查看播放器，这条记录不会自动重放。"
-              : "上次加入结果待确认。请先查看当前播放组，不会自动再次加入。";
+        : task.action === "TAKEOVER" && !sourceMatches && !alreadyJoined
+          ? "原参与设备或角色已变化，请查看当前播放组后重新选择。"
+          : task.stage === "PREPARING"
+            ? `你上次还在准备${task.action === "ALIGN" ? "一次进度对齐" : task.action === "TAKEOVER" ? "换到本设备继续看" : "一起看"}，可以接着完成。`
+            : alreadyJoined
+              ? "你已加入原播放组，可在本设备继续跟随。"
+              : task.action === "TAKEOVER"
+                ? "上次设备切换结果待确认。请先查看播放组，这条记录不会自动再次接管。"
+                : task.action === "ALIGN"
+                  ? "上次对齐结果待确认。请先查看播放器，这条记录不会自动重放。"
+                  : "上次加入结果待确认。请先查看当前播放组，不会自动再次加入。";
   return (
     <section
       class="watch-return watch-recovery"

@@ -112,6 +112,7 @@ export interface PointerControllerStatus {
 }
 
 export interface PointerControllerOptions {
+  onStatusChanged?: () => void;
   roomId: unknown;
   browserSessionId: unknown;
   deviceId: unknown;
@@ -176,6 +177,12 @@ const POINTER_LEASE_RENEW_INTERVAL_MS = 2_000;
 const POINTER_VIEWPORT_BUCKET_PX = 160;
 
 export class PointerController {
+  readonly #onStatusChanged: (() => void) | undefined;
+  #publishedStatus: PointerControllerStatus = {
+    state: "OFFLINE",
+    lastAckExpiresAt: null,
+    errorCode: null,
+  };
   readonly #roomId: RoomId;
   readonly #browserSessionId: string;
   readonly #deviceId: ReturnType<typeof DeviceIdSchema.parse>;
@@ -223,6 +230,7 @@ export class PointerController {
   #errorCode: string | null = null;
 
   public constructor(options: PointerControllerOptions) {
+    this.#onStatusChanged = options.onStatusChanged;
     this.#roomId = RoomIdSchema.parse(options.roomId);
     this.#browserSessionId = BrowserSessionIdSchema.parse(options.browserSessionId);
     this.#deviceId = DeviceIdSchema.parse(options.deviceId);
@@ -240,6 +248,7 @@ export class PointerController {
       return this.whenIdle();
     }
     this.#synchronized = synchronized;
+    this.#notifyStatusChanged();
     this.#generation += 1;
     const generation = this.#generation;
     if (!synchronized) {
@@ -258,7 +267,9 @@ export class PointerController {
       this.#contexts.clear();
       this.#pageCapabilityErrors.clear();
       this.#lastAckExpiresAt = null;
+      this.#notifyStatusChanged();
       this.#errorCode = null;
+      this.#notifyStatusChanged();
       const managedTabs = [...this.#managedTabs];
       this.#managedTabs.clear();
       this.#enqueuePage(async () => {
@@ -267,6 +278,7 @@ export class PointerController {
       return this.whenIdle();
     }
     this.#errorCode = null;
+    this.#notifyStatusChanged();
     this.#transport.setPointerHandler((message) => this.#handleRemote(message));
     if (this.#activeTabId !== undefined) {
       this.#enqueuePage(() => this.#refreshTab(this.#activeTabId!, generation));
@@ -281,6 +293,7 @@ export class PointerController {
       this.#documentVisible = true;
     }
     this.#activeTabId = tabId;
+    this.#notifyStatusChanged();
     if (this.#synchronized) {
       const generation = this.#generation;
       this.#enqueuePage(() => this.#refreshTab(tabId, generation));
@@ -431,6 +444,25 @@ export class PointerController {
     } else {
       this.#pageCapabilityErrors.set(tabId, errors);
     }
+    this.#notifyStatusChanged();
+  }
+
+  #notifyStatusChanged(): void {
+    if (this.#onStatusChanged === undefined) return;
+    const status = this.getStatus();
+    const previous = this.#publishedStatus;
+    if (
+      status.state === previous.state &&
+      status.errorCode === previous.errorCode &&
+      status.lastAckExpiresAt === previous.lastAckExpiresAt
+    )
+      return;
+    this.#publishedStatus = status;
+    try {
+      this.#onStatusChanged();
+    } catch {
+      /* Status listeners do not interrupt pointer delivery. */
+    }
   }
 
   public getStatus(): PointerControllerStatus {
@@ -459,6 +491,7 @@ export class PointerController {
     this.#contexts.clear();
     this.#pageCapabilityErrors.clear();
     this.#errorCode = null;
+    this.#notifyStatusChanged();
     if (this.#activeTabId !== undefined) {
       this.#enqueuePage(() => this.#refreshTab(this.#activeTabId!, generation));
     }
@@ -559,6 +592,7 @@ export class PointerController {
       this.#managedTabs.add(tabId);
       this.#contexts.set(tabId, context);
       this.#errorCode = null;
+      this.#notifyStatusChanged();
       if (this.#activeTabId === tabId) {
         this.#activateLocalPublisher(tabId, context, generation);
       }
@@ -568,6 +602,7 @@ export class PointerController {
           this.#stopLocalPublisher();
         }
         this.#errorCode = pointerErrorCode(cause);
+        this.#notifyStatusChanged();
       }
     }
   }
@@ -596,6 +631,7 @@ export class PointerController {
     this.#leaseTail = publish.catch((cause) => {
       if (this.#synchronized && generation === this.#generation && this.#leaseId === leaseId) {
         this.#errorCode = pointerErrorCode(cause);
+        this.#notifyStatusChanged();
         this.#stopLocalPublisher();
       }
     });
@@ -656,6 +692,7 @@ export class PointerController {
     }
     this.#lastAckExpiresAt = acknowledgement.expiresAt;
     this.#errorCode = null;
+    this.#notifyStatusChanged();
     if (this.#documentVisible && this.#hasRemoteObserver()) {
       this.#ensureFrameTimer();
     } else {
@@ -692,6 +729,7 @@ export class PointerController {
       .catch((cause) => {
         if (this.#synchronized && generation === this.#generation && this.#leaseId === leaseId) {
           this.#errorCode = pointerErrorCode(cause);
+          this.#notifyStatusChanged();
         }
       })
       .finally(() => {
@@ -739,8 +777,10 @@ export class PointerController {
         throw new Error("POINTER_SEQUENCE_EXHAUSTED");
       }
       this.#errorCode = null;
+      this.#notifyStatusChanged();
     } catch (cause) {
       this.#errorCode = pointerErrorCode(cause);
+      this.#notifyStatusChanged();
     }
   }
 
@@ -757,6 +797,7 @@ export class PointerController {
     this.#leaseTabId = null;
     this.#nextFrameSeq = 1;
     this.#lastAckExpiresAt = null;
+    this.#notifyStatusChanged();
     this.#pauseLeaseAfterRenewal = false;
   }
 
@@ -853,6 +894,7 @@ export class PointerController {
       .catch((cause) => {
         if (this.#synchronized && generation === this.#generation && this.#leaseId === leaseId) {
           this.#errorCode = pointerErrorCode(cause);
+          this.#notifyStatusChanged();
         }
       })
       .finally(() => {
@@ -1351,6 +1393,7 @@ export class PointerController {
     this.#pageTail = result.catch((cause) => {
       if (this.#synchronized) {
         this.#errorCode = pointerErrorCode(cause);
+        this.#notifyStatusChanged();
       }
     });
   }

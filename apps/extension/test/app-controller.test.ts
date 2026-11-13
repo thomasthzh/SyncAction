@@ -2,6 +2,7 @@ import { type WatchPreparation } from "../src/watch-preparation.js";
 import type { BrowserActuatorResult, BrowserObserverResult } from "@syncaction/browser-sync";
 import {
   PageCompatibilityReportSchema,
+  RoomIdSchema,
   PlaybackGroupSnapshotSchema,
   type PageCompatibilityReport,
 } from "@syncaction/protocol";
@@ -1465,7 +1466,9 @@ async function settleMicrotasks(): Promise<void> {
 }
 
 describe("session watch preparation ownership", () => {
-  async function setup(options: { readFails?: boolean; cleanupFails?: boolean } = {}) {
+  async function setup(
+    options: { readFails?: boolean; cleanupFails?: boolean; readonlyDevice?: boolean } = {},
+  ) {
     const events: string[] = [];
     const sessions = new FakeSessions(events);
     sessions.status = {
@@ -1523,6 +1526,7 @@ describe("session watch preparation ownership", () => {
       leaderGraceExpiresAtServerMs: null,
       updatedAtServerMs: 1700000000000,
     });
+    const takeoverFrom = { deviceId: group.leaderDeviceId, role: "LEADER" as const };
     const state = await new FakeRuntime(firstRoomId, events).getStatus();
     state.tabs = [
       { logicalTabId: group.target!.logicalTabId, title: "Original video", domain: "youtube.com" },
@@ -1532,7 +1536,9 @@ describe("session watch preparation ownership", () => {
       roomMediaRevision: 4,
       playbackGroups: [group],
       localObservation: null,
-      localMembership: null,
+      localMembership: options.readonlyDevice
+        ? { playbackGroupId, role: "READ_ONLY", activeDevice: false }
+        : null,
       recommendedPlaybackGroupId: null,
       navigation: [],
       errorCode: null,
@@ -1544,7 +1550,10 @@ describe("session watch preparation ownership", () => {
       sessions,
       api: createApi(),
       watchPreparations: { read, write },
-      runtimeFactory: ({ room }) => new FakeRuntime(room.id, events, false, state),
+      runtimeFactory: ({ room }) =>
+        Object.assign(new FakeRuntime(room.id, events, false, state), {
+          getPageDocumentRevision: async () => group.target!.documentRevision,
+        }),
     });
     await app.start();
     await app.selectRoom(firstRoomId);
@@ -1556,8 +1565,33 @@ describe("session watch preparation ownership", () => {
       profileId: (await app.getStatus()).selectedProfileId,
       roomId: firstRoomId,
     };
-    return { app, events, read, write, input, getRecord: () => record };
+    return { app, events, read, write, input, takeoverFrom, getRecord: () => record };
   }
+  it("persists submitted device continuation, rejects duplicate dispatch and clears it on explicit leave", async () => {
+    const h = await setup({ readonlyDevice: true });
+    const input = { ...h.input, action: "TAKEOVER" as const, takeoverFrom: h.takeoverFrom };
+    await h.app.saveWatchPreparation(input);
+    const expectedContext = {
+      profileId: input.profileId,
+      roomId: RoomIdSchema.parse(input.roomId),
+      tabId: 42,
+      documentRevision: input.target.documentRevision,
+    };
+    const expected = {
+      expectedContext,
+      expectedTarget: input.target,
+      takeoverFrom: input.takeoverFrom,
+      preparationId: input.id,
+    };
+    await h.app.takeOverMediaDevice(playbackGroupId, expected);
+    expect(h.getRecord()?.stage).toBe("SUBMITTED");
+    await expect(h.app.takeOverMediaDevice(playbackGroupId, expected)).rejects.toThrow(
+      "WATCH_PREPARATION_CHANGED",
+    );
+    expect(h.events.filter((e) => e.startsWith("media-takeover:"))).toHaveLength(1);
+    await h.app.leaveMediaGroup(playbackGroupId);
+    expect(h.getRecord()).toBeNull();
+  });
   it.each(["ALIGN", "JOIN"] as const)(
     "keeps successful %s truthful when record cleanup fails and rejects replay",
     async (action) => {

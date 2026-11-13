@@ -856,7 +856,7 @@ describe("vNext active room", () => {
     ["LEADER", true, "ONLINE", "你是领播者 · 本设备", null],
     ["LEADER", true, "OFFLINE", "你是领播者 · 本设备", "媒体连接已断开"],
     ["FOLLOWER", true, "OFFLINE", "你是跟随者 · 本设备", "媒体连接已断开"],
-    ["READ_ONLY", false, "ONLINE", "当前设备只读", "不会自动跟随"],
+    ["READ_ONLY", false, "ONLINE", "当前设备只读", "将本组同步移到这台设备"],
   ] as const)(
     "shows actual local participation (%s/%s/%s)",
     (role, activeDevice, state, text, notice) => {
@@ -1006,7 +1006,7 @@ describe("vNext active room", () => {
   it.each([
     ["FOLLOWER", true, "退出播放组", "MEDIA_GROUP_LEAVE"],
     ["LEADER", true, "关闭播放组", "MEDIA_GROUP_CLOSE"],
-    ["FOLLOWER", false, "在此设备接管", "MEDIA_DEVICE_TAKEOVER"],
+    ["FOLLOWER", false, "在这台继续看", "MEDIA_DEVICE_TAKEOVER"],
   ] as const)(
     "offers explicit %s lifecycle action without ending the group automatically",
     async (role, activeDevice, label, commandName) => {
@@ -1024,6 +1024,15 @@ describe("vNext active room", () => {
       expect(root.textContent).toContain("已结束，等待领播者切换");
       expect(store.commandCalls).toHaveLength(0);
       await click(byRole(root, "button", label));
+      if (!activeDevice) {
+        expect(store.commandCalls[0]?.name).toBe("ROOM_TAB_ACTIVATE");
+        expect(root.textContent).toContain("等待视频页面就绪");
+        expect(store.commandCalls.some((command) => command.name === "MEDIA_DEVICE_TAKEOVER")).toBe(
+          false,
+        );
+        expect(store.room.value.runtime?.media?.localMembership?.activeDevice).toBe(false);
+        return;
+      }
       expect(store.commandCalls.at(-1)).toEqual({
         name: commandName,
         payload: { playbackGroupId: groupId },

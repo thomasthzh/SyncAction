@@ -45,6 +45,10 @@ import { MediaFollowerSession } from "./media-follower-session.js";
 import { MediaHeartbeatCoordinator } from "./media-heartbeat-coordinator.js";
 import {
   deriveMediaMembership,
+  mediaDeviceTakeoverSource,
+  sameMediaTakeoverSource,
+  MediaDeviceTakeoverSourceSchema,
+  type MediaDeviceTakeoverSource,
   findMediaLeaderGroup,
   findMediaTargetRoute,
   mediaRouteKey,
@@ -851,13 +855,18 @@ export class MediaController {
     );
   }
 
-  public async prepareGroup(playbackGroupId: string, expectedTarget: MediaTarget): Promise<void> {
+  public async prepareGroup(
+    playbackGroupId: string,
+    expectedTarget: MediaTarget,
+    takeoverFrom?: MediaDeviceTakeoverSource,
+  ): Promise<void> {
     const target = MediaTargetSchema.parse(expectedTarget);
     this.#requireSynchronizedSnapshot();
     const group = this.#groupById(CanonicalUuidSchema.parse(playbackGroupId));
     if (group?.target == null || !sameMediaTarget(group.target, target))
       throw new MediaControllerError("MEDIA_TARGET_CHANGED");
-    if (this.#requireMatchingMembership(playbackGroupId)?.role === "LEADER")
+    if (takeoverFrom !== undefined) this.#requireTakeoverSource(playbackGroupId, takeoverFrom);
+    else if (this.#requireMatchingMembership(playbackGroupId)?.role === "LEADER")
       throw new MediaControllerError("MEDIA_ALREADY_IN_GROUP");
     const generation = this.#generation;
     const route = await this.#routeForTarget(target);
@@ -868,7 +877,8 @@ export class MediaController {
       !sameMediaTarget(this.#groupById(playbackGroupId)!.target!, target)
     )
       throw new MediaControllerError("MEDIA_TARGET_CHANGED");
-    if (this.#requireMatchingMembership(playbackGroupId)?.role === "LEADER")
+    if (takeoverFrom !== undefined) this.#requireTakeoverSource(playbackGroupId, takeoverFrom);
+    else if (this.#requireMatchingMembership(playbackGroupId)?.role === "LEADER")
       throw new MediaControllerError("MEDIA_ALREADY_IN_GROUP");
     this.#localObservation = null;
     this.#controlStateValid = false;
@@ -1022,17 +1032,93 @@ export class MediaController {
   }
 
   public async leaveGroup(playbackGroupId?: string): Promise<MediaCommandAck> {
-    const group = this.#requireGroup(playbackGroupId ?? this.#requireMembership().playbackGroupId);
-    return this.#sendExistingGroupCommand(group, {
-      type: "group.leave",
-    });
+    this.#requireSynchronizedSnapshot();
+    const membership = this.#requireMembership();
+    if (
+      !membership.activeDevice ||
+      (playbackGroupId !== undefined && membership.playbackGroupId !== playbackGroupId)
+    )
+      throw new MediaControllerError("MEDIA_DEVICE_READ_ONLY");
+    const group = this.#groupById(membership.playbackGroupId)!;
+    return this.#sendExistingGroupCommand(group, { type: "group.leave" }, "MEMBERSHIP");
   }
 
-  public async takeOverDevice(playbackGroupId: string): Promise<MediaCommandAck> {
-    const group = this.#requireGroup(playbackGroupId);
-    return this.#sendExistingGroupCommand(group, {
-      type: "group.takeover",
-    });
+  #requireTakeoverSource(
+    playbackGroupId: string,
+    source: MediaDeviceTakeoverSource,
+  ): PlaybackGroupSnapshot {
+    this.#requireSynchronizedSnapshot();
+    const group = this.#groupById(CanonicalUuidSchema.parse(playbackGroupId));
+    const membership = this.#currentMembership();
+    if (
+      group === undefined ||
+      membership?.playbackGroupId !== playbackGroupId ||
+      membership.activeDevice ||
+      !sameMediaTakeoverSource(mediaDeviceTakeoverSource(group, this.#userId), source)
+    )
+      throw new MediaControllerError("MEDIA_DEVICE_CHANGED");
+    return group;
+  }
+
+  public async takeOverDevice(
+    playbackGroupId: string,
+    expectedTarget?: MediaTarget,
+    takeoverFrom?: MediaDeviceTakeoverSource,
+  ): Promise<MediaCommandAck> {
+    this.#requireSynchronizedSnapshot();
+    const source =
+      takeoverFrom === undefined
+        ? mediaDeviceTakeoverSource(this.#groupById(playbackGroupId), this.#userId)
+        : MediaDeviceTakeoverSourceSchema.parse(takeoverFrom);
+    if (source === null) throw new MediaControllerError("NOT_GROUP_MEMBER");
+    if (expectedTarget === undefined && takeoverFrom === undefined) {
+      const group = this.#groupById(playbackGroupId)!;
+      return this.#sendExistingGroupCommand(group, { type: "group.takeover" }, "MEMBERSHIP");
+    }
+    let group = this.#requireTakeoverSource(playbackGroupId, source);
+    if (expectedTarget !== undefined) {
+      const target = MediaTargetSchema.parse(expectedTarget);
+      const generation = this.#generation;
+      if (group.target === null || !sameMediaTarget(group.target, target))
+        throw new MediaControllerError("MEDIA_TARGET_CHANGED");
+      const route = await this.#routeForTarget(target);
+      if (
+        route === null ||
+        route.tabId !== this.#activeTabId ||
+        !this.#generationGuard(generation)()
+      )
+        throw new MediaControllerError("MEDIA_TARGET_UNBOUND");
+      await this.#page.observe(route.tabId, route.frameId, route.context, target);
+      const local = this.#localObservation;
+      const capabilityError = this.#currentPageCapabilityError();
+      if (capabilityError !== null) throw new MediaControllerError(capabilityError);
+      if (
+        local === null ||
+        local.tabId !== this.#activeTabId ||
+        !sameMediaTarget(local.target, target) ||
+        !(await this.#isRouteCurrent(local))
+      )
+        throw new MediaControllerError("MEDIA_NOT_READY");
+      group = this.#requireTakeoverSource(playbackGroupId, source);
+      if (
+        !this.#generationGuard(generation)() ||
+        this.#activeTabId !== route.tabId ||
+        group.target === null ||
+        !sameMediaTarget(group.target, target)
+      )
+        throw new MediaControllerError("MEDIA_CONTEXT_CHANGED");
+    }
+    if (
+      source.role === "FOLLOWER" &&
+      this.#compatibility !== undefined &&
+      !this.#compatibility.canSynchronizeKnownMedia({
+        target: group.target!,
+        remoteUserId: group.leaderUserId,
+        remoteDeviceId: group.leaderDeviceId,
+      })
+    )
+      throw new MediaControllerError("MEDIA_MISMATCH");
+    return this.#sendExistingGroupCommand(group, { type: "group.takeover" }, "MEMBERSHIP");
   }
 
   public async transferLeader(
@@ -2184,6 +2270,7 @@ export class MediaController {
   #sendExistingGroupCommand(
     group: PlaybackGroupSnapshot,
     payload: ExistingMediaCommandPayload,
+    mode: false | "MEMBERSHIP" = false,
   ): Promise<MediaCommandAck> {
     const command = buildExistingMediaCommand({
       commandId: this.#newUuid(),
@@ -2191,16 +2278,21 @@ export class MediaController {
       group,
       payload,
     });
-    return this.#sendCommand(command);
+    return this.#sendCommand(command, mode);
   }
 
   #sendCommand(
     commandInput: MediaCommand,
-    targetRecovery: boolean | "JOIN_TARGET" = false,
+    targetRecovery: boolean | "JOIN_TARGET" | "MEMBERSHIP" = false,
   ): Promise<MediaCommandAck> {
     if (targetRecovery && commandInput.type === "group.switch-target")
       this.#requireSwitchLeader(commandInput.playbackGroupId);
     else if (targetRecovery === "JOIN_TARGET" && commandInput.type === "group.join")
+      this.#requireSynchronizedSnapshot();
+    else if (
+      targetRecovery === "MEMBERSHIP" &&
+      (commandInput.type === "group.takeover" || commandInput.type === "group.leave")
+    )
       this.#requireSynchronizedSnapshot();
     else this.#requireOnline();
     const command = commandInput;

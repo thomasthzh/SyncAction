@@ -1,4 +1,6 @@
 import { recommendGroup } from "@syncaction/media";
+import { DeviceIdSchema } from "@syncaction/protocol";
+import { z } from "zod";
 import type {
   MediaObservedState,
   MediaTarget,
@@ -25,6 +27,34 @@ export interface MediaLocalMembershipStatus {
   playbackGroupId: string;
   role: "LEADER" | "FOLLOWER" | "READ_ONLY";
   activeDevice: boolean;
+}
+
+export const MediaDeviceTakeoverSourceSchema = z
+  .object({
+    deviceId: DeviceIdSchema,
+    role: z.enum(["LEADER", "FOLLOWER"]),
+  })
+  .strict();
+export type MediaDeviceTakeoverSource = z.infer<typeof MediaDeviceTakeoverSourceSchema>;
+
+export function mediaDeviceTakeoverSource(
+  group: PlaybackGroupSnapshot | undefined,
+  userId: string,
+): MediaDeviceTakeoverSource | null {
+  const member = group?.members.find((member) => member.userId === userId);
+  return member === undefined
+    ? null
+    : {
+        deviceId: member.activeDeviceId,
+        role: group!.leaderUserId === userId ? "LEADER" : "FOLLOWER",
+      };
+}
+
+export function sameMediaTakeoverSource(
+  left: MediaDeviceTakeoverSource | null,
+  right: MediaDeviceTakeoverSource,
+): boolean {
+  return left?.deviceId === right.deviceId && left.role === right.role;
 }
 
 export interface MediaNavigationStatus {

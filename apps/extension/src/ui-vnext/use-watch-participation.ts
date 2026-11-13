@@ -1,6 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
 import type { MediaTarget } from "@syncaction/protocol";
-import { sameMediaTarget } from "../media-controller-model.js";
+import {
+  sameMediaTarget,
+  mediaDeviceTakeoverSource,
+  sameMediaTakeoverSource,
+  type MediaDeviceTakeoverSource,
+} from "../media-controller-model.js";
 import type { UiStore } from "./store.js";
 import type { PagePermissionRequester } from "../origin-permission-coordinator.js";
 
@@ -9,14 +14,24 @@ type Participation = {
   roomId: NonNullable<UiStore["room"]["value"]["selectedRoomId"]>;
   groupId: string;
   target: MediaTarget;
-  action: "JOIN" | "ALIGN";
+  action: "JOIN" | "ALIGN" | "TAKEOVER";
+  accountId: string;
+  takeoverFrom: MediaDeviceTakeoverSource | null;
   preparationId: string | null;
   tabId: number | null;
   url: string | null;
   started: boolean;
   preparation: "NEW" | "PERMISSION" | "IN_FLIGHT" | "READY";
 };
-type Phase = "OPENING" | "WAITING_PAGE" | "PERMISSION" | "WAITING_MEDIA" | "JOINING" | "ALIGNING";
+type Phase =
+  | "OPENING"
+  | "WAITING_PAGE"
+  | "PERMISSION"
+  | "WAITING_MEDIA"
+  | "JOINING"
+  | "ALIGNING"
+  | "TAKING_OVER"
+  | "CONFIRMING_DEVICE";
 
 /** One explicit user action opens the chosen video and continues on that page.
  * No local browsing is published and a changed target is never silently followed. */
@@ -45,6 +60,16 @@ export function useWatchParticipation(store: UiStore, requestPermission: PagePer
       mounted.current &&
       current.current === task &&
       store.shell.value.selectedProfileId === task.profileId &&
+      store.shell.value.account?.id === task.accountId &&
+      (task.takeoverFrom === null ||
+        sameMediaTakeoverSource(
+          mediaDeviceTakeoverSource(group, task.accountId),
+          task.takeoverFrom,
+        ) ||
+        (task.started &&
+          store.room.value.runtime?.media?.localMembership?.playbackGroupId === task.groupId &&
+          store.room.value.runtime.media.localMembership.activeDevice &&
+          mediaDeviceTakeoverSource(group, task.accountId)?.role === task.takeoverFrom.role)) &&
       store.room.value.selectedRoomId === task.roomId &&
       (task.tabId === null || store.pageAccess.value.tabId === task.tabId) &&
       (task.url === null || store.pageAccess.value.url === task.url) &&
@@ -62,6 +87,39 @@ export function useWatchParticipation(store: UiStore, requestPermission: PagePer
     setPending(null);
     setErrorCode(error);
     setMessage(text);
+  }
+  function confirmDevice(task: Participation): void {
+    if (!isCurrent(task)) {
+      finish(task, "MEDIA_DEVICE_CHANGED");
+      return;
+    }
+    const media = store.room.value.runtime?.media;
+    const member = media?.localMembership;
+    if (
+      media == null ||
+      member?.playbackGroupId !== task.groupId ||
+      !member.activeDevice ||
+      member.role !== task.takeoverFrom?.role
+    )
+      return;
+    const ready =
+      media.controlReady === true &&
+      media.localObservation != null &&
+      sameMediaTarget(media.localObservation.target, task.target);
+    finish(
+      task,
+      null,
+      ready
+        ? member.role === "LEADER"
+          ? "已在本设备领播，播放状态见当前视频"
+          : "已在本设备参与跟随，播放状态见当前视频"
+        : "已切换到本设备，播放器仍在准备；当前角色已确认",
+    );
+    if (task.preparationId !== null)
+      void store.command({
+        name: "WATCH_PREPARATION_DISMISS",
+        payload: { id: task.preparationId },
+      });
   }
   function pageReady(task: Participation): boolean {
     const latest = store.pageAccess.value;
@@ -82,7 +140,7 @@ export function useWatchParticipation(store: UiStore, requestPermission: PagePer
       task.preparation = "PERMISSION";
       setPending({ task, phase: "PERMISSION" });
       requestPermission(
-        `media-${task.action === "ALIGN" ? "align" : "join"}:${task.groupId}`,
+        `media-${task.action === "ALIGN" ? "align" : task.action === "TAKEOVER" ? "takeover" : "join"}:${task.groupId}`,
         latest.url ?? undefined,
         (granted) => {
           if (!isCurrent(task)) {
@@ -118,7 +176,12 @@ export function useWatchParticipation(store: UiStore, requestPermission: PagePer
       try {
         const result = await store.command({
           name: "MEDIA_GROUP_PREPARE",
-          payload: { playbackGroupId: task.groupId, expectedContext, expectedTarget: task.target },
+          payload: {
+            playbackGroupId: task.groupId,
+            expectedContext,
+            expectedTarget: task.target,
+            ...(task.takeoverFrom === null ? {} : { takeoverFrom: task.takeoverFrom }),
+          },
         });
         if (!isCurrent(task)) {
           finish(task, "MEDIA_CONTEXT_CHANGED");
@@ -156,19 +219,38 @@ export function useWatchParticipation(store: UiStore, requestPermission: PagePer
       return;
     }
     task.started = true;
-    setPending({ task, phase: task.action === "ALIGN" ? "ALIGNING" : "JOINING" });
+    setPending({
+      task,
+      phase:
+        task.action === "ALIGN"
+          ? "ALIGNING"
+          : task.action === "TAKEOVER"
+            ? "TAKING_OVER"
+            : "JOINING",
+    });
     try {
       const result = await store.command({
-        name: task.action === "ALIGN" ? "MEDIA_GROUP_ALIGN_ONCE" : "MEDIA_GROUP_JOIN",
+        name:
+          task.action === "ALIGN"
+            ? "MEDIA_GROUP_ALIGN_ONCE"
+            : task.action === "TAKEOVER"
+              ? "MEDIA_DEVICE_TAKEOVER"
+              : "MEDIA_GROUP_JOIN",
         payload: {
           playbackGroupId: task.groupId,
           expectedTarget: task.target,
           expectedContext,
+          ...(task.takeoverFrom === null ? {} : { takeoverFrom: task.takeoverFrom }),
           ...(task.preparationId === null ? {} : { preparationId: task.preparationId }),
         },
       });
       if (!isCurrent(task)) {
         finish(task, "MEDIA_CONTEXT_CHANGED");
+        return;
+      }
+      if (task.action === "TAKEOVER" && result.ok) {
+        setPending({ task, phase: "CONFIRMING_DEVICE" });
+        confirmDevice(task);
         return;
       }
       const membership = store.room.value.runtime?.media?.localMembership;
@@ -189,8 +271,9 @@ export function useWatchParticipation(store: UiStore, requestPermission: PagePer
   }
   async function follow(
     groupId: string,
-    action: "JOIN" | "ALIGN" = "JOIN",
+    action: "JOIN" | "ALIGN" | "TAKEOVER" = "JOIN",
     expectedTarget?: MediaTarget,
+    expectedTakeoverFrom?: MediaDeviceTakeoverSource,
   ): Promise<void> {
     if (current.current !== null) return;
     const group = store.room.value.runtime?.media?.playbackGroups.find(
@@ -205,12 +288,32 @@ export function useWatchParticipation(store: UiStore, requestPermission: PagePer
       setErrorCode("MEDIA_TARGET_CHANGED");
       return;
     }
+    const accountId = store.shell.value.account?.id;
+    if (accountId === undefined) {
+      setErrorCode("AUTHENTICATION_REQUIRED");
+      return;
+    }
+    const takeoverFrom = action === "TAKEOVER" ? mediaDeviceTakeoverSource(group, accountId) : null;
+    const membership = store.room.value.runtime?.media?.localMembership;
+    if (
+      action === "TAKEOVER" &&
+      (takeoverFrom === null ||
+        membership?.playbackGroupId !== groupId ||
+        membership.activeDevice ||
+        (expectedTakeoverFrom !== undefined &&
+          !sameMediaTakeoverSource(takeoverFrom, expectedTakeoverFrom)))
+    ) {
+      setErrorCode("MEDIA_DEVICE_CHANGED");
+      return;
+    }
     const task: Participation = {
       profileId: store.shell.value.selectedProfileId,
       roomId: selectedRoomId,
       groupId,
       target: structuredClone(group.target),
       action,
+      accountId,
+      takeoverFrom,
       preparationId:
         store.room.value.watchPreparationAvailable === true ? crypto.randomUUID() : null,
       tabId: null,
@@ -231,6 +334,7 @@ export function useWatchParticipation(store: UiStore, requestPermission: PagePer
             groupId,
             target: task.target,
             action,
+            ...(takeoverFrom === null ? {} : { takeoverFrom }),
             profileId: task.profileId,
             roomId: task.roomId,
           },
@@ -293,7 +397,8 @@ export function useWatchParticipation(store: UiStore, requestPermission: PagePer
       finish(task, "MEDIA_TARGET_CHANGED");
       return;
     }
-    if (phase === "WAITING_PAGE" || phase === "WAITING_MEDIA") void participate(task);
+    if (phase === "CONFIRMING_DEVICE") confirmDevice(task);
+    else if (phase === "WAITING_PAGE" || phase === "WAITING_MEDIA") void participate(task);
   }, [pending, profileId, room, access]);
   useEffect(() => {
     if (pending === null || pending.phase === "PERMISSION") return;
@@ -301,9 +406,11 @@ export function useWatchParticipation(store: UiStore, requestPermission: PagePer
       () =>
         finish(
           pending.task,
-          pending.phase === "JOINING" || pending.phase === "ALIGNING"
-            ? "MEDIA_FOLLOW_RESULT_UNCONFIRMED"
-            : "MEDIA_TARGET_PAGE_PREPARING",
+          pending.task.action === "TAKEOVER" && pending.task.started
+            ? "MEDIA_DEVICE_RESULT_UNCONFIRMED"
+            : pending.phase === "JOINING" || pending.phase === "ALIGNING"
+              ? "MEDIA_FOLLOW_RESULT_UNCONFIRMED"
+              : "MEDIA_TARGET_PAGE_PREPARING",
         ),
       10_000,
     );

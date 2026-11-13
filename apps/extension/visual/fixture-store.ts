@@ -1,3 +1,4 @@
+import { mediaDeviceTakeoverSource } from "../src/media-controller-model.js";
 import { signal } from "@preact/signals";
 import { DeviceIdSchema, LogicalTabIdSchema, RoomIdSchema } from "@syncaction/protocol";
 import type {
@@ -21,7 +22,10 @@ export type VisualFixture =
   | "room-watch-recovery"
   | "room-watch-once"
   | "room-watch-prepare"
-  | "room-watch-submitted";
+  | "room-watch-submitted"
+  | "room-device-follower"
+  | "room-device-leader"
+  | "room-device-unknown";
 
 export const FIXTURE_NOW_MS = Date.parse("2026-08-24T08:00:00.000Z");
 
@@ -122,7 +126,7 @@ function playbackGroup(groupIndex: number, start: number, count: number, positio
       documentRevision: { roomEpoch: 0, tabUpdatedAtSeq: 12 + groupIndex },
       frameKey: "top",
       provider: groupIndex === 0 ? ("YOUTUBE" as const) : ("HTML5" as const),
-      mediaKey: groupIndex === 0 ? "youtube:syncaction-demo" : "html:video-1",
+      mediaKey: groupIndex === 0 ? "youtube:dQw4w9WgXcQ" : "html5:video-1",
       durationMs: 600_000,
     },
     observed: {
@@ -371,7 +375,8 @@ export function createVisualStore(fixture: VisualFixture): UiStore {
     fixture === "room-watch-recovery" ||
     fixture === "room-watch-once" ||
     fixture === "room-watch-prepare" ||
-    fixture === "room-watch-submitted"
+    fixture === "room-watch-submitted" ||
+    fixture.startsWith("room-device-")
   ) {
     const recovering = fixture === "room-watch-recovery";
     const runtime = slices.room.runtime!;
@@ -438,6 +443,46 @@ export function createVisualStore(fixture: VisualFixture): UiStore {
       stage: fixture === "room-watch-prepare" ? "PREPARING" : "SUBMITTED",
     };
   }
+  if (fixture.startsWith("room-device-")) {
+    const media = slices.room.runtime!.media!;
+    const group = media.playbackGroups[0]!;
+    const user = group.members.find((m) =>
+      fixture === "room-device-leader"
+        ? m.userId === group.leaderUserId
+        : m.userId !== group.leaderUserId,
+    )!;
+    slices.shell.account = {
+      ...slices.shell.account!,
+      id: user.userId,
+      username: user.username,
+      displayName: user.displayName,
+    };
+    media.localMembership = {
+      playbackGroupId: group.playbackGroupId,
+      role: "READ_ONLY",
+      activeDevice: false,
+    };
+    slices.room.watchPreparationAvailable = true;
+    if (fixture === "room-device-unknown") {
+      const profile = slices.shell.profiles.find(
+        (p) => p.profileId === slices.shell.selectedProfileId,
+      )!;
+      slices.room.watchPreparation = {
+        id: uuid(951),
+        profileId: profile.profileId,
+        serverOrigin: profile.baseUrl,
+        serverId: profile.metadata?.serverId ?? null,
+        accountId: user.userId,
+        roomId,
+        groupId: group.playbackGroupId,
+        target: group.target!,
+        title: "周末一起看 · 山间日落",
+        action: "TAKEOVER",
+        takeoverFrom: mediaDeviceTakeoverSource(group, user.userId)!,
+        stage: "SUBMITTED",
+      };
+    }
+  }
   return new VisualUiStore(
     slices,
     fixture === "room-unshared",
@@ -447,7 +492,8 @@ export function createVisualStore(fixture: VisualFixture): UiStore {
       fixture === "room-watch-recovery" ||
       fixture === "room-watch-once" ||
       fixture === "room-watch-prepare" ||
-      fixture === "room-watch-submitted",
+      fixture === "room-watch-submitted" ||
+      fixture.startsWith("room-device-"),
   );
 }
 
@@ -689,6 +735,57 @@ class VisualUiStore implements UiStore {
             },
           },
         };
+      }
+      if (
+        _command.name === "MEDIA_DEVICE_TAKEOVER" &&
+        _command.payload.takeoverFrom !== undefined
+      ) {
+        const preparation = this.room.value.watchPreparation;
+        if (preparation !== null && preparation !== undefined)
+          this.room.value = {
+            ...this.room.value,
+            watchPreparation: { ...preparation, stage: "SUBMITTED" },
+          };
+        const expectedRoom = this.room.value.selectedRoomId;
+        const userId = this.shell.value.account!.id;
+        const groupId = _command.payload.playbackGroupId;
+        const role = _command.payload.takeoverFrom.role;
+        setTimeout(() => {
+          if (
+            this.room.value.selectedRoomId !== expectedRoom ||
+            this.shell.value.account?.id !== userId
+          )
+            return;
+          const runtime = this.room.value.runtime!;
+          const media = runtime.media!;
+          const localDevice = DeviceIdSchema.parse(uuid(999));
+          this.room.value = {
+            ...this.room.value,
+            runtime: {
+              ...runtime,
+              media: {
+                ...media,
+                controlReady: true,
+                localMembership: { playbackGroupId: groupId, role, activeDevice: true },
+                playbackGroups: media.playbackGroups.map((group) =>
+                  group.playbackGroupId !== groupId
+                    ? group
+                    : {
+                        ...group,
+                        groupRevision: group.groupRevision + 1,
+                        leaderDeviceId: role === "LEADER" ? localDevice : group.leaderDeviceId,
+                        members: group.members.map((member) =>
+                          member.userId === userId
+                            ? { ...member, activeDeviceId: localDevice }
+                            : member,
+                        ),
+                      },
+                ),
+              },
+            },
+          };
+        }, 650);
+        return done();
       }
       if (_command.name === "MEDIA_GROUP_JOIN") {
         const runtime = this.room.value.runtime!;

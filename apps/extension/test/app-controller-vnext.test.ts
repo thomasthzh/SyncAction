@@ -2480,3 +2480,54 @@ describe("ExtensionAppController realtime product state", () => {
     });
   });
 });
+
+describe("pointer input avoids full-room projection", () => {
+  it("accepts coordinates without full reads but still commits semantic changes and session invalidation", async () => {
+    const selected = profile(profileAId, serverAUrl, serverAId, {
+      metadata: metadata(serverAId, { capabilities: [] }),
+    });
+    const sessions = new FakeSessions();
+    sessions.seed(profileAId, serverAUrl, serverAId);
+    const runtime = fakeRuntime([]);
+    const live = runtimeStatus();
+    runtime.getStatus = vi.fn(async () => structuredClone(live));
+    runtime.handlePointerLocalSample = vi.fn(async () => undefined);
+    let input!: RoomRuntimeFactoryInput;
+    const { app } = createApp({
+      profiles: new FakeProfiles([selected], profileAId),
+      sessions,
+      apis: new Map([[serverAUrl, apiFixture("a", selected.metadata!, [])]]),
+      runtimeFactory: (value) => {
+        input = value;
+        return runtime;
+      },
+    });
+    await app.start();
+    await app.selectRoom(roomId);
+    vi.mocked(runtime.getStatus).mockClear();
+    const changed = vi.fn();
+    app.subscribe(changed);
+    await Promise.all(
+      Array.from({ length: 100 }, (_, i) => app.handlePointerLocalSample(42, { x: i / 100 })),
+    );
+    expect(runtime.handlePointerLocalSample).toHaveBeenCalledTimes(100);
+    expect(runtime.getStatus).not.toHaveBeenCalled();
+    expect(changed).not.toHaveBeenCalled();
+    runtime.handlePointerLocalSample = vi.fn(async () => {
+      live.serverSeq = 19;
+      input.onStatusChanged?.();
+    });
+    await app.handlePointerLocalSample(42, {});
+    await vi.waitFor(async () => expect((await app.getStatus()).room?.serverSeq).toBe(19));
+    expect(runtime.getStatus).toHaveBeenCalled();
+    sessions.statuses.set(profileAId, { kind: "SIGNED_OUT" });
+    await app.handlePointerLocalSample(42, {});
+    expect(await app.getStatus()).toMatchObject({
+      account: null,
+      room: null,
+      selectedRoomId: null,
+    });
+    expect(runtime.stop).toHaveBeenCalled();
+    await app.stop();
+  });
+});

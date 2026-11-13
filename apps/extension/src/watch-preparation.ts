@@ -1,6 +1,7 @@
 import { CanonicalUuidSchema, MediaTargetSchema } from "@syncaction/protocol";
 import { z } from "zod";
 import { ServerProfileIdSchema } from "./server-profile.js";
+import { MediaDeviceTakeoverSourceSchema } from "./media-controller-model.js";
 import type { PageToolShortcutIntentStorageArea } from "./page-tool-shortcut-intent.js";
 
 const STORAGE_KEY = "syncaction.watch-preparation.v1";
@@ -15,10 +16,14 @@ export const WatchPreparationSchema = z
     groupId: CanonicalUuidSchema,
     target: MediaTargetSchema,
     title: z.string().min(1).max(512),
-    action: z.enum(["JOIN", "ALIGN"]),
+    action: z.enum(["JOIN", "ALIGN", "TAKEOVER"]),
+    takeoverFrom: MediaDeviceTakeoverSourceSchema.optional(),
     stage: z.enum(["PREPARING", "SUBMITTED"]),
   })
-  .strict();
+  .strict()
+  .refine((task) => (task.action === "TAKEOVER") === (task.takeoverFrom !== undefined), {
+    message: "Device continuation requires its original participant device",
+  });
 export type WatchPreparation = z.infer<typeof WatchPreparationSchema>;
 export interface WatchPreparationStorage {
   read(): Promise<WatchPreparation | null>;
