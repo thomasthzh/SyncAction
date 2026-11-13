@@ -268,11 +268,18 @@ export function ActiveRoom({
       void participation.follow(intent.playbackGroupId);
       return;
     }
+    if (intent.type === "TAKEOVER_DEVICE") {
+      void participation.follow(intent.playbackGroupId, "TAKEOVER");
+      return;
+    }
     void feedback.run("media", () => store.command(mediaCommand(intent)));
   }
 
   function mediaCommand(
-    intent: Exclude<MediaViewIntent, { type: "JOIN_GROUP" | "ALIGN_ONCE" | "OPEN_PAGE" }>,
+    intent: Exclude<
+      MediaViewIntent,
+      { type: "JOIN_GROUP" | "ALIGN_ONCE" | "OPEN_PAGE" | "TAKEOVER_DEVICE" }
+    >,
   ): UiCommandInput {
     switch (intent.type) {
       case "LEAVE_GROUP":
@@ -283,11 +290,6 @@ export function ActiveRoom({
       case "CLOSE_GROUP":
         return {
           name: "MEDIA_GROUP_CLOSE",
-          payload: { playbackGroupId: intent.playbackGroupId },
-        };
-      case "TAKEOVER_DEVICE":
-        return {
-          name: "MEDIA_DEVICE_TAKEOVER",
           payload: { playbackGroupId: intent.playbackGroupId },
         };
       case "DECIDE_PROPOSAL":
@@ -489,7 +491,20 @@ export function ActiveRoom({
             store={store}
             busy={feedback.pending !== null}
             onResume={(task) => {
-              void participation.follow(task.groupId, task.action, task.target);
+              const own = store.room.value.runtime?.media?.localMembership;
+              const action =
+                task.action === "TAKEOVER" &&
+                own?.playbackGroupId === task.groupId &&
+                own.activeDevice &&
+                own.role === "FOLLOWER"
+                  ? "JOIN"
+                  : task.action;
+              void participation.follow(
+                task.groupId,
+                action,
+                task.target,
+                action === "TAKEOVER" ? task.takeoverFrom : undefined,
+              );
             }}
             onOpen={openSharedPage}
             onDismiss={(id) => {
@@ -510,9 +525,13 @@ export function ActiveRoom({
                   ? "正在打开你选择的视频…"
                   : participation.phase === "WAITING_PAGE"
                     ? "等待视频页面就绪…"
-                    : participation.phase === "ALIGNING"
-                      ? "正在对齐当前进度…"
-                      : "正在准备本设备跟随…"}
+                    : participation.phase === "CONFIRMING_DEVICE"
+                      ? "设备切换请求已提交，等待房间确认…"
+                      : participation.phase === "TAKING_OVER"
+                        ? "正在将同步移到这台设备…"
+                        : participation.phase === "ALIGNING"
+                          ? "正在对齐当前进度…"
+                          : "正在准备本设备跟随…"}
             {participation.canCancel ? (
               <button class="text-button" type="button" onClick={participation.cancel}>
                 停止准备

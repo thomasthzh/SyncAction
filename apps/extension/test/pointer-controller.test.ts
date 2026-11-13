@@ -296,6 +296,7 @@ let leaseIds: string[];
 let recordReads: number;
 let compatibilityAllowed: boolean;
 let observerCompatibilityAllowed: boolean;
+let statusNotifications: Array<ReturnType<PointerController["getStatus"]>>;
 
 beforeEach(() => {
   now = 1_785_110_000_000;
@@ -307,7 +308,9 @@ beforeEach(() => {
   recordReads = 0;
   compatibilityAllowed = true;
   observerCompatibilityAllowed = true;
+  statusNotifications = [];
   pointers = new PointerController({
+    onStatusChanged: () => statusNotifications.push(pointers.getStatus()),
     roomId,
     browserSessionId,
     deviceId,
@@ -1470,3 +1473,39 @@ function remoteFrame(sequence: number): PointerFrameEvent {
     receivedAtServerMs: now + sequence * 40,
   };
 }
+
+describe("semantic pointer status notifications", () => {
+  it("notifies frame and lease failure/recovery without notifying unchanged successful frames", async () => {
+    await pointers.handleActiveTabChanged(7);
+    await pointers.setSynchronized(true);
+    await pointers.handleLocalSample(7, sample);
+    await pointers.whenIdle();
+    statusNotifications.length = 0;
+    const frame = vi.spyOn(transport, "publishPointerFrame").mockImplementation(() => {
+      throw new Error("send failed");
+    });
+    scheduler.tick(40);
+    expect(pointers.getStatus().state).toBe("DEGRADED");
+    expect(statusNotifications).toHaveLength(1);
+    frame.mockRestore();
+    await pointers.handleLocalSample(7, sample);
+    scheduler.tick(40);
+    expect(pointers.getStatus().state).toBe("ONLINE");
+    expect(statusNotifications).toHaveLength(2);
+    await pointers.handleLocalSample(7, sample);
+    scheduler.tick(40);
+    expect(statusNotifications).toHaveLength(2);
+    transport.leaseImplementation = async () => {
+      throw new Error("lease failed");
+    };
+    scheduler.tick(2000);
+    await pointers.whenIdle();
+    expect(statusNotifications.at(-1)?.state).toBe("DEGRADED");
+    const before = statusNotifications.length;
+    transport.leaseImplementation = undefined;
+    scheduler.tick(2000);
+    await pointers.whenIdle();
+    expect(statusNotifications.at(-1)?.state).toBe("ONLINE");
+    expect(statusNotifications).toHaveLength(before + 1);
+  });
+});

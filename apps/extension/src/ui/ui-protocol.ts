@@ -1,4 +1,5 @@
 import { WatchPreparationSchema } from "../watch-preparation.js";
+import { MediaDeviceTakeoverSourceSchema } from "../media-controller-model.js";
 import {
   CanonicalUuidSchema,
   ContentCompatibilitySchema,
@@ -1027,6 +1028,7 @@ export const UiCommandSchema = z.discriminatedUnion("name", [
         playbackGroupId: CanonicalUuidSchema,
         expectedContext: MediaGroupCreateExpectedContextSchema,
         expectedTarget: MediaTargetSchema,
+        takeoverFrom: MediaDeviceTakeoverSourceSchema.optional(),
       })
       .strict(),
   ),
@@ -1081,7 +1083,8 @@ export const UiCommandSchema = z.discriminatedUnion("name", [
         id: CanonicalUuidSchema,
         groupId: CanonicalUuidSchema,
         target: MediaTargetSchema,
-        action: z.enum(["JOIN", "ALIGN"]),
+        action: z.enum(["JOIN", "ALIGN", "TAKEOVER"]),
+        takeoverFrom: MediaDeviceTakeoverSourceSchema.optional(),
         profileId: ServerProfileIdSchema,
         roomId: RoomIdSchema,
       })
@@ -1102,7 +1105,26 @@ export const UiCommandSchema = z.discriminatedUnion("name", [
   ),
   commandWithPayload(
     "MEDIA_DEVICE_TAKEOVER",
-    z.object({ playbackGroupId: CanonicalUuidSchema }).strict(),
+    z
+      .object({
+        playbackGroupId: CanonicalUuidSchema,
+        expectedContext: MediaGroupCreateExpectedContextSchema.optional(),
+        expectedTarget: MediaTargetSchema.optional(),
+        takeoverFrom: MediaDeviceTakeoverSourceSchema.optional(),
+        preparationId: CanonicalUuidSchema.optional(),
+      })
+      .strict()
+      .refine(
+        (input) =>
+          (input.expectedContext === undefined &&
+            input.expectedTarget === undefined &&
+            input.takeoverFrom === undefined &&
+            input.preparationId === undefined) ||
+          (input.expectedContext !== undefined &&
+            input.expectedTarget !== undefined &&
+            input.takeoverFrom !== undefined),
+        { message: "Device continuation requires its original target, page and participant" },
+      ),
   ),
   commandWithPayload(
     "MEDIA_PROPOSAL_DECIDE",

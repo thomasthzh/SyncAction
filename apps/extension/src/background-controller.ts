@@ -1,3 +1,4 @@
+import type { MediaDeviceTakeoverSource } from "./media-controller-model.js";
 import {
   CanonicalUuidSchema,
   DeviceIdSchema,
@@ -352,6 +353,7 @@ export class BackgroundController {
       isPointerTransport(transport)
     ) {
       pointerController = new PointerController({
+        onStatusChanged: () => this.#notifyStatusChanged(),
         roomId: parsed.data.roomId,
         browserSessionId: this.#browserSessionId,
         deviceId: parsed.data.deviceId,
@@ -983,8 +985,13 @@ export class BackgroundController {
   public async prepareMediaGroup(
     playbackGroupId: string,
     expectedTarget: MediaTarget,
+    takeoverFrom?: MediaDeviceTakeoverSource,
   ): Promise<void> {
-    await this.#requireMediaController().prepareGroup(playbackGroupId, expectedTarget);
+    await this.#requireMediaController().prepareGroup(
+      playbackGroupId,
+      expectedTarget,
+      takeoverFrom,
+    );
     this.#notifyStatusChanged();
   }
 
@@ -1012,9 +1019,18 @@ export class BackgroundController {
     this.#notifyStatusChanged();
   }
 
-  public async takeOverMediaDevice(playbackGroupId: string): Promise<void> {
-    await this.#requireMediaController().takeOverDevice(playbackGroupId);
+  public async takeOverMediaDevice(
+    playbackGroupId: string,
+    expectedTarget?: MediaTarget,
+    takeoverFrom?: MediaDeviceTakeoverSource,
+  ): Promise<MediaCommandAck> {
+    const acknowledgement = await this.#requireMediaController().takeOverDevice(
+      playbackGroupId,
+      expectedTarget,
+      takeoverFrom,
+    );
     this.#notifyStatusChanged();
+    return acknowledgement;
   }
 
   public async decideMediaProposal(

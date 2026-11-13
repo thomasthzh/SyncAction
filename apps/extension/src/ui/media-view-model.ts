@@ -322,10 +322,15 @@ function groupActions(
       return [
         viewAction({
           key: `media-group:${group.playbackGroupId}:takeover`,
-          label: "在此设备接管",
-          accessibleText: `在此设备接管播放组 ${group.playbackGroupId.slice(0, 8)}`,
+          label: "在这台继续看",
+          accessibleText: "先打开原视频、按需授权，准备完成后将同步移到这台设备",
           intent: { type: "TAKEOVER_DEVICE", playbackGroupId: group.playbackGroupId },
-          disabledReason: media.state === "OFFLINE" ? "媒体同步当前离线" : null,
+          disabledReason:
+            media.state === "OFFLINE"
+              ? "媒体同步当前离线"
+              : group.target === null
+                ? "原视频尚未就绪"
+                : null,
         }),
       ];
     }

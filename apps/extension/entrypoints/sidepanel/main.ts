@@ -102,6 +102,9 @@ const pagePermissionCoordinator = new OriginPermissionCoordinator({
                     playbackGroupId: intent.mediaJoinGroupId,
                     expectedContext,
                     expectedTarget: intent.mediaJoinTarget,
+                    ...(intent.mediaTakeoverFrom === undefined
+                      ? {}
+                      : { takeoverFrom: intent.mediaTakeoverFrom }),
                   },
                 },
       );

@@ -14,7 +14,7 @@ import {
   type PageToolShortcutRequest,
 } from "../page-tool-shortcut-intent.js";
 import { isPlaceholderServerOrigin } from "../server-configuration.js";
-import { sameMediaTarget } from "../media-controller-model.js";
+import { sameMediaTarget, mediaDeviceTakeoverSource } from "../media-controller-model.js";
 import type { PendingRoomJoinStorage } from "../pending-room-join.js";
 import { useRoomDestination } from "./use-room-destination.js";
 import { AppShell } from "./components/app-shell.js";
@@ -369,7 +369,18 @@ export function App({
       ? CanonicalUuidSchema.parse(intentKey.slice("media-join:".length))
       : intentKey.startsWith("media-align:")
         ? CanonicalUuidSchema.parse(intentKey.slice("media-align:".length))
-        : undefined;
+        : intentKey.startsWith("media-takeover:")
+          ? CanonicalUuidSchema.parse(intentKey.slice("media-takeover:".length))
+          : undefined;
+    const mediaTakeoverFrom =
+      intentKey.startsWith("media-takeover:") && store.shell.value.account !== null
+        ? mediaDeviceTakeoverSource(
+            store.room.value.runtime?.media?.playbackGroups.find(
+              (group) => group.playbackGroupId === mediaJoinGroupId,
+            ),
+            store.shell.value.account.id,
+          )
+        : null;
     const mediaJoinTarget =
       mediaJoinGroupId === undefined
         ? null
@@ -412,6 +423,7 @@ export function App({
                 intent: {
                   ...intent,
                   ...(mediaJoinGroupId === undefined ? {} : { mediaJoinGroupId }),
+                  ...(mediaTakeoverFrom === null ? {} : { mediaTakeoverFrom }),
                   ...(mediaJoinTarget === null
                     ? {}
                     : { mediaJoinTarget: structuredClone(mediaJoinTarget) }),
@@ -680,9 +692,11 @@ export function App({
                   ? ("SWITCH_MEDIA_GROUP" as const)
                   : overlay.intentKey.startsWith("media-align:")
                     ? ("ALIGN_MEDIA_ONCE" as const)
-                    : overlay.intentKey.startsWith("media-join:")
-                      ? ("JOIN_MEDIA_GROUP" as const)
-                      : ("CREATE_MEDIA_GROUP" as const),
+                    : overlay.intentKey.startsWith("media-takeover:")
+                      ? ("TAKEOVER_MEDIA_DEVICE" as const)
+                      : overlay.intentKey.startsWith("media-join:")
+                        ? ("JOIN_MEDIA_GROUP" as const)
+                        : ("CREATE_MEDIA_GROUP" as const),
               }
             : {})}
           origin={overlay.intent?.origin ?? store.pageAccess.value.origin ?? "当前页面不可授权"}

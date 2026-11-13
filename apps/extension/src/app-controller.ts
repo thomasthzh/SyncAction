@@ -4,7 +4,13 @@ import {
   type WatchPreparation,
   type WatchPreparationStorage,
 } from "./watch-preparation.js";
-import { sameMediaTarget } from "./media-controller-model.js";
+import {
+  sameMediaTarget,
+  mediaDeviceTakeoverSource,
+  sameMediaTakeoverSource,
+  MediaDeviceTakeoverSourceSchema,
+  type MediaDeviceTakeoverSource,
+} from "./media-controller-model.js";
 import type {
   PageToolShortcutIntentStore,
   PageToolShortcutRequest,
@@ -294,7 +300,11 @@ export interface RoomRuntime {
   togglePagePen(expected?: { tabId: number; documentRevision: DocumentRevision }): Promise<void>;
   jumpToMediaMember(userId: string): Promise<void>;
   createMediaGroup?(tabId: number, expectedRevision?: DocumentRevision): Promise<MediaCommandAck>;
-  prepareMediaGroup?(playbackGroupId: string, expectedTarget: MediaTarget): Promise<void>;
+  prepareMediaGroup?(
+    playbackGroupId: string,
+    expectedTarget: MediaTarget,
+    takeoverFrom?: MediaDeviceTakeoverSource,
+  ): Promise<void>;
   switchMediaGroupCurrent?(
     playbackGroupId: string,
     tabId: number,
@@ -307,7 +317,11 @@ export interface RoomRuntime {
   ): Promise<MediaCommandAck | void>;
   leaveMediaGroup?(playbackGroupId?: string): Promise<void>;
   closeMediaGroup?(playbackGroupId?: string): Promise<void>;
-  takeOverMediaDevice?(playbackGroupId: string): Promise<void>;
+  takeOverMediaDevice?(
+    playbackGroupId: string,
+    expectedTarget?: MediaTarget,
+    takeoverFrom?: MediaDeviceTakeoverSource,
+  ): Promise<void | MediaCommandAck>;
   activateLogicalTab?(logicalTabId: string): Promise<void>;
   activatePendingPage?(tabId: number, logicalTabId: string): Promise<void>;
   removeSharedTab?(logicalTabId: string): Promise<void>;
@@ -1367,16 +1381,19 @@ export class ExtensionAppController {
   }
 
   public leaveMediaGroup(playbackGroupIdInput?: unknown): Promise<void> {
+    const captured = this.#captureMediaCommandContext();
+    const groupId =
+      playbackGroupIdInput === undefined
+        ? undefined
+        : CanonicalUuidSchema.parse(playbackGroupIdInput);
     return this.#enqueue(async () => {
-      const runtime = this.#requireRuntime();
-      if (runtime.leaveMediaGroup === undefined) {
-        throw new Error("MEDIA_CONTROLLER_UNAVAILABLE");
-      }
-      await runtime.leaveMediaGroup(
-        playbackGroupIdInput === undefined
-          ? undefined
-          : CanonicalUuidSchema.parse(playbackGroupIdInput),
-      );
+      const runtime = await this.#requireMediaCommandContext(captured);
+      if (runtime.leaveMediaGroup === undefined) throw new Error("MEDIA_CONTROLLER_UNAVAILABLE");
+      await runtime.leaveMediaGroup(groupId);
+      const preparation = this.#currentWatchPreparation();
+      if (preparation !== null && groupId !== undefined && preparation.groupId === groupId)
+        await this.#completeWatchPreparation(preparation.id, true);
+      this.#emitChanged(["room", "collaboration"]);
     });
   }
 
@@ -1394,13 +1411,41 @@ export class ExtensionAppController {
     });
   }
 
-  public takeOverMediaDevice(playbackGroupIdInput: unknown): Promise<void> {
+  public takeOverMediaDevice(
+    playbackGroupIdInput: unknown,
+    expected?: {
+      expectedContext: MediaGroupCreateExpectedContext;
+      expectedTarget: MediaTarget;
+      takeoverFrom: MediaDeviceTakeoverSource;
+      preparationId?: string | undefined;
+    },
+  ): Promise<void> {
+    const groupId = CanonicalUuidSchema.parse(playbackGroupIdInput);
+    const captured = this.#captureMediaCommandContext();
     return this.#enqueue(async () => {
-      const runtime = this.#requireRuntime();
+      const runtime = await this.#requireMediaCommandContext(captured, expected?.expectedContext);
       if (runtime.takeOverMediaDevice === undefined) {
         throw new Error("MEDIA_CONTROLLER_UNAVAILABLE");
       }
-      await runtime.takeOverMediaDevice(CanonicalUuidSchema.parse(playbackGroupIdInput));
+      if (expected !== undefined) {
+        const source = MediaDeviceTakeoverSourceSchema.parse(expected.takeoverFrom);
+        const target = MediaTargetSchema.parse(expected.expectedTarget);
+        const preparation = this.#currentWatchPreparation();
+        if (
+          expected.preparationId !== undefined &&
+          (preparation?.takeoverFrom === undefined ||
+            !sameMediaTakeoverSource(source, preparation.takeoverFrom))
+        )
+          throw new Error("WATCH_PREPARATION_CHANGED");
+        await this.#submitWatchPreparation(expected.preparationId, groupId, target, "TAKEOVER");
+        const result = await runtime.takeOverMediaDevice(groupId, target, source);
+        if (result !== undefined) {
+          const acknowledgement = MediaCommandAckSchema.parse(result);
+          if (!acknowledgement.accepted) throw new Error(acknowledgement.code);
+        }
+      } else await runtime.takeOverMediaDevice(groupId);
+      // Keep SUBMITTED until the UI receives the real active-device snapshot.
+      this.#emitChanged(["room", "collaboration"]);
     });
   }
 
@@ -1581,8 +1626,9 @@ export class ExtensionAppController {
   }
 
   public handlePointerLocalSample(tabIdInput: unknown, sampleInput: unknown): Promise<void> {
-    return this.#enqueue(async () =>
-      this.#runtime?.handlePointerLocalSample(tabIdInput, sampleInput),
+    return this.#enqueue(
+      async () => this.#runtime?.handlePointerLocalSample(tabIdInput, sampleInput),
+      { commitStatus: false },
     );
   }
 
@@ -1788,7 +1834,8 @@ export class ExtensionAppController {
     id: string;
     groupId: string;
     target: MediaTarget;
-    action: "JOIN" | "ALIGN";
+    action: "JOIN" | "ALIGN" | "TAKEOVER";
+    takeoverFrom?: MediaDeviceTakeoverSource | undefined;
     profileId: string;
     roomId: string;
   }): Promise<WatchPreparation> {
@@ -1812,6 +1859,17 @@ export class ExtensionAppController {
       const group = state.media?.playbackGroups.find((group) => group.playbackGroupId === groupId);
       if (group?.target == null || !sameMediaTarget(group.target, target))
         throw new Error("MEDIA_TARGET_CHANGED");
+      if (
+        input.action === "TAKEOVER" &&
+        (input.takeoverFrom === undefined ||
+          state.media?.localMembership?.playbackGroupId !== groupId ||
+          state.media.localMembership.activeDevice ||
+          !sameMediaTakeoverSource(
+            mediaDeviceTakeoverSource(group, this.#account!.id),
+            input.takeoverFrom,
+          ))
+      )
+        throw new Error("MEDIA_DEVICE_CHANGED");
       const preparation = WatchPreparationSchema.parse({
         id: input.id,
         profileId: this.#profileId,
@@ -1822,6 +1880,7 @@ export class ExtensionAppController {
         groupId,
         target,
         action: input.action,
+        ...(input.takeoverFrom === undefined ? {} : { takeoverFrom: input.takeoverFrom }),
         stage: "PREPARING",
         title: (
           state.tabs.find((tab) => tab.logicalTabId === target.logicalTabId)?.title ||
@@ -1861,7 +1920,7 @@ export class ExtensionAppController {
     id: string | undefined,
     groupId: string,
     target: MediaTarget | undefined,
-    action: "JOIN" | "ALIGN",
+    action: "JOIN" | "ALIGN" | "TAKEOVER",
   ): Promise<void> {
     if (id === undefined) return;
     const task = this.#currentWatchPreparation();
@@ -1897,6 +1956,7 @@ export class ExtensionAppController {
     playbackGroupIdInput: unknown,
     expectedContextInput: MediaGroupCreateExpectedContext,
     expectedTargetInput: MediaTarget,
+    takeoverFromInput?: MediaDeviceTakeoverSource,
   ): Promise<void> {
     const groupId = CanonicalUuidSchema.parse(playbackGroupIdInput);
     const expected = MediaGroupCreateExpectedContextSchema.parse(expectedContextInput);
@@ -1905,7 +1965,13 @@ export class ExtensionAppController {
     return this.#enqueue(async () => {
       const runtime = await this.#requireMediaCommandContext(captured, expected);
       if (runtime.prepareMediaGroup === undefined) throw new Error("MEDIA_UNAVAILABLE");
-      await runtime.prepareMediaGroup(groupId, target);
+      if (takeoverFromInput === undefined) await runtime.prepareMediaGroup(groupId, target);
+      else
+        await runtime.prepareMediaGroup(
+          groupId,
+          target,
+          MediaDeviceTakeoverSourceSchema.parse(takeoverFromInput),
+        );
       this.#emitChanged(["room", "collaboration"]);
     });
   }
@@ -2871,7 +2937,10 @@ export class ExtensionAppController {
 
   #enqueue<T>(
     work: () => Promise<T>,
-    { checkSession = true }: { checkSession?: boolean } = {},
+    {
+      checkSession = true,
+      commitStatus = true,
+    }: { checkSession?: boolean; commitStatus?: boolean } = {},
   ): Promise<T> {
     const result = this.#tail.then(async () => {
       this.#commandRunning = true;
@@ -2891,7 +2960,13 @@ export class ExtensionAppController {
             this.#statusCommitPending = true;
             lifecycleChecked = false;
           }
-          if (lifecycleChecked) {
+          if (
+            lifecycleChecked &&
+            (commitStatus ||
+              this.#pendingChange ||
+              this.#statusCommitPending ||
+              this.#runtime !== this.#committedRuntime)
+          ) {
             const runtime = this.#runtime;
             const revision = this.#statusCommitRevision;
             let room = runtime === this.#committedRuntime ? this.#committedStatus.room : null;

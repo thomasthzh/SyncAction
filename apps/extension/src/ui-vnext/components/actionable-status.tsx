@@ -18,6 +18,8 @@ const ERROR_LABELS: Readonly<Record<string, string>> = {
   WATCH_PREPARATION_CHANGED: "上次准备已提交或已被新任务替代，请查看当前视频后重新选择",
   WATCH_PREPARATION_UNAVAILABLE: "暂时无法保存准备进度，请稍后重试；本次尚未执行播放操作",
   MEDIA_TARGET_CHANGED: "领播的视频已变化，请重新选择一起看",
+  MEDIA_DEVICE_CHANGED: "参与设备或角色已变化，请查看当前播放组后重新选择",
+  MEDIA_DEVICE_RESULT_UNCONFIRMED: "设备切换结果尚未确认，请先查看播放组；不会自动再次接管",
   MEDIA_DEVICE_READ_ONLY: "此播放组正由你的另一台设备参与，请先选择在此设备接管",
   MEDIA_TARGET_PAGE_PREPARING: "视频页面尚未就绪。页面已保留，准备好后可再次继续一起看",
   MEDIA_FOLLOW_RESULT_UNCONFIRMED: "跟随结果仍待确认，请查看当前视频状态后再继续",

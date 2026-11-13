@@ -4745,3 +4745,89 @@ function addSecondSharedTab(value: Harness): void {
     validatedAtServerSeq: 12,
   });
 }
+
+describe("prepared device continuity", () => {
+  const fromDevice = DeviceIdSchema.parse("018f8f8e-4b5c-7d6e-8f90-123456789a99");
+  it.each(["LEADER", "FOLLOWER"] as const)(
+    "prepares a cold read-only %s and takes over only the frozen source",
+    async (role) => {
+      const source = { deviceId: fromDevice, role };
+      const sourceGroup =
+        role === "LEADER"
+          ? group({
+              leaderDeviceId: fromDevice,
+              members: [member(leaderUserId, fromDevice), member(followerUserId, followerDeviceId)],
+            })
+          : group({
+              members: [member(leaderUserId, leaderDeviceId), member(followerUserId, fromDevice)],
+            });
+      const value = harness(
+        role === "LEADER"
+          ? { userId: leaderUserId, deviceId: leaderDeviceId, mediaCompatible: false }
+          : { mediaCompatible: true },
+      );
+      await connect(value, snapshot([sourceGroup]));
+      await value.controller.prepareGroup(playbackGroupId, target, source);
+      expect(value.controller.getStatus().controlReady).toBe(false);
+      expect(value.transport.commands).toEqual([]);
+      await expect(
+        value.controller.takeOverDevice(playbackGroupId, target, source),
+      ).rejects.toThrow("MEDIA_NOT_READY");
+      await observe(value, { ...playing, paused: true });
+      await value.controller.takeOverDevice(playbackGroupId, target, source);
+      expect(value.transport.commands).toHaveLength(1);
+      expect(value.transport.commands[0]?.type).toBe("group.takeover");
+      expect(value.controller.getStatus().localMembership).toMatchObject({
+        role: "READ_ONLY",
+        activeDevice: false,
+      });
+      await value.controller.dispose();
+    },
+  );
+  it("keeps the original device active when follower compatibility or source identity changed", async () => {
+    const source = { deviceId: fromDevice, role: "FOLLOWER" as const };
+    const value = harness({ mediaCompatible: false });
+    const sourceGroup = group({
+      members: [member(leaderUserId, leaderDeviceId), member(followerUserId, fromDevice)],
+    });
+    await connect(value, snapshot([sourceGroup]));
+    await value.controller.prepareGroup(playbackGroupId, target, source);
+    await observe(value);
+    await expect(value.controller.takeOverDevice(playbackGroupId, target, source)).rejects.toThrow(
+      "MEDIA_MISMATCH",
+    );
+    expect(value.transport.commands).toEqual([]);
+    value.transport.emit(
+      snapshot(
+        [
+          group({
+            ...sourceGroup,
+            groupRevision: 4,
+            members: [
+              member(leaderUserId, leaderDeviceId),
+              member(followerUserId, secondFollowerDeviceId),
+            ],
+          }),
+        ],
+        2,
+      ),
+    );
+    await value.controller.whenIdle();
+    await expect(value.controller.takeOverDevice(playbackGroupId, target, source)).rejects.toThrow(
+      "MEDIA_DEVICE_CHANGED",
+    );
+    expect(value.transport.commands).toEqual([]);
+    await value.controller.dispose();
+  });
+  it("lets an active follower leave after local media control was invalidated", async () => {
+    const value = harness();
+    await connect(value);
+    await value.controller.prepareGroup(playbackGroupId, target);
+    expect(value.controller.getStatus().controlReady).toBe(false);
+    await value.controller.leaveGroup(playbackGroupId);
+    expect(value.transport.commands.map((c) => c.type)).toEqual(["group.leave"]);
+    await value.controller.setSynchronized(false);
+    await expect(value.controller.leaveGroup(playbackGroupId)).rejects.toThrow("MEDIA_OFFLINE");
+    await value.controller.dispose();
+  });
+});

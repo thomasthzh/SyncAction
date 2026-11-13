@@ -48,7 +48,7 @@ export function PlaybackGroupCard({
         ? "打开并一起看会进入这段视频，在正确的页面授权后持续跟随。"
         : "你仍在原播放组中，查看此组不会改变跟随关系。"
       : readOnly
-        ? "播放由另一台设备参与，此设备不会自动跟随。"
+        ? "准备完成后，可将本组同步移到这台设备；原设备会保留页面并停止同步。"
         : mediaState === "OFFLINE"
           ? "媒体连接已断开，当前无法持续同步。"
           : mediaState === "DEGRADED"
